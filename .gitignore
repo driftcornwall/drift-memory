@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Private memory contents (keep architecture, not data)
+# Uncomment these if you're using this repo for personal memory
+# memory/core/
+# memory/active/
+# memory/archive/
+# memory/episodic/
+# memory/semantic/
