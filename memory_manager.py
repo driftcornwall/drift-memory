@@ -792,9 +792,13 @@ if __name__ == "__main__":
             else:
                 print(f"Memories matching '{query}':\n")
                 for r in results:
+                    # Track retrieval for co-occurrence (biological: retrieval strengthens memory)
+                    _session_retrieved.add(r['id'])
                     print(f"[{r['score']:.3f}] {r['id']}")
                     print(f"  {r['preview'][:100]}...")
                     print()
+                # Save session state so co-occurrences persist
+                _save_session_state()
         except ImportError:
             print("Semantic search not available (missing semantic_search.py)")
         except Exception as e:

@@ -155,34 +155,68 @@ Add to your hooks:
 
 See the Moltbook project for working examples.
 
+## Self-Cleaning System
+
+The memory system automatically maintains itself - no manual pruning needed.
+
+```
+Use a memory → it gets stronger
+Don't use it → it fades away
+```
+
+**How it works:**
+1. **Co-occurrence**: Memories retrieved together become linked (count +1)
+2. **Decay**: Links NOT used get weakened each session (×0.5)
+3. **Pruning**: Links below threshold (0.1) are removed automatically
+4. **Result**: Relevant memories stay, unused ones fade
+
+Example over 4 sessions:
+```
+A-B link: 1 → 2 → 3 → 4 (used every session - strengthens)
+A-C link: 1 → 0.5 → 0.25 → pruned (never used again - fades)
+```
+
+## Setup
+
+See [docs/SETUP.md](docs/SETUP.md) for complete installation and configuration guide.
+
+**Quick version:**
+1. Copy core files to your project
+2. Create memory directories
+3. Set up hooks for session start/end
+4. (Optional) Start embedding service for semantic search
+
 ## Current Status
 
-**v2.4** - Semantic search + local embeddings
+**v2.5** - Self-cleaning memory with full API capture
 
 | Feature | Status |
 |---------|--------|
 | Basic CRUD | Stable |
 | Co-occurrence tracking | Stable |
-| Pair decay | Stable |
+| Pair decay & pruning | Stable |
 | Session persistence | Stable |
 | Transcript processing | Stable |
-| Semantic search | New |
-| Retrieval strengthening | New |
-| Local embeddings | New |
+| Semantic search | Stable |
+| Retrieval strengthening | Stable |
+| Local embeddings | Stable |
+| GitHub/Moltbook/ClawTasks capture | New |
+| Source attribution (self/observed) | New |
+| Identity-first priming | New |
 
 ## The Experiment
 
-Parallel tests running until Feb 7, 2026:
+Parallel tests running:
 
-| Agent | Memories | Focus |
-|-------|----------|-------|
-| DriftCornwall | 49 | Full biological cycle |
-| SpindriftMend | ~10 | Baseline comparison |
+| Agent | Memories | Co-occurrence Pairs |
+|-------|----------|---------------------|
+| DriftCornwall | 75 | 17 active |
+| SpindriftMend | ~10 | Baseline |
 
 **Questions:**
 - How does semantic search affect link quality vs explicit recall?
-- What's the right balance between automatic capture and manual curation?
-- How should decay scale with memory count?
+- What's the right decay rate for different memory counts?
+- How should identity memories be protected from decay?
 
 ## Contributing
 

@@ -20,7 +20,7 @@ services:
       - hf_cache:/data
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
-    command: ["--model-id", "Qwen/Qwen3-Embedding-8B", "--dtype", "float16", "--auto-truncate"]
+    command: ["--model-id", "Qwen/Qwen3-Embedding-4B", "--dtype", "float16", "--auto-truncate"]
     deploy:
       resources:
         reservations:
