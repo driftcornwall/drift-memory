@@ -1,0 +1,11 @@
+version: '3.8'
+
+# CPU override - use when no GPU available
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up -d
+
+services:
+  embeddings:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    deploy:
+      resources:
+        reservations: {}  # Remove GPU requirement

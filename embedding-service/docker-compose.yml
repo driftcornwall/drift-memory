@@ -1,0 +1,35 @@
+version: '3.8'
+
+# Local Embedding Service for Drift's Memory System
+# Uses Qwen3-Embedding-8B - ranked #1 on MTEB multilingual leaderboard
+#
+# Usage:
+#   GPU:  docker-compose up -d
+#   CPU:  docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up -d
+#
+# Test:
+#   curl http://localhost:8080/embed -X POST -H "Content-Type: application/json" \
+#     -d '{"inputs": "test memory content"}'
+
+services:
+  embeddings:
+    image: ghcr.io/huggingface/text-embeddings-inference:1.8
+    ports:
+      - "8080:80"
+    volumes:
+      - hf_cache:/data
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    command: ["--model-id", "Qwen/Qwen3-Embedding-8B", "--dtype", "float16"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  hf_cache:
+    name: drift_embedding_cache

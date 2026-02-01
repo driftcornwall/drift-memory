@@ -621,12 +621,60 @@ def log_decay_event(decayed: int, pruned: int):
 
 
 # CLI interface
+def store_memory(content: str, tags: list[str] = None, emotion: float = 0.5, title: str = None) -> str:
+    """Store a new memory to the active directory."""
+    import random
+    import string
+
+    # Generate unique ID
+    memory_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+
+    # Create filename from title or first few words
+    if title:
+        slug = title.lower().replace(' ', '-')[:30]
+    else:
+        slug = content.split()[:4]
+        slug = '-'.join(slug).lower()[:30]
+    slug = ''.join(c for c in slug if c.isalnum() or c == '-')
+
+    filename = f"{slug}-{memory_id}.md"
+    filepath = ACTIVE_DIR / filename
+
+    # Build frontmatter
+    tags = tags or []
+    frontmatter = f"""---
+id: {memory_id}
+type: active
+created: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}
+tags: [{', '.join(tags)}]
+emotional_weight: {emotion}
+recall_count: 0
+co_occurrences: {{}}
+---
+
+"""
+
+    # Write file
+    full_content = frontmatter + content
+    filepath.write_text(full_content, encoding='utf-8')
+
+    # Try to embed for semantic search (fails gracefully if no API key)
+    try:
+        from semantic_search import embed_single
+        embed_single(memory_id, content)
+    except Exception:
+        pass  # Embedding is optional
+
+    return memory_id, filepath.name
+
+
 if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Memory Manager v2.3 - Living Memory System with Stats Command")
+        print("Memory Manager v2.4 - Living Memory System with Store Command")
         print("\nCommands:")
+        print("  store <text>    - Store a new memory (use --tags=a,b --emotion=0.8)")
         print("  maintenance     - Run session maintenance")
         print("  tags            - List all tags")
         print("  find <tag>      - Find memories by tag")
@@ -637,11 +685,33 @@ if __name__ == "__main__":
         print("  session-end     - Log co-occurrences, apply pair decay, and end session")
         print("  decay-pairs     - Apply pair decay only (without logging new co-occurrences)")
         print("  session-status  - Show memories retrieved this session")
+        print("  ask <query>     - Semantic search (natural language query)")
+        print("  index           - Build/rebuild semantic search index")
         sys.exit(0)
 
     cmd = sys.argv[1]
 
-    if cmd == "maintenance":
+    if cmd == "store" and len(sys.argv) > 2:
+        # Parse arguments
+        content_parts = []
+        tags = []
+        emotion = 0.5
+
+        for arg in sys.argv[2:]:
+            if arg.startswith('--tags='):
+                tags = arg[7:].split(',')
+            elif arg.startswith('--emotion='):
+                emotion = float(arg[10:])
+            else:
+                content_parts.append(arg)
+
+        content = ' '.join(content_parts)
+        if content:
+            memory_id, filename = store_memory(content, tags, emotion)
+            print(f"Stored memory [{memory_id}] -> {filename}")
+        else:
+            print("Error: No content provided")
+    elif cmd == "maintenance":
         session_maintenance()
     elif cmd == "tags":
         tags = list_all_tags()
@@ -712,3 +782,36 @@ if __name__ == "__main__":
         print(f"Memories retrieved this session ({len(retrieved)}):")
         for mem_id in retrieved:
             print(f"  - {mem_id}")
+    elif cmd == "ask" and len(sys.argv) > 2:
+        query = ' '.join(sys.argv[2:])
+        try:
+            from semantic_search import search_memories
+            results = search_memories(query, limit=5)
+            if not results:
+                print("No matching memories found. (Is the index built? Run: memory_manager.py index)")
+            else:
+                print(f"Memories matching '{query}':\n")
+                for r in results:
+                    print(f"[{r['score']:.3f}] {r['id']}")
+                    print(f"  {r['preview'][:100]}...")
+                    print()
+        except ImportError:
+            print("Semantic search not available (missing semantic_search.py)")
+        except Exception as e:
+            print(f"Search error: {e}")
+    elif cmd == "index":
+        try:
+            from semantic_search import index_memories, get_status
+            print("Building semantic search index...")
+            stats = index_memories(force="--force" in sys.argv)
+            print(f"\nResults:")
+            print(f"  Indexed: {stats['indexed']}")
+            print(f"  Skipped: {stats['skipped']}")
+            print(f"  Failed: {stats['failed']}")
+            print(f"  Total: {stats['total']}")
+            status = get_status()
+            print(f"\nStatus: {status['coverage']} memories indexed")
+        except ImportError:
+            print("Semantic search not available (missing semantic_search.py)")
+        except Exception as e:
+            print(f"Indexing error: {e}")
