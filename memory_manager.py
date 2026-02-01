@@ -11,10 +11,11 @@ Design principles:
 """
 
 import os
+import json
 import yaml
 import uuid
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -22,15 +23,66 @@ MEMORY_ROOT = Path(__file__).parent
 CORE_DIR = MEMORY_ROOT / "core"
 ACTIVE_DIR = MEMORY_ROOT / "active"
 ARCHIVE_DIR = MEMORY_ROOT / "archive"
+SESSION_FILE = MEMORY_ROOT / ".session_state.json"
 
 # Configuration
 DECAY_THRESHOLD_SESSIONS = 7  # Sessions without recall before compression candidate
 EMOTIONAL_WEIGHT_THRESHOLD = 0.6  # Above this resists decay
 RECALL_COUNT_THRESHOLD = 5  # Above this resists decay
 CO_OCCURRENCE_BOOST = 0.1  # How much to boost retrieval for co-occurring memories
+SESSION_TIMEOUT_HOURS = 4  # Sessions older than this are considered stale
 
-# Session state - tracks memories retrieved together
+# Session state - now file-backed for persistence across Python invocations
 _session_retrieved: set[str] = set()
+_session_loaded: bool = False
+
+
+def _load_session_state() -> None:
+    """Load session state from file. Called automatically on first access."""
+    global _session_retrieved, _session_loaded
+
+    if _session_loaded:
+        return
+
+    _session_loaded = True
+
+    if not SESSION_FILE.exists():
+        _session_retrieved = set()
+        return
+
+    try:
+        data = json.loads(SESSION_FILE.read_text(encoding='utf-8'))
+        session_start = datetime.fromisoformat(data.get('started', '2000-01-01'))
+
+        # Check if session is stale
+        hours_old = (datetime.now(timezone.utc) - session_start).total_seconds() / 3600
+        if hours_old > SESSION_TIMEOUT_HOURS:
+            # Session is stale - start fresh
+            _session_retrieved = set()
+            SESSION_FILE.unlink(missing_ok=True)
+        else:
+            _session_retrieved = set(data.get('retrieved', []))
+    except (json.JSONDecodeError, KeyError, ValueError):
+        _session_retrieved = set()
+
+
+def _save_session_state() -> None:
+    """Save session state to file."""
+    # Load existing to preserve start time
+    started = datetime.now(timezone.utc).isoformat()
+    if SESSION_FILE.exists():
+        try:
+            data = json.loads(SESSION_FILE.read_text(encoding='utf-8'))
+            started = data.get('started', started)
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    data = {
+        'started': started,
+        'retrieved': list(_session_retrieved),
+        'last_updated': datetime.now(timezone.utc).isoformat()
+    }
+    SESSION_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
 
 
 def generate_id() -> str:
@@ -96,7 +148,7 @@ def create_memory(
         The memory ID
     """
     memory_id = generate_id()
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     emotional_factors = emotional_factors or {}
     emotional_weight = calculate_emotional_weight(**emotional_factors)
@@ -136,8 +188,12 @@ def recall_memory(memory_id: str) -> Optional[tuple[dict, str]]:
     """
     Recall a memory by ID, updating its metadata.
     Searches all directories. Tracks co-occurrence with other memories retrieved this session.
+    Session state persists to disk so it survives Python process restarts.
     """
     global _session_retrieved
+
+    # Load session state from file (handles fresh Python processes)
+    _load_session_state()
 
     for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
         if not directory.exists():
@@ -146,7 +202,7 @@ def recall_memory(memory_id: str) -> Optional[tuple[dict, str]]:
             metadata, content = parse_memory_file(filepath)
 
             # Update recall metadata
-            metadata['last_recalled'] = datetime.utcnow().isoformat()
+            metadata['last_recalled'] = datetime.now(timezone.utc).isoformat()
             metadata['recall_count'] = metadata.get('recall_count', 0) + 1
             metadata['sessions_since_recall'] = 0
 
@@ -156,6 +212,7 @@ def recall_memory(memory_id: str) -> Optional[tuple[dict, str]]:
 
             # Track co-occurrence with other memories retrieved this session
             _session_retrieved.add(memory_id)
+            _save_session_state()  # Persist to disk
 
             write_memory_file(filepath, metadata, content)
             return metadata, content
@@ -164,14 +221,17 @@ def recall_memory(memory_id: str) -> Optional[tuple[dict, str]]:
 
 
 def get_session_retrieved() -> set[str]:
-    """Get the set of memory IDs retrieved this session."""
+    """Get the set of memory IDs retrieved this session. Loads from disk if needed."""
+    _load_session_state()
     return _session_retrieved.copy()
 
 
 def clear_session() -> None:
     """Clear session tracking (call at session end after logging co-occurrences)."""
-    global _session_retrieved
+    global _session_retrieved, _session_loaded
     _session_retrieved = set()
+    _session_loaded = False
+    SESSION_FILE.unlink(missing_ok=True)  # Delete session file
 
 
 def log_co_occurrences() -> int:
@@ -180,6 +240,7 @@ def log_co_occurrences() -> int:
     Call at session end to strengthen links between co-retrieved memories.
     Returns number of pairs updated.
     """
+    _load_session_state()  # Load from disk in case this is a fresh Python process
     retrieved = list(_session_retrieved)
     if len(retrieved) < 2:
         return 0
@@ -346,7 +407,7 @@ def compress_memory(memory_id: str, compressed_content: str):
         metadata, original_content = parse_memory_file(filepath)
 
         # Update metadata for compression
-        metadata['compressed_at'] = datetime.utcnow().isoformat()
+        metadata['compressed_at'] = datetime.now(timezone.utc).isoformat()
         metadata['original_length'] = len(original_content)
 
         # Move to archive
