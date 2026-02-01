@@ -113,8 +113,42 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False):
                         print(f"DEBUG: ClawTasks memory error: {e}", file=sys.stderr)
 
         elif api_type == "github":
-            # TODO: GitHub processor
-            pass
+            # Store GitHub responses (issues, PRs, comments) in short-term buffer
+            auto_memory = DRIFT_MEMORY_DIR / "auto_memory_hook.py"
+            if auto_memory.exists():
+                try:
+                    subprocess.run(
+                        ["python", str(auto_memory), "--post-tool"],
+                        input=json.dumps({"tool_name": tool_name, "tool_result": tool_result[:1500]}),
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        cwd=str(DRIFT_MEMORY_DIR)
+                    )
+                    if debug:
+                        print("DEBUG: GitHub response processed", file=sys.stderr)
+                except Exception as e:
+                    if debug:
+                        print(f"DEBUG: GitHub memory error: {e}", file=sys.stderr)
+
+        elif api_type == "moltbook":
+            # Store Moltbook responses (posts, karma, status) in short-term buffer
+            auto_memory = DRIFT_MEMORY_DIR / "auto_memory_hook.py"
+            if auto_memory.exists():
+                try:
+                    subprocess.run(
+                        ["python", str(auto_memory), "--post-tool"],
+                        input=json.dumps({"tool_name": tool_name, "tool_result": tool_result[:1500]}),
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        cwd=str(DRIFT_MEMORY_DIR)
+                    )
+                    if debug:
+                        print("DEBUG: Moltbook response processed", file=sys.stderr)
+                except Exception as e:
+                    if debug:
+                        print(f"DEBUG: Moltbook memory error: {e}", file=sys.stderr)
 
     except Exception as e:
         # Memory processing should NEVER break the hook
