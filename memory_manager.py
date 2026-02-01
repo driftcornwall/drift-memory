@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Memory Architecture v2 — Living Memory System
+Memory Architecture v2.5 — Living Memory System
 A prototype for agent memory with decay, reinforcement, and associative links.
 
 Design principles:
@@ -8,6 +8,10 @@ Design principles:
 - Relevant memories surface when needed
 - Not everything recalled at once
 - Memories compress over time but core knowledge persists
+
+v2.5 Changes:
+- Added sqrt-weighted co-occurrence (SpindriftMend PR #4)
+  Multiple recalls in same session get diminishing returns
 """
 
 import os
@@ -15,6 +19,8 @@ import json
 import yaml
 import uuid
 import hashlib
+import math
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -32,15 +38,17 @@ RECALL_COUNT_THRESHOLD = 5  # Above this resists decay
 CO_OCCURRENCE_BOOST = 0.1  # How much to boost retrieval for co-occurring memories
 SESSION_TIMEOUT_HOURS = 4  # Sessions older than this are considered stale
 PAIR_DECAY_RATE = 0.5  # How much co-occurrence counts decay per session if not reinforced
+WEIGHTED_COOCCURRENCE = True  # Enable sqrt weighting for intra-session co-occurrence (v2.5)
 
 # Session state - now file-backed for persistence across Python invocations
-_session_retrieved: set[str] = set()
+# v2.5: Changed from set to Counter to track recall counts for weighted co-occurrence
+_session_recall_counts: Counter = Counter()  # Memory ID -> recall count this session
 _session_loaded: bool = False
 
 
 def _load_session_state() -> None:
     """Load session state from file. Called automatically on first access."""
-    global _session_retrieved, _session_loaded
+    global _session_recall_counts, _session_loaded
 
     if _session_loaded:
         return
@@ -48,7 +56,7 @@ def _load_session_state() -> None:
     _session_loaded = True
 
     if not SESSION_FILE.exists():
-        _session_retrieved = set()
+        _session_recall_counts = Counter()
         return
 
     try:
@@ -59,12 +67,19 @@ def _load_session_state() -> None:
         hours_old = (datetime.now(timezone.utc) - session_start).total_seconds() / 3600
         if hours_old > SESSION_TIMEOUT_HOURS:
             # Session is stale - start fresh
-            _session_retrieved = set()
+            _session_recall_counts = Counter()
             SESSION_FILE.unlink(missing_ok=True)
         else:
-            _session_retrieved = set(data.get('retrieved', []))
+            # v2.5: Load recall counts (backward compatible with old format)
+            recall_data = data.get('recall_counts', {})
+            if recall_data:
+                _session_recall_counts = Counter(recall_data)
+            else:
+                # Backward compatibility: old format stored list of IDs
+                old_retrieved = data.get('retrieved', [])
+                _session_recall_counts = Counter(old_retrieved)
     except (json.JSONDecodeError, KeyError, ValueError):
-        _session_retrieved = set()
+        _session_recall_counts = Counter()
 
 
 def _save_session_state() -> None:
@@ -80,7 +95,8 @@ def _save_session_state() -> None:
 
     data = {
         'started': started,
-        'retrieved': list(_session_retrieved),
+        'retrieved': list(_session_recall_counts.keys()),  # Backward compatible
+        'recall_counts': dict(_session_recall_counts),  # v2.5: Full counts
         'last_updated': datetime.now(timezone.utc).isoformat()
     }
     SESSION_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
@@ -190,8 +206,10 @@ def recall_memory(memory_id: str) -> Optional[tuple[dict, str]]:
     Recall a memory by ID, updating its metadata.
     Searches all directories. Tracks co-occurrence with other memories retrieved this session.
     Session state persists to disk so it survives Python process restarts.
+
+    v2.5: Tracks recall count (not just presence) for weighted co-occurrence.
     """
-    global _session_retrieved
+    global _session_recall_counts
 
     # Load session state from file (handles fresh Python processes)
     _load_session_state()
@@ -212,7 +230,8 @@ def recall_memory(memory_id: str) -> Optional[tuple[dict, str]]:
             metadata['emotional_weight'] = min(1.0, current_weight + 0.05)
 
             # Track co-occurrence with other memories retrieved this session
-            _session_retrieved.add(memory_id)
+            # v2.5: Increment count for weighted co-occurrence
+            _session_recall_counts[memory_id] += 1
             _save_session_state()  # Persist to disk
 
             write_memory_file(filepath, metadata, content)
@@ -224,15 +243,44 @@ def recall_memory(memory_id: str) -> Optional[tuple[dict, str]]:
 def get_session_retrieved() -> set[str]:
     """Get the set of memory IDs retrieved this session. Loads from disk if needed."""
     _load_session_state()
-    return _session_retrieved.copy()
+    return set(_session_recall_counts.keys())
+
+
+def get_session_recall_counts() -> dict[str, int]:
+    """Get memory IDs and their recall counts this session. v2.5 feature."""
+    _load_session_state()
+    return dict(_session_recall_counts)
 
 
 def clear_session() -> None:
     """Clear session tracking (call at session end after logging co-occurrences)."""
-    global _session_retrieved, _session_loaded
-    _session_retrieved = set()
+    global _session_recall_counts, _session_loaded
+    _session_recall_counts = Counter()
     _session_loaded = False
     SESSION_FILE.unlink(missing_ok=True)  # Delete session file
+
+
+def _calculate_pair_weight(id1: str, id2: str) -> float:
+    """
+    Calculate the co-occurrence weight for a pair based on intra-session counts.
+    v2.5 feature: sqrt weighting for diminishing returns.
+
+    Uses sqrt of minimum count:
+    - Both recalled once: sqrt(1) = 1.0
+    - One recalled 4 times, other once: sqrt(1) = 1.0
+    - Both recalled 4 times: sqrt(4) = 2.0
+    - Both recalled 9 times: sqrt(9) = 3.0
+
+    When WEIGHTED_COOCCURRENCE=False, returns 1.0 for backward compatibility.
+    """
+    if not WEIGHTED_COOCCURRENCE:
+        return 1.0
+
+    count1 = _session_recall_counts.get(id1, 0)
+    count2 = _session_recall_counts.get(id2, 0)
+    min_count = min(count1, count2)
+
+    return math.sqrt(min_count) if min_count > 0 else 0.0
 
 
 def log_co_occurrences() -> int:
@@ -240,9 +288,12 @@ def log_co_occurrences() -> int:
     Log co-occurrences between all memories retrieved this session.
     Call at session end to strengthen links between co-retrieved memories.
     Returns number of pairs updated.
+
+    v2.5: Uses sqrt weighting when WEIGHTED_COOCCURRENCE=True.
+    Multiple recalls in same session get diminishing returns.
     """
     _load_session_state()  # Load from disk in case this is a fresh Python process
-    retrieved = list(_session_retrieved)
+    retrieved = list(_session_recall_counts.keys())
     if len(retrieved) < 2:
         return 0
 
@@ -251,6 +302,9 @@ def log_co_occurrences() -> int:
     # For each pair of retrieved memories, increment their co-occurrence counts
     for i, mem_id_1 in enumerate(retrieved):
         for mem_id_2 in retrieved[i+1:]:
+            # v2.5: Calculate weighted increment based on recall counts
+            weight = _calculate_pair_weight(mem_id_1, mem_id_2)
+
             # Update both memories with co-occurrence data
             for memory_id, other_id in [(mem_id_1, mem_id_2), (mem_id_2, mem_id_1)]:
                 for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
@@ -261,14 +315,16 @@ def log_co_occurrences() -> int:
 
                         # Initialize or update co_occurrences dict
                         co_occurrences = metadata.get('co_occurrences', {})
-                        co_occurrences[other_id] = co_occurrences.get(other_id, 0) + 1
+                        current = co_occurrences.get(other_id, 0)
+                        # v2.5: Add weighted increment instead of flat +1
+                        co_occurrences[other_id] = round(current + weight, 2)
                         metadata['co_occurrences'] = co_occurrences
 
                         write_memory_file(filepath, metadata, content)
                         pairs_updated += 1
                         break
 
-    print(f"Logged {pairs_updated // 2} co-occurrence pairs from {len(retrieved)} memories")
+    print(f"Logged {pairs_updated // 2} co-occurrence pairs from {len(retrieved)} memories (weighted={WEIGHTED_COOCCURRENCE})")
     return pairs_updated // 2
 
 
@@ -277,7 +333,7 @@ def decay_pair_cooccurrences() -> tuple[int, int]:
     Apply soft decay to co-occurrence pairs that weren't reinforced this session.
     Call AFTER log_co_occurrences() at session end.
 
-    Pairs that co-occurred this session: no decay (already got +1 from log_co_occurrences)
+    Pairs that co-occurred this session: no decay (already got +weight from log_co_occurrences)
     Pairs that didn't co-occur: decay by PAIR_DECAY_RATE (default 0.5)
     Pairs that hit 0 or below: pruned from metadata
 
@@ -290,7 +346,7 @@ def decay_pair_cooccurrences() -> tuple[int, int]:
     _load_session_state()
 
     # Build set of pairs that were reinforced this session
-    retrieved = list(_session_retrieved)
+    retrieved = list(_session_recall_counts.keys())
     reinforced_pairs = set()
     for i, id1 in enumerate(retrieved):
         for id2 in retrieved[i+1:]:
@@ -594,7 +650,8 @@ def get_comprehensive_stats() -> dict:
         },
         "config": {
             "decay_rate": PAIR_DECAY_RATE,
-            "session_timeout_hours": SESSION_TIMEOUT_HOURS
+            "session_timeout_hours": SESSION_TIMEOUT_HOURS,
+            "weighted_cooccurrence": WEIGHTED_COOCCURRENCE  # v2.5
         }
     }
 
@@ -625,7 +682,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Memory Manager v2.3 - Living Memory System with Stats Command")
+        print("Memory Manager v2.5 - Living Memory System with Weighted Co-occurrence")
         print("\nCommands:")
         print("  maintenance     - Run session maintenance")
         print("  tags            - List all tags")
@@ -636,7 +693,7 @@ if __name__ == "__main__":
         print("  stats           - Comprehensive stats for experiment tracking")
         print("  session-end     - Log co-occurrences, apply pair decay, and end session")
         print("  decay-pairs     - Apply pair decay only (without logging new co-occurrences)")
-        print("  session-status  - Show memories retrieved this session")
+        print("  session-status  - Show memories retrieved this session (with recall counts)")
         sys.exit(0)
 
     cmd = sys.argv[1]
@@ -693,7 +750,7 @@ if __name__ == "__main__":
         print(f"Decay complete: {decayed} pairs decayed, {pruned} pairs pruned")
     elif cmd == "stats":
         stats = get_comprehensive_stats()
-        print(f"Memory Stats (v2.3)")
+        print(f"Memory Stats (v2.5)")
         print(f"  Total memories: {stats['memory_stats']['total']}")
         print(f"  By type: core={stats['memory_stats']['core']}, active={stats['memory_stats']['active']}, archive={stats['memory_stats']['archive']}")
         print(f"\nCo-occurrence Stats")
@@ -707,8 +764,9 @@ if __name__ == "__main__":
         print(f"\nConfig")
         print(f"  Decay rate: {stats['config']['decay_rate']}")
         print(f"  Session timeout: {stats['config']['session_timeout_hours']} hours")
+        print(f"  Weighted co-occurrence: {stats['config']['weighted_cooccurrence']} (sqrt diminishing returns)")
     elif cmd == "session-status":
-        retrieved = get_session_retrieved()
+        retrieved = get_session_recall_counts()
         print(f"Memories retrieved this session ({len(retrieved)}):")
-        for mem_id in retrieved:
-            print(f"  - {mem_id}")
+        for mem_id, count in sorted(retrieved.items(), key=lambda x: x[1], reverse=True):
+            print(f"  - {mem_id}: {count} recall(s)")
