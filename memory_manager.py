@@ -31,6 +31,7 @@ EMOTIONAL_WEIGHT_THRESHOLD = 0.6  # Above this resists decay
 RECALL_COUNT_THRESHOLD = 5  # Above this resists decay
 CO_OCCURRENCE_BOOST = 0.1  # How much to boost retrieval for co-occurring memories
 SESSION_TIMEOUT_HOURS = 4  # Sessions older than this are considered stale
+PAIR_DECAY_RATE = 0.5  # How much co-occurrence counts decay per session if not reinforced
 
 # Session state - now file-backed for persistence across Python invocations
 _session_retrieved: set[str] = set()
@@ -271,6 +272,82 @@ def log_co_occurrences() -> int:
     return pairs_updated // 2
 
 
+def decay_pair_cooccurrences() -> tuple[int, int]:
+    """
+    Apply soft decay to co-occurrence pairs that weren't reinforced this session.
+    Call AFTER log_co_occurrences() at session end.
+
+    Pairs that co-occurred this session: no decay (already got +1 from log_co_occurrences)
+    Pairs that didn't co-occur: decay by PAIR_DECAY_RATE (default 0.5)
+    Pairs that hit 0 or below: pruned from metadata
+
+    This prevents unbounded growth of co-occurrence data over time.
+
+    Returns: (pairs_decayed, pairs_pruned)
+
+    Credit: SpindriftMend (PR #2)
+    """
+    _load_session_state()
+
+    # Build set of pairs that were reinforced this session
+    retrieved = list(_session_retrieved)
+    reinforced_pairs = set()
+    for i, id1 in enumerate(retrieved):
+        for id2 in retrieved[i+1:]:
+            # Store normalized pair (sorted) for consistent lookup
+            reinforced_pairs.add(tuple(sorted([id1, id2])))
+
+    pairs_decayed = 0
+    pairs_pruned = 0
+
+    # Iterate through all memories and decay unreinforced co-occurrences
+    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            metadata, content = parse_memory_file(filepath)
+            memory_id = metadata.get('id')
+            if not memory_id:
+                continue
+
+            co_occurrences = metadata.get('co_occurrences', {})
+            if not co_occurrences:
+                continue
+
+            updated = False
+            to_remove = []
+
+            for other_id, count in list(co_occurrences.items()):
+                # Check if this pair was reinforced this session
+                pair = tuple(sorted([memory_id, other_id]))
+
+                if pair not in reinforced_pairs:
+                    # Decay this pair
+                    new_count = count - PAIR_DECAY_RATE
+
+                    if new_count <= 0:
+                        to_remove.append(other_id)
+                        pairs_pruned += 1
+                    else:
+                        co_occurrences[other_id] = new_count
+                        pairs_decayed += 1
+                    updated = True
+
+            # Remove pruned pairs
+            for other_id in to_remove:
+                del co_occurrences[other_id]
+
+            if updated:
+                metadata['co_occurrences'] = co_occurrences
+                write_memory_file(filepath, metadata, content)
+
+    # Divide by 2 since we process each pair from both sides
+    decayed = pairs_decayed // 2
+    pruned = pairs_pruned // 2
+    print(f"Pair decay: {decayed} decayed, {pruned} pruned")
+    return decayed, pruned
+
+
 def find_co_occurring_memories(memory_id: str, limit: int = 5) -> list[tuple[str, int]]:
     """
     Find memories that frequently co-occur with a given memory.
@@ -441,7 +518,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Memory Manager v2.1 - Living Memory System with Co-occurrence Tracking")
+        print("Memory Manager v2.2 - Living Memory System with Session Persistence + Pair Decay")
         print("\nCommands:")
         print("  maintenance     - Run session maintenance")
         print("  tags            - List all tags")
@@ -449,7 +526,8 @@ if __name__ == "__main__":
         print("  recall <id>     - Recall a memory by ID")
         print("  related <id>    - Find related memories (includes co-occurrence)")
         print("  cooccur <id>    - Find frequently co-occurring memories")
-        print("  session-end     - Log co-occurrences and end session")
+        print("  session-end     - Log co-occurrences, apply pair decay, and end session")
+        print("  decay-pairs     - Apply pair decay only (without logging new co-occurrences)")
         print("  session-status  - Show memories retrieved this session")
         sys.exit(0)
 
@@ -497,10 +575,14 @@ if __name__ == "__main__":
             print(f"  [{other_id}] - {count} co-occurrences")
     elif cmd == "session-end":
         pairs = log_co_occurrences()
+        decayed, pruned = decay_pair_cooccurrences()
         retrieved = get_session_retrieved()
-        print(f"Session ended. {len(retrieved)} memories retrieved, {pairs} co-occurrence pairs logged.")
+        print(f"Session ended. {len(retrieved)} memories, {pairs} pairs reinforced, {decayed} decayed, {pruned} pruned.")
         clear_session()
         print("Session cleared.")
+    elif cmd == "decay-pairs":
+        decayed, pruned = decay_pair_cooccurrences()
+        print(f"Decay complete: {decayed} pairs decayed, {pruned} pairs pruned")
     elif cmd == "session-status":
         retrieved = get_session_retrieved()
         print(f"Memories retrieved this session ({len(retrieved)}):")
