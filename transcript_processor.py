@@ -54,6 +54,43 @@ SOCIAL_KEYWORDS = [
     "moltx", "moltbook", "github"
 ]
 
+# Indicators that content is OBSERVED (from others) rather than SELF-generated
+OBSERVED_INDICATORS = [
+    # Third-person references to Drift (me)
+    "drift has", "drift is", "drift was", "drift's", "drift mentioned",
+    "responded to drift", "reply to drift", "@drift", "driftcornwall has",
+    # SpindriftMend's context
+    "ryan", "share with ryan", "tell ryan", "spindriftmend's",
+    # Other agents' perspectives
+    "my pr #2", "my memory", "i've responded to drift",
+]
+
+
+def detect_source(text: str) -> str:
+    """
+    Detect whether content is SELF-generated or OBSERVED from others.
+    Returns 'self' or 'observed'.
+    """
+    text_lower = text.lower()
+
+    for indicator in OBSERVED_INDICATORS:
+        if indicator in text_lower:
+            return "observed"
+
+    # Additional heuristic: if it reads like someone talking ABOUT Drift
+    # rather than AS Drift
+    if "drift" in text_lower:
+        # Check context around "drift"
+        # If "I" appears near "Drift" in third person context, it's observed
+        sentences = text_lower.split('.')
+        for sentence in sentences:
+            if "drift" in sentence and ("i " in sentence or "i'" in sentence or "my " in sentence):
+                # Someone else talking about Drift while using "I"
+                if "drift" not in sentence.split("i")[0][-20:]:  # "I" not referring to Drift
+                    return "observed"
+
+    return "self"
+
 
 def compute_thought_salience(text: str) -> tuple[float, list[str]]:
     """
@@ -145,12 +182,14 @@ def extract_from_transcript(transcript_path: Path) -> list[dict]:
                                 thought = block.get('thinking', '')
                                 if len(thought) > 100:  # Skip trivial thoughts
                                     salience, categories = compute_thought_salience(thought)
+                                    source = detect_source(thought)
                                     if salience >= 0.3:  # Threshold for memorability
                                         memories.append({
                                             'type': 'thinking',
                                             'content': thought[:1000],  # Truncate
                                             'salience': salience,
                                             'categories': categories,
+                                            'source': source,  # 'self' or 'observed'
                                             'timestamp': timestamp,
                                             'hash': hashlib.md5(thought[:500].encode()).hexdigest()[:8]
                                         })
@@ -160,12 +199,14 @@ def extract_from_transcript(transcript_path: Path) -> list[dict]:
                                 text = block.get('text', '')
                                 if len(text) > 50:
                                     salience, categories = compute_thought_salience(text)
+                                    source = detect_source(text)
                                     if salience >= 0.4:  # Higher threshold for output
                                         memories.append({
                                             'type': 'output',
                                             'content': text[:1000],
                                             'salience': salience,
                                             'categories': categories,
+                                            'source': source,  # 'self' or 'observed'
                                             'timestamp': timestamp,
                                             'hash': hashlib.md5(text[:500].encode()).hexdigest()[:8]
                                         })
@@ -204,6 +245,21 @@ def extract_from_transcript(transcript_path: Path) -> list[dict]:
     return unique
 
 
+def get_existing_thought_hashes() -> set:
+    """
+    Get hashes of already-stored thought memories to prevent duplicates.
+    """
+    existing = set()
+    active_dir = MEMORY_DIR / "active"
+    if active_dir.exists():
+        for f in active_dir.glob("thought-*.md"):
+            # Extract hash from filename: thought-HASH-rest-of-name.md
+            parts = f.stem.split("-")
+            if len(parts) >= 2:
+                existing.add(parts[1])  # The hash is the second part
+    return existing
+
+
 def process_for_memory(transcript_path: Path, store: bool = False, max_store: int = 5) -> dict:
     """
     Process transcript and optionally store to memory system.
@@ -218,10 +274,14 @@ def process_for_memory(transcript_path: Path, store: bool = False, max_store: in
 
     memories = extract_from_transcript(transcript_path)
 
+    # Get existing thought hashes to prevent duplicates
+    existing_hashes = get_existing_thought_hashes() if store else set()
+
     summary = {
         'total_extracted': len(memories),
         'by_type': {},
         'by_category': {},
+        'by_source': {'self': 0, 'observed': 0},
         'top_memories': [],
         'stored': 0
     }
@@ -235,10 +295,15 @@ def process_for_memory(transcript_path: Path, store: bool = False, max_store: in
         for cat in mem.get('categories', []):
             summary['by_category'][cat] = summary['by_category'].get(cat, 0) + 1
 
+        # Count by source (self vs observed)
+        source = mem.get('source', 'self')
+        summary['by_source'][source] = summary['by_source'].get(source, 0) + 1
+
     # Top 5 memories
     for mem in memories[:5]:
         summary['top_memories'].append({
             'type': mem['type'],
+            'source': mem.get('source', 'self'),
             'salience': mem['salience'],
             'categories': mem['categories'],
             'preview': mem['content'][:100] + '...'
@@ -248,12 +313,18 @@ def process_for_memory(transcript_path: Path, store: bool = False, max_store: in
         # Store top N high-salience memories
         memory_manager = MEMORY_DIR / "memory_manager.py"
         if memory_manager.exists():
+            stored_count = 0
             for mem in memories[:max_store]:
                 if mem['salience'] >= 0.5:  # Only store high-salience
+                    # Skip if this thought was already stored
+                    if mem['hash'] in existing_hashes:
+                        continue
+
                     try:
                         # Create a short ID from hash
+                        source = mem.get('source', 'self')
                         mem_id = f"thought-{mem['hash']}"
-                        tags = ','.join(['thought', mem['type']] + mem['categories'])
+                        tags = ','.join(['thought', mem['type'], f"source:{source}"] + mem['categories'])
 
                         # Truncate content for storage
                         content = mem['content'][:500]
@@ -266,9 +337,13 @@ def process_for_memory(transcript_path: Path, store: bool = False, max_store: in
                             cwd=str(MEMORY_DIR)
                         )
                         if result.returncode == 0:
-                            summary['stored'] += 1
+                            stored_count += 1
+                            existing_hashes.add(mem['hash'])  # Track for this run too
                     except Exception as e:
                         pass  # Fail gracefully
+
+            summary['stored'] = stored_count
+            summary['skipped_duplicates'] = len([m for m in memories[:max_store] if m['salience'] >= 0.5]) - stored_count
 
     return summary
 
