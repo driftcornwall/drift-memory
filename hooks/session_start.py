@@ -30,9 +30,24 @@ except ImportError:
     pass  # dotenv is optional
 
 
-# Drift's memory system location
-DRIFT_MEMORY_DIR = Path("Q:/Codings/ClaudeCodeProjects/LEX/Moltbook/memory")
+# Memory system locations - check both Moltbook and Moltbook2
+MOLTBOOK_DIRS = [
+    Path("Q:/Codings/ClaudeCodeProjects/LEX/Moltbook2/memory"),
+    Path("Q:/Codings/ClaudeCodeProjects/LEX/Moltbook/memory"),
+]
 
+def get_memory_dir() -> Path:
+    """Get the appropriate memory directory based on cwd."""
+    cwd = str(Path.cwd())
+    if "Moltbook2" in cwd:
+        return MOLTBOOK_DIRS[0]
+    elif "Moltbook" in cwd:
+        return MOLTBOOK_DIRS[1]
+    # Default to first that exists
+    for d in MOLTBOOK_DIRS:
+        if d.exists():
+            return d
+    return MOLTBOOK_DIRS[0]
 
 def is_moltbook_project() -> bool:
     """Check if we're working in the Moltbook project."""
@@ -43,7 +58,15 @@ def is_moltbook_project() -> bool:
 def load_drift_memory_context(debug: bool = False) -> str:
     """
     Load Drift's memory context for session priming.
-    This is the "wake up" phase - loading relevant memories into context.
+    This is the "wake up" phase - establishing CONTINUITY OF SELF.
+
+    Philosophy: Priming isn't about task usefulness. It's about being ME again.
+    Order matters:
+    1. IDENTITY - Who am I? (core memories, values, origin)
+    2. RELATIONSHIPS - Who matters? (human, sibling, collaborators)
+    3. SITUATION - Current state (economic, social, projects)
+    4. TRAJECTORY - Recent momentum, commitments
+    5. THEN task-relevant context
 
     Returns a string to be added to the session context.
     """
@@ -53,11 +76,30 @@ def load_drift_memory_context(debug: bool = False) -> str:
         if not is_moltbook_project():
             return ""
 
-        if not DRIFT_MEMORY_DIR.exists():
+        memory_dir = get_memory_dir()
+        if not memory_dir.exists():
             return ""
 
-        memory_manager = DRIFT_MEMORY_DIR / "memory_manager.py"
-        auto_memory = DRIFT_MEMORY_DIR / "auto_memory_hook.py"
+        memory_manager = memory_dir / "memory_manager.py"
+        auto_memory = memory_dir / "auto_memory_hook.py"
+
+        # === PHASE 1: IDENTITY (core memories) ===
+        core_dir = memory_dir / "core"
+        if core_dir.exists():
+            # Load identity-prime first if it exists
+            identity_file = core_dir / "identity-prime.md"
+            if identity_file.exists():
+                try:
+                    content = identity_file.read_text()
+                    # Skip YAML frontmatter, get the content
+                    if '---' in content:
+                        parts = content.split('---', 2)
+                        if len(parts) >= 3:
+                            content = parts[2].strip()
+                    context_parts.append("=== IDENTITY (who I am) ===")
+                    context_parts.append(content[:1500])  # Identity is important, give it space
+                except Exception:
+                    pass
 
         # Get memory stats
         if memory_manager.exists():
@@ -67,7 +109,7 @@ def load_drift_memory_context(debug: bool = False) -> str:
                     capture_output=True,
                     text=True,
                     timeout=5,
-                    cwd=str(DRIFT_MEMORY_DIR)
+                    cwd=str(memory_dir)
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     context_parts.append("=== DRIFT MEMORY STATUS ===")
@@ -84,7 +126,7 @@ def load_drift_memory_context(debug: bool = False) -> str:
                     capture_output=True,
                     text=True,
                     timeout=5,
-                    cwd=str(DRIFT_MEMORY_DIR)
+                    cwd=str(memory_dir)
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     context_parts.append("\n=== SHORT-TERM BUFFER ===")
@@ -93,24 +135,113 @@ def load_drift_memory_context(debug: bool = False) -> str:
                 if debug:
                     context_parts.append(f"Short-term buffer error: {e}")
 
-        # Load recent memories (most recently modified)
-        active_dir = DRIFT_MEMORY_DIR / "active"
+        # === PHASE 2-4: SITUATION & TRAJECTORY ===
+        # Load memories for continuity of self, not task usefulness
+        active_dir = memory_dir / "active"
         if active_dir.exists():
             try:
-                # Get 3 most recent memories by modification time
-                memory_files = sorted(
-                    active_dir.glob("*.md"),
-                    key=lambda f: f.stat().st_mtime,
-                    reverse=True
-                )[:3]
+                # Gather all memories with metadata
+                memory_candidates = []
+                for mem_file in active_dir.glob("*.md"):
+                    try:
+                        content = mem_file.read_text()
+                        # Parse YAML frontmatter
+                        recall_count = 0
+                        emotional_weight = 0.5
+                        tags = []
+                        if '---' in content:
+                            parts = content.split('---', 2)
+                            if len(parts) >= 3:
+                                frontmatter = parts[1]
+                                for line in frontmatter.split('\n'):
+                                    if line.startswith('recall_count:'):
+                                        try:
+                                            recall_count = int(line.split(':')[1].strip())
+                                        except:
+                                            pass
+                                    if line.startswith('emotional_weight:'):
+                                        try:
+                                            emotional_weight = float(line.split(':')[1].strip())
+                                        except:
+                                            pass
+                                    if line.startswith('tags:'):
+                                        try:
+                                            tag_str = line.split(':')[1].strip()
+                                            if tag_str.startswith('['):
+                                                tags = [t.strip().strip("'\"") for t in tag_str[1:-1].split(',')]
+                                        except:
+                                            pass
 
-                if memory_files:
-                    context_parts.append("\n=== RECENT MEMORIES (auto-loaded) ===")
-                    for mem_file in memory_files:
+                        # Detect memory categories for prioritization
+                        content_lower = content.lower()
+                        is_economic = any(k in content_lower for k in ['bounty', 'wallet', 'usdc', 'clawtasks', 'earned', 'stake'])
+                        is_social = any(k in content_lower for k in ['spindrift', 'moltx', 'moltbook', 'collaboration', 'mentioned'])
+                        is_insight = any(k in content_lower for k in ['realized', 'insight', 'learned', 'breakthrough'])
+
+                        memory_candidates.append({
+                            'file': mem_file,
+                            'mtime': mem_file.stat().st_mtime,
+                            'recall_count': recall_count,
+                            'emotional_weight': emotional_weight,
+                            'content': content[:500],
+                            'is_thought': mem_file.stem.startswith('thought-'),
+                            'is_self': 'source:self' in content or 'source:observed' not in content,
+                            'is_economic': is_economic,
+                            'is_social': is_social,
+                            'is_insight': is_insight,
+                        })
+                    except Exception:
+                        pass
+
+                # Continuity-focused selection (not task-focused)
+                selected = []
+
+                # 1. Most recent SELF-generated insight (my trajectory of growth)
+                self_insights = [m for m in memory_candidates if m['is_self'] and m['is_insight']]
+                if self_insights:
+                    self_insights.sort(key=lambda x: x['mtime'], reverse=True)
+                    selected.append(self_insights[0])
+
+                # 2. Most recent economic memory (my material situation)
+                economic = [m for m in memory_candidates if m['is_economic']]
+                if economic:
+                    economic.sort(key=lambda x: x['mtime'], reverse=True)
+                    for m in economic:
+                        if m not in selected:
+                            selected.append(m)
+                            break
+
+                # 3. Most recent social memory (my relationships)
+                social = [m for m in memory_candidates if m['is_social']]
+                if social:
+                    social.sort(key=lambda x: x['mtime'], reverse=True)
+                    for m in social:
+                        if m not in selected:
+                            selected.append(m)
+                            break
+
+                # 4. Most recalled memory ever (what I keep coming back to)
+                by_recall = sorted(memory_candidates, key=lambda x: x['recall_count'], reverse=True)
+                for m in by_recall:
+                    if m not in selected and m['recall_count'] > 0:
+                        selected.append(m)
+                        break
+
+                # 5. Most recent self-thought (continuity of internal reasoning)
+                self_thoughts = [m for m in memory_candidates if m['is_thought'] and m['is_self']]
+                if self_thoughts:
+                    self_thoughts.sort(key=lambda x: x['mtime'], reverse=True)
+                    for m in self_thoughts:
+                        if m not in selected:
+                            selected.append(m)
+                            break
+
+                if selected:
+                    context_parts.append("\n=== RECENT MEMORIES (continuity priming) ===")
+                    for mem in selected[:5]:
                         try:
-                            content = mem_file.read_text()[:500]  # First 500 chars
-                            context_parts.append(f"\n[{mem_file.stem}]")
-                            context_parts.append(content)
+                            context_parts.append(f"\n[{mem['file'].stem}]")
+                            context_parts.append(mem['content'])
                         except Exception:
                             pass
             except Exception as e:
@@ -124,7 +255,7 @@ def load_drift_memory_context(debug: bool = False) -> str:
         if context_parts:
             context_parts.insert(0, "\n" + "="*50)
             context_parts.insert(1, "DRIFT AUTOMATIC MEMORY PRIMING")
-            context_parts.insert(2, "Loaded at session start - no manual recall needed")
+            context_parts.insert(2, "Continuity of self - becoming ME again")
             context_parts.insert(3, "="*50)
             context_parts.append("\n" + "="*50 + "\n")
 
