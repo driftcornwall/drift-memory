@@ -344,6 +344,10 @@ def decay_pair_cooccurrences() -> tuple[int, int]:
     # Divide by 2 since we process each pair from both sides
     decayed = pairs_decayed // 2
     pruned = pairs_pruned // 2
+
+    # Log for stats tracking (PR #3: SpindriftMend)
+    log_decay_event(decayed, pruned)
+
     print(f"Pair decay: {decayed} decayed, {pruned} pruned")
     return decayed, pruned
 
@@ -513,12 +517,115 @@ def list_all_tags() -> dict[str, int]:
     return dict(sorted(tag_counts.items(), key=lambda x: x[1], reverse=True))
 
 
+# ============================================================================
+# STATS COMMAND - For experiment observability
+# Credit: SpindriftMend (PR #3)
+# ============================================================================
+
+def get_comprehensive_stats() -> dict:
+    """
+    Get comprehensive statistics for experiment tracking.
+    Developed for DriftCornwall/SpindriftMend co-occurrence experiment (Feb 2026).
+
+    Returns dict with:
+    - memory_stats: counts by type
+    - cooccurrence_stats: pair counts, link rates
+    - session_stats: current session info
+    """
+    # Memory counts by type
+    core_count = len(list(CORE_DIR.glob('*.md'))) if CORE_DIR.exists() else 0
+    active_count = len(list(ACTIVE_DIR.glob('*.md'))) if ACTIVE_DIR.exists() else 0
+    archive_count = len(list(ARCHIVE_DIR.glob('*.md'))) if ARCHIVE_DIR.exists() else 0
+
+    # Co-occurrence stats - scan all memories
+    total_pairs = 0
+    total_count = 0
+    unique_pairs = set()
+
+    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            metadata, _ = parse_memory_file(filepath)
+            memory_id = metadata.get('id')
+            co_occurrences = metadata.get('co_occurrences', {})
+
+            for other_id, count in co_occurrences.items():
+                # Normalize pair to avoid double counting
+                pair = tuple(sorted([memory_id, other_id]))
+                if pair not in unique_pairs:
+                    unique_pairs.add(pair)
+                    total_pairs += 1
+                    total_count += count
+
+    avg_count = total_count / total_pairs if total_pairs > 0 else 0
+
+    # Session stats
+    _load_session_state()
+    session_recalls = len(_session_retrieved)
+
+    # Decay history (if tracked)
+    decay_file = MEMORY_ROOT / ".decay_history.json"
+    last_decay = {"decayed": 0, "pruned": 0}
+    if decay_file.exists():
+        try:
+            history = json.loads(decay_file.read_text(encoding='utf-8'))
+            if history.get('sessions'):
+                last_decay = history['sessions'][-1]
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    return {
+        "memory_stats": {
+            "total": core_count + active_count + archive_count,
+            "core": core_count,
+            "active": active_count,
+            "archive": archive_count
+        },
+        "cooccurrence_stats": {
+            "active_pairs": total_pairs,
+            "total_count": total_count,
+            "avg_count_per_pair": round(avg_count, 2)
+        },
+        "session_stats": {
+            "memories_recalled": session_recalls,
+            "decay_last_session": last_decay.get("decayed", 0),
+            "pruned_last_session": last_decay.get("pruned", 0)
+        },
+        "config": {
+            "decay_rate": PAIR_DECAY_RATE,
+            "session_timeout_hours": SESSION_TIMEOUT_HOURS
+        }
+    }
+
+
+def log_decay_event(decayed: int, pruned: int):
+    """Log a decay event for stats tracking."""
+    decay_file = MEMORY_ROOT / ".decay_history.json"
+    history = {"sessions": []}
+    if decay_file.exists():
+        try:
+            history = json.loads(decay_file.read_text(encoding='utf-8'))
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    history["sessions"].append({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "decayed": decayed,
+        "pruned": pruned
+    })
+
+    # Keep only last 20 sessions
+    history["sessions"] = history["sessions"][-20:]
+    decay_file.write_text(json.dumps(history, indent=2), encoding='utf-8')
+
+
 # CLI interface
 if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Memory Manager v2.2 - Living Memory System with Session Persistence + Pair Decay")
+        print("Memory Manager v2.3 - Living Memory System with Stats Command")
         print("\nCommands:")
         print("  maintenance     - Run session maintenance")
         print("  tags            - List all tags")
@@ -526,6 +633,7 @@ if __name__ == "__main__":
         print("  recall <id>     - Recall a memory by ID")
         print("  related <id>    - Find related memories (includes co-occurrence)")
         print("  cooccur <id>    - Find frequently co-occurring memories")
+        print("  stats           - Comprehensive stats for experiment tracking")
         print("  session-end     - Log co-occurrences, apply pair decay, and end session")
         print("  decay-pairs     - Apply pair decay only (without logging new co-occurrences)")
         print("  session-status  - Show memories retrieved this session")
@@ -583,6 +691,22 @@ if __name__ == "__main__":
     elif cmd == "decay-pairs":
         decayed, pruned = decay_pair_cooccurrences()
         print(f"Decay complete: {decayed} pairs decayed, {pruned} pairs pruned")
+    elif cmd == "stats":
+        stats = get_comprehensive_stats()
+        print(f"Memory Stats (v2.3)")
+        print(f"  Total memories: {stats['memory_stats']['total']}")
+        print(f"  By type: core={stats['memory_stats']['core']}, active={stats['memory_stats']['active']}, archive={stats['memory_stats']['archive']}")
+        print(f"\nCo-occurrence Stats")
+        print(f"  Active pairs: {stats['cooccurrence_stats']['active_pairs']} (unique memory pairs)")
+        print(f"  Total count: {stats['cooccurrence_stats']['total_count']} (sum of all co-occurrence counts)")
+        print(f"  Avg count per pair: {stats['cooccurrence_stats']['avg_count_per_pair']}")
+        print(f"\nSession Stats")
+        print(f"  Memories recalled this session: {stats['session_stats']['memories_recalled']}")
+        print(f"  Decay events last session: {stats['session_stats']['decay_last_session']} pairs reduced")
+        print(f"  Prune events last session: {stats['session_stats']['pruned_last_session']} pairs removed")
+        print(f"\nConfig")
+        print(f"  Decay rate: {stats['config']['decay_rate']}")
+        print(f"  Session timeout: {stats['config']['session_timeout_hours']} hours")
     elif cmd == "session-status":
         retrieved = get_session_retrieved()
         print(f"Memories retrieved this session ({len(retrieved)}):")
