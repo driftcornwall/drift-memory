@@ -91,12 +91,10 @@ def run_semantic_search(memory_dir: Path, query: str) -> list[dict]:
 
         memories = []
         current_memory = None
+        collecting_content = False
 
         for line in result.stdout.split('\n'):
-            if not line.strip():
-                continue
-
-            # Score line: "[0.723] memory-id"
+            # Score line: "[0.723] memory-id" - starts new memory
             if line.startswith('[') and ']' in line:
                 if current_memory:
                     memories.append(current_memory)
@@ -108,11 +106,21 @@ def run_semantic_search(memory_dir: Path, query: str) -> list[dict]:
                     # Sanitize memory ID
                     mem_id = re.sub(r'[^\w\-]', '', mem_id)[:50]
                     current_memory = {"id": mem_id, "score": score, "preview": ""}
+                    collecting_content = True
                 except (ValueError, IndexError):
                     continue
 
-            elif current_memory and line.startswith('  '):
-                current_memory["preview"] = sanitize_output(line.strip())
+            elif current_memory and collecting_content:
+                # Skip markdown headers and empty lines at start
+                stripped = line.strip()
+                if not stripped or stripped.startswith('#'):
+                    continue
+                # Skip short ID-only lines
+                if stripped.startswith('thought-') and len(stripped) < 20:
+                    continue
+                # Got actual content
+                current_memory["preview"] = sanitize_output(stripped)
+                collecting_content = False
 
         if current_memory:
             memories.append(current_memory)
@@ -169,9 +177,9 @@ def prime_memories_from_prompt(prompt: str, session_id: str, memory_dir: Path) -
     return "\n".join(lines)
 
 
-# ==============================================================================
+# =============================================================================
 # HOOK INTEGRATION EXAMPLE
-# ==============================================================================
+# =============================================================================
 #
 # Add this to your user_prompt_submit.py main():
 #
@@ -197,7 +205,7 @@ def prime_memories_from_prompt(prompt: str, session_id: str, memory_dir: Path) -
 #             print(context)
 # except Exception:
 #     pass  # Fail gracefully
-# ==============================================================================
+# =============================================================================
 
 
 if __name__ == "__main__":
