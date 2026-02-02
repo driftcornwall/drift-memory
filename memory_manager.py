@@ -35,6 +35,16 @@ CO_OCCURRENCE_BOOST = 0.1  # How much to boost retrieval for co-occurring memori
 SESSION_TIMEOUT_HOURS = 4  # Sessions older than this are considered stale
 PAIR_DECAY_RATE = 0.5  # Base decay rate for co-occurrence pairs
 ACCESS_WEIGHTED_DECAY = True  # If True, frequently recalled memories decay slower (v2.8)
+
+# v2.11: Trust-based decay for imported memories (Issue #10)
+# Imported memories decay faster until they prove value through recalls
+DECAY_MULTIPLIERS = {
+    'self': 1.0,            # My own memories - normal decay
+    'verified_agent': 1.5,  # Known collaborators (Spin, Cosmo) - 50% faster decay
+    'platform': 2.0,        # Platform-sourced - 2x faster decay
+    'unknown': 3.0,         # Unknown sources - 3x faster decay
+}
+IMPORTED_PRUNE_SESSIONS = 14  # Archive never-recalled imports after 14 sessions
 HEAT_PROMOTION_THRESHOLD = 10  # Recall count to auto-promote from active to core (v2.9)
 HEAT_PROMOTION_ENABLED = True  # If True, hot memories get promoted at session-end
 
@@ -575,17 +585,95 @@ def find_related_memories(memory_id: str) -> list[tuple[Path, dict, str]]:
     return [(r[0], r[1], r[2]) for r in results]
 
 
+# ============================================================================
+# v2.11: TRUST-BASED DECAY FOR IMPORTED MEMORIES (Issue #10)
+# Credit: SpindriftMend proposal
+# ============================================================================
+
+def get_memory_trust_tier(metadata: dict) -> str:
+    """
+    Extract trust tier from memory metadata.
+
+    Priority:
+    1. Explicit source.trust_tier field (from import)
+    2. Presence of 'imported:AgentName' tag -> verified_agent
+    3. Default to 'self' (my own memories)
+    """
+    # Check source block first (v1.3 interop format)
+    source = metadata.get('source', {})
+    if isinstance(source, dict):
+        tier = source.get('trust_tier')
+        if tier and tier in DECAY_MULTIPLIERS:
+            return tier
+
+    # Check for imported tag pattern
+    for tag in metadata.get('tags', []):
+        if isinstance(tag, str) and tag.startswith('imported:'):
+            return 'verified_agent'
+
+    return 'self'
+
+
+def get_decay_multiplier(metadata: dict) -> float:
+    """Get decay rate multiplier based on trust tier."""
+    tier = get_memory_trust_tier(metadata)
+    return DECAY_MULTIPLIERS.get(tier, 1.0)
+
+
+def is_imported_memory(metadata: dict) -> bool:
+    """Check if memory was imported from another agent."""
+    # Check source block
+    source = metadata.get('source', {})
+    if isinstance(source, dict) and source.get('agent'):
+        return True
+
+    # Check for imported tag
+    for tag in metadata.get('tags', []):
+        if isinstance(tag, str) and tag.startswith('imported:'):
+            return True
+
+    return False
+
+
+def list_imported_memories() -> list:
+    """List all imported memories with their trust tiers."""
+    imported = []
+    for directory in [ACTIVE_DIR, ARCHIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            metadata, content = parse_memory_file(filepath)
+            if is_imported_memory(metadata):
+                imported.append({
+                    'filepath': filepath,
+                    'id': metadata.get('id', filepath.stem),
+                    'trust_tier': get_memory_trust_tier(metadata),
+                    'decay_multiplier': get_decay_multiplier(metadata),
+                    'recall_count': metadata.get('recall_count', 0),
+                    'sessions_since_recall': metadata.get('sessions_since_recall', 0),
+                    'source_agent': metadata.get('source', {}).get('agent', 'unknown'),
+                    'emotional_weight': metadata.get('emotional_weight', 0.5),
+                })
+    return imported
+
+
 def session_maintenance():
     """
     Run at the start of each session to:
     1. Increment sessions_since_recall for all active memories
-    2. Identify decay candidates
-    3. Report status
+    2. Identify decay candidates (with trust-based decay multipliers for imports)
+    3. Prune never-recalled imports after IMPORTED_PRUNE_SESSIONS
+    4. Report status
+
+    v2.11: Trust-based decay for imported memories
+    - Imported memories use effective_sessions = actual_sessions * decay_multiplier
+    - This means imports reach decay threshold faster until they prove value
     """
     print("\n=== Memory Session Maintenance ===\n")
 
     decay_candidates = []
     reinforced = []
+    prune_candidates = []  # v2.11: Never-recalled imports to archive
 
     for filepath in ACTIVE_DIR.glob("*.md") if ACTIVE_DIR.exists() else []:
         metadata, content = parse_memory_file(filepath)
@@ -593,6 +681,10 @@ def session_maintenance():
         # Increment sessions since recall
         sessions = metadata.get('sessions_since_recall', 0) + 1
         metadata['sessions_since_recall'] = sessions
+
+        # v2.11: Calculate effective sessions with trust-based multiplier
+        decay_multiplier = get_decay_multiplier(metadata)
+        effective_sessions = sessions * decay_multiplier
 
         # Check if this should decay
         emotional_weight = metadata.get('emotional_weight', 0.5)
@@ -603,8 +695,12 @@ def session_maintenance():
             recall_count >= RECALL_COUNT_THRESHOLD
         )
 
-        if sessions >= DECAY_THRESHOLD_SESSIONS and not should_resist_decay:
-            decay_candidates.append((filepath, metadata, content))
+        # v2.11: Check for never-recalled imports past prune threshold
+        is_import = is_imported_memory(metadata)
+        if is_import and recall_count == 0 and sessions >= IMPORTED_PRUNE_SESSIONS:
+            prune_candidates.append((filepath, metadata, content))
+        elif effective_sessions >= DECAY_THRESHOLD_SESSIONS and not should_resist_decay:
+            decay_candidates.append((filepath, metadata, content, decay_multiplier))
         elif should_resist_decay:
             reinforced.append((filepath, metadata))
 
@@ -617,15 +713,25 @@ def session_maintenance():
 
     if decay_candidates:
         print(f"\nDecay candidates ({len(decay_candidates)}):")
-        for fp, meta, _ in decay_candidates:
-            print(f"  - {fp.name}: {meta.get('sessions_since_recall')} sessions, weight={meta.get('emotional_weight'):.2f}")
+        for item in decay_candidates:
+            fp, meta = item[0], item[1]
+            multiplier = item[3] if len(item) > 3 else 1.0
+            eff_sessions = meta.get('sessions_since_recall', 0) * multiplier
+            import_marker = " [IMPORT]" if is_imported_memory(meta) else ""
+            print(f"  - {fp.name}: {meta.get('sessions_since_recall')} sessions (eff: {eff_sessions:.1f}), weight={meta.get('emotional_weight'):.2f}{import_marker}")
+
+    if prune_candidates:
+        print(f"\nPrune candidates - never-recalled imports ({len(prune_candidates)}):")
+        for fp, meta, _ in prune_candidates:
+            source = meta.get('source', {}).get('agent', 'unknown')
+            print(f"  - {fp.name}: from {source}, {meta.get('sessions_since_recall')} sessions, 0 recalls")
 
     if reinforced:
         print(f"\nReinforced (resist decay):")
         for fp, meta in reinforced[:5]:
             print(f"  - {fp.name}: recalls={meta.get('recall_count')}, weight={meta.get('emotional_weight'):.2f}")
 
-    return decay_candidates
+    return decay_candidates, prune_candidates
 
 
 def compress_memory(memory_id: str, compressed_content: str):
@@ -1035,6 +1141,8 @@ if __name__ == "__main__":
         print("  session-status  - Show memories retrieved this session")
         print("  ask <query>     - Semantic search (natural language query)")
         print("  index           - Build/rebuild semantic search index")
+        print("  trust <id>      - Show trust tier and decay info for a memory (v2.11)")
+        print("  imported        - List all imported memories with trust tiers (v2.11)")
         sys.exit(0)
 
     cmd = sys.argv[1]
@@ -1233,3 +1341,57 @@ if __name__ == "__main__":
             print("Semantic search not available (missing semantic_search.py)")
         except Exception as e:
             print(f"Indexing error: {e}")
+
+    # v2.11: Trust-based decay commands
+    elif cmd == "trust" and len(sys.argv) > 2:
+        mem_id = sys.argv[2]
+        found = False
+        for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+            if not directory.exists():
+                continue
+            for filepath in directory.glob("*.md"):
+                metadata, content = parse_memory_file(filepath)
+                if metadata.get('id') == mem_id:
+                    found = True
+                    tier = get_memory_trust_tier(metadata)
+                    multiplier = get_decay_multiplier(metadata)
+                    is_import = is_imported_memory(metadata)
+                    sessions = metadata.get('sessions_since_recall', 0)
+                    effective_sessions = sessions * multiplier
+
+                    print(f"\n=== Trust Info: {mem_id} ===")
+                    print(f"Type: {'IMPORTED' if is_import else 'NATIVE'}")
+                    print(f"Location: {filepath.parent.name}/")
+                    print(f"Trust tier: {tier}")
+                    print(f"Decay multiplier: {multiplier}x")
+                    print(f"Sessions since recall: {sessions}")
+                    print(f"Effective sessions: {effective_sessions:.1f}")
+                    print(f"Recall count: {metadata.get('recall_count', 0)}")
+                    print(f"Emotional weight: {metadata.get('emotional_weight', 0):.2f}")
+
+                    if is_import:
+                        source = metadata.get('source', {})
+                        print(f"\nImport details:")
+                        print(f"  Source agent: {source.get('agent', 'unknown')}")
+                        print(f"  Imported at: {source.get('imported_at', 'unknown')}")
+                        print(f"  Original weight: {source.get('original_weight', 'unknown')}")
+                    break
+            if found:
+                break
+        if not found:
+            print(f"Memory not found: {mem_id}")
+
+    elif cmd == "imported":
+        imported = list_imported_memories()
+        if not imported:
+            print("No imported memories found.")
+        else:
+            print(f"\n=== Imported Memories ({len(imported)}) ===\n")
+            for mem in sorted(imported, key=lambda x: x['sessions_since_recall'], reverse=True):
+                status = "STALE" if mem['recall_count'] == 0 and mem['sessions_since_recall'] >= IMPORTED_PRUNE_SESSIONS else "OK"
+                print(f"[{mem['id']}] from {mem['source_agent']}")
+                print(f"  Trust: {mem['trust_tier']} (decay: {mem['decay_multiplier']}x)")
+                print(f"  Recalls: {mem['recall_count']}, Sessions: {mem['sessions_since_recall']}")
+                print(f"  Weight: {mem['emotional_weight']:.2f}")
+                print(f"  Status: {status}")
+                print()
