@@ -15,6 +15,7 @@ import json
 import yaml
 import uuid
 import hashlib
+import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -31,7 +32,8 @@ EMOTIONAL_WEIGHT_THRESHOLD = 0.6  # Above this resists decay
 RECALL_COUNT_THRESHOLD = 5  # Above this resists decay
 CO_OCCURRENCE_BOOST = 0.1  # How much to boost retrieval for co-occurring memories
 SESSION_TIMEOUT_HOURS = 4  # Sessions older than this are considered stale
-PAIR_DECAY_RATE = 0.5  # How much co-occurrence counts decay per session if not reinforced
+PAIR_DECAY_RATE = 0.5  # Base decay rate for co-occurrence pairs
+ACCESS_WEIGHTED_DECAY = True  # If True, frequently recalled memories decay slower (v2.8)
 
 # Session state - now file-backed for persistence across Python invocations
 _session_retrieved: set[str] = set()
@@ -272,20 +274,58 @@ def log_co_occurrences() -> int:
     return pairs_updated // 2
 
 
+def _get_recall_count(memory_id: str) -> int:
+    """Get the recall_count for a memory by ID. Returns 0 if not found."""
+    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob(f"*-{memory_id}.md"):
+            metadata, _ = parse_memory_file(filepath)
+            return metadata.get('recall_count', 0)
+    return 0
+
+
+def _calculate_effective_decay(memory_id: str, other_id: str) -> float:
+    """
+    Calculate effective decay rate based on recall counts of both memories.
+    Frequently recalled memories decay their pairs more slowly.
+
+    Formula: effective_decay = PAIR_DECAY_RATE / (1 + log(1 + avg_recall_count))
+
+    Examples:
+    - avg_recall_count=0 → decay = 0.5 / 1 = 0.5 (normal)
+    - avg_recall_count=9 → decay = 0.5 / (1 + log(10)) ≈ 0.22 (slower)
+    - avg_recall_count=99 → decay = 0.5 / (1 + log(100)) ≈ 0.14 (much slower)
+
+    Credit: FadeMem paper (arXiv:2601.18642) - adaptive decay based on access frequency
+    """
+    if not ACCESS_WEIGHTED_DECAY:
+        return PAIR_DECAY_RATE
+
+    recall_1 = _get_recall_count(memory_id)
+    recall_2 = _get_recall_count(other_id)
+    avg_recall = (recall_1 + recall_2) / 2
+
+    # Using natural log for smooth scaling
+    effective_decay = PAIR_DECAY_RATE / (1 + math.log(1 + avg_recall))
+    return effective_decay
+
+
 def decay_pair_cooccurrences() -> tuple[int, int]:
     """
     Apply soft decay to co-occurrence pairs that weren't reinforced this session.
     Call AFTER log_co_occurrences() at session end.
 
     Pairs that co-occurred this session: no decay (already got +1 from log_co_occurrences)
-    Pairs that didn't co-occur: decay by PAIR_DECAY_RATE (default 0.5)
+    Pairs that didn't co-occur: decay by effective rate (access-weighted if enabled)
     Pairs that hit 0 or below: pruned from metadata
 
     This prevents unbounded growth of co-occurrence data over time.
+    With ACCESS_WEIGHTED_DECAY=True, frequently recalled memories decay slower.
 
     Returns: (pairs_decayed, pairs_pruned)
 
-    Credit: SpindriftMend (PR #2)
+    Credit: SpindriftMend (PR #2), FadeMem (v2.8 access weighting)
     """
     _load_session_state()
 
@@ -322,8 +362,9 @@ def decay_pair_cooccurrences() -> tuple[int, int]:
                 pair = tuple(sorted([memory_id, other_id]))
 
                 if pair not in reinforced_pairs:
-                    # Decay this pair
-                    new_count = count - PAIR_DECAY_RATE
+                    # Calculate effective decay (access-weighted if enabled)
+                    effective_decay = _calculate_effective_decay(memory_id, other_id)
+                    new_count = count - effective_decay
 
                     if new_count <= 0:
                         to_remove.append(other_id)
@@ -782,7 +823,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Memory Manager v2.5 - Living Memory System with Causal Edges")
+        print("Memory Manager v2.8 - Living Memory with Access-Weighted Decay")
         print("\nCommands:")
         print("  store <text>    - Store a new memory")
         print("                    --tags=a,b --emotion=0.8 --caused-by=id1,id2")
@@ -909,7 +950,7 @@ if __name__ == "__main__":
         print(f"Decay complete: {decayed} pairs decayed, {pruned} pairs pruned")
     elif cmd == "stats":
         stats = get_comprehensive_stats()
-        print(f"Memory Stats (v2.3)")
+        print(f"Memory Stats (v2.8 - access-weighted decay)")
         print(f"  Total memories: {stats['memory_stats']['total']}")
         print(f"  By type: core={stats['memory_stats']['core']}, active={stats['memory_stats']['active']}, archive={stats['memory_stats']['archive']}")
         print(f"\nCo-occurrence Stats")
@@ -937,6 +978,8 @@ if __name__ == "__main__":
                 print("No matching memories found. (Is the index built? Run: memory_manager.py index)")
             else:
                 print(f"Memories matching '{query}':\n")
+                # Load existing session state first (v2.8 fix: accumulate, don't replace)
+                _load_session_state()
                 for r in results:
                     # Track retrieval for co-occurrence (biological: retrieval strengthens memory)
                     _session_retrieved.add(r['id'])
