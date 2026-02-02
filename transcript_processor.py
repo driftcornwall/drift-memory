@@ -54,6 +54,13 @@ SOCIAL_KEYWORDS = [
     "moltx", "moltbook", "github"
 ]
 
+# Milestone keywords - these indicate something SHIPPED
+MILESTONE_KEYWORDS = [
+    "shipped", "launched", "deployed", "live", "production", "released",
+    "published", "merged", "pushed to", "site is", "is now live",
+    "enabled github pages", "commit", "pr merged", "feature complete"
+]
+
 # Indicators that content is OBSERVED (from others) rather than SELF-generated
 OBSERVED_INDICATORS = [
     # Third-person references to Drift (me)
@@ -348,6 +355,132 @@ def process_for_memory(transcript_path: Path, store: bool = False, max_store: in
     return summary
 
 
+def extract_milestones(transcript_path: Path) -> list[dict]:
+    """
+    Extract milestone events (shipped, launched, etc.) from transcript.
+    Only looks at assistant OUTPUT (not thinking blocks, not system messages).
+
+    Returns list of milestone dicts with:
+    - content: What was shipped/done
+    - keywords: Which milestone keywords matched
+    - timestamp: When it happened
+    """
+    milestones = []
+
+    if not transcript_path.exists():
+        return milestones
+
+    with open(transcript_path, encoding='utf-8') as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+
+                # ONLY process assistant messages - this is the key filter
+                if data.get('type') != 'assistant':
+                    continue
+
+                msg = data.get('message', {})
+                if not isinstance(msg, dict):
+                    continue
+
+                content = msg.get('content', [])
+                timestamp = data.get('timestamp', datetime.now().isoformat())
+
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+
+                    # Only look at TEXT output (visible to user), not thinking blocks
+                    if block.get('type') != 'text':
+                        continue
+
+                    text = block.get('text', '')
+                    text_lower = text.lower()
+
+                    # Check for milestone keywords
+                    matched_keywords = []
+                    for keyword in MILESTONE_KEYWORDS:
+                        if keyword in text_lower:
+                            matched_keywords.append(keyword)
+
+                    if matched_keywords:
+                        # Filter out false positives - discussions ABOUT milestones
+                        text_lower = text.lower()
+                        is_meta_discussion = any(phrase in text_lower for phrase in [
+                            "the keywords are",
+                            "keywords:",
+                            "milestone_keywords",
+                            "should match",
+                            "would match",
+                            "extraction",
+                            "auto-extracted",
+                            "looking for",
+                        ])
+
+                        if is_meta_discussion:
+                            continue  # Skip meta-discussions about the system
+
+                        # Extract a meaningful snippet around the milestone
+                        # Look for sentences containing the keywords
+                        sentences = re.split(r'[.!?\n]', text)
+                        relevant_sentences = []
+                        for sentence in sentences:
+                            sentence = sentence.strip()
+                            sentence_lower = sentence.lower()
+
+                            # Skip if this sentence is listing keywords
+                            if sentence_lower.startswith('"') or '", "' in sentence_lower:
+                                continue
+
+                            if any(kw in sentence_lower for kw in matched_keywords):
+                                if len(sentence) > 20 and len(sentence) < 300:
+                                    relevant_sentences.append(sentence)
+
+                        if relevant_sentences:
+                            milestones.append({
+                                'content': relevant_sentences[:3],  # Max 3 sentences
+                                'keywords': matched_keywords,
+                                'timestamp': timestamp,
+                                'full_text_preview': text[:200]
+                            })
+
+            except json.JSONDecodeError:
+                continue
+            except Exception:
+                continue
+
+    # Deduplicate by content similarity
+    seen_content = set()
+    unique = []
+    for m in milestones:
+        key = ' '.join(m['content'][:1])[:100]  # First sentence as key
+        if key not in seen_content:
+            seen_content.add(key)
+            unique.append(m)
+
+    return unique
+
+
+def format_milestones_for_episodic(milestones: list[dict]) -> str:
+    """
+    Format extracted milestones into markdown for episodic memory.
+    Returns empty string if no significant milestones.
+    """
+    if not milestones:
+        return ""
+
+    lines = ["### Session Milestones (auto-extracted)\n"]
+
+    for m in milestones[:5]:  # Max 5 milestones per session
+        keywords = ', '.join(m['keywords'][:3])
+        lines.append(f"**[{keywords}]**")
+        for sentence in m['content']:
+            lines.append(f"- {sentence}")
+        lines.append("")
+
+    return '\n'.join(lines)
+
+
 def test_with_sample():
     """Test with sample transcript content."""
     sample_thinking = """
@@ -378,6 +511,8 @@ if __name__ == "__main__":
     parser.add_argument("--store", action="store_true", default=True, help="Store memories (default: True)")
     parser.add_argument("--no-store", action="store_true", help="Don't store, just analyze")
     parser.add_argument("--max", type=int, default=5, help="Max memories to store (default: 5)")
+    parser.add_argument("--milestones", action="store_true", help="Extract milestones for episodic memory")
+    parser.add_argument("--milestones-md", action="store_true", help="Output milestones as markdown")
     args = parser.parse_args()
 
     if args.test:
@@ -385,10 +520,25 @@ if __name__ == "__main__":
     elif args.path:
         transcript = Path(args.path)
         if transcript.exists():
-            do_store = args.store and not args.no_store
-            summary = process_for_memory(transcript, store=do_store, max_store=args.max)
-            print(json.dumps(summary, indent=2))
+            # Milestone extraction mode
+            if args.milestones or args.milestones_md:
+                milestones = extract_milestones(transcript)
+                if args.milestones_md:
+                    print(format_milestones_for_episodic(milestones))
+                else:
+                    print(json.dumps(milestones, indent=2))
+            else:
+                # Normal memory extraction
+                do_store = args.store and not args.no_store
+                summary = process_for_memory(transcript, store=do_store, max_store=args.max)
+                # Also extract milestones and include in summary
+                milestones = extract_milestones(transcript)
+                summary['milestones'] = len(milestones)
+                summary['milestone_keywords'] = list(set(
+                    kw for m in milestones for kw in m['keywords']
+                ))
+                print(json.dumps(summary, indent=2))
         else:
             print(f"Transcript not found: {transcript}")
     else:
-        print("Usage: transcript_processor.py <path> [--no-store] [--max N] | --test")
+        print("Usage: transcript_processor.py <path> [--no-store] [--max N] [--milestones] [--milestones-md] | --test")

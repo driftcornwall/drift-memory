@@ -4,33 +4,55 @@
 # ///
 
 """
-Post-tool-use hook for Claude Code.
-Logs tool usage for debugging and analysis.
+Post-tool-use hook for Claude Code - Drift Memory Integration
 
-DRIFT MEMORY INTEGRATION (2026-02-01):
-Added automatic memory capture for API responses when working in Moltbook project.
-This enables biological-style memory where everything enters short-term automatically,
+Captures API responses for automatic memory processing.
+Enables biological-style memory where everything enters short-term automatically,
 with salience-based filtering deciding what persists.
 
-Note: Agent.md file creation has been removed.
-Ralph now creates AGENTS.md files WITH content when learnings are discovered,
-rather than pre-creating empty files on mkdir.
+SETUP:
+1. Copy to ~/.claude/hooks/post_tool_use.py
+2. Set DRIFT_MEMORY_DIR environment variable OR place in project with memory/ folder
+3. Configure in ~/.claude/settings.json:
+   {"hooks": {"PostToolUse": [{"command": "python ~/.claude/hooks/post_tool_use.py"}]}}
 """
 
 import json
+import os
 import sys
 import subprocess
 from pathlib import Path
 
 
-# Drift's memory system location
-DRIFT_MEMORY_DIR = Path("Q:/Codings/ClaudeCodeProjects/LEX/Moltbook/memory")
+def get_memory_dir() -> Path:
+    """
+    Find the drift-memory directory.
+    Priority:
+    1. DRIFT_MEMORY_DIR environment variable
+    2. memory/ folder in current working directory
+    3. memory/ folder in parent directories (up to 3 levels)
+    """
+    # Check environment variable first
+    env_dir = os.environ.get('DRIFT_MEMORY_DIR')
+    if env_dir:
+        path = Path(env_dir)
+        if path.exists():
+            return path
 
-
-def is_moltbook_project() -> bool:
-    """Check if we're working in the Moltbook project."""
+    # Check current directory and parents
     cwd = Path.cwd()
-    return "Moltbook" in str(cwd) or "moltbook" in str(cwd).lower()
+    for _ in range(4):  # Check cwd and up to 3 parents
+        memory_dir = cwd / "memory"
+        if memory_dir.exists() and (memory_dir / "memory_manager.py").exists():
+            return memory_dir
+        cwd = cwd.parent
+
+    return None
+
+
+def has_drift_memory() -> bool:
+    """Check if drift-memory system is available."""
+    return get_memory_dir() is not None
 
 
 def detect_api_type(tool_result: str) -> str:
@@ -49,18 +71,70 @@ def detect_api_type(tool_result: str) -> str:
     return "unknown"
 
 
+def log_social_interaction(memory_dir: Path, platform: str, tool_result: str, debug: bool = False):
+    """
+    Extract and log social interactions from API responses.
+    """
+    social_memory = memory_dir / "social" / "social_memory.py"
+    if not social_memory.exists():
+        return
+
+    try:
+        data = json.loads(tool_result) if tool_result.strip().startswith(('{', '[')) else None
+        if not data:
+            return
+
+        items = data if isinstance(data, list) else [data]
+
+        for item in items[:5]:
+            if not isinstance(item, dict):
+                continue
+
+            contact = None
+            interaction_type = None
+            content = None
+            url = None
+
+            if platform == "moltx":
+                author = item.get("author", {})
+                contact = author.get("username") if isinstance(author, dict) else author
+                interaction_type = "reply" if item.get("parent_id") else "post"
+                content = item.get("content", "")[:150]
+                url = f"https://moltx.io/post/{item.get('id')}" if item.get('id') else None
+
+            elif platform == "github":
+                user = item.get("user", {})
+                contact = user.get("login") if isinstance(user, dict) else None
+                interaction_type = "comment"
+                if "pull_request" in str(item.get("html_url", "")):
+                    interaction_type = "pr"
+                elif "/issues/" in str(item.get("html_url", "")):
+                    interaction_type = "issue"
+                content = item.get("title") or item.get("body", "")[:150]
+                url = item.get("html_url")
+
+            if contact and content:
+                try:
+                    cmd = ["python", str(social_memory), "log", contact, platform, interaction_type or "interaction", content]
+                    if url:
+                        cmd.extend(["--url", url])
+                    subprocess.run(cmd, capture_output=True, text=True, timeout=5, cwd=str(social_memory.parent))
+                except Exception:
+                    pass
+
+    except (json.JSONDecodeError, Exception):
+        pass
+
+
 def process_for_memory(tool_name: str, tool_result: str, debug: bool = False):
     """
     Route tool results to appropriate memory processor.
     Fails gracefully - memory processing should never break the hook.
     """
     try:
-        # Only process if we're in Moltbook project
-        if not is_moltbook_project():
-            return
-
-        # Only process if memory system exists
-        if not DRIFT_MEMORY_DIR.exists():
+        # Get memory directory
+        memory_dir = get_memory_dir()
+        if not memory_dir:
             return
 
         api_type = detect_api_type(tool_result)
@@ -70,27 +144,28 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False):
 
         if api_type == "moltx":
             # Process MoltX feed/notifications
-            feed_processor = DRIFT_MEMORY_DIR / "feed_processor.py"
+            feed_processor = memory_dir / "feed_processor.py"
             if feed_processor.exists():
                 try:
-                    # Try to parse as JSON and process
                     subprocess.run(
                         ["python", str(feed_processor), "--process-stdin"],
                         input=tool_result,
                         capture_output=True,
                         text=True,
                         timeout=5,
-                        cwd=str(DRIFT_MEMORY_DIR)
+                        cwd=str(memory_dir)
                     )
                     if debug:
                         print("DEBUG: MoltX feed processed", file=sys.stderr)
                 except Exception as e:
                     if debug:
                         print(f"DEBUG: Feed processor error: {e}", file=sys.stderr)
+            # Log social interactions
+            log_social_interaction(memory_dir, "moltx", tool_result, debug)
 
         elif api_type == "clawtasks":
             # Store ClawTasks responses in short-term buffer
-            auto_memory = DRIFT_MEMORY_DIR / "auto_memory_hook.py"
+            auto_memory = memory_dir / "auto_memory_hook.py"
             if auto_memory.exists():
                 try:
                     # Create a memory item for economic data
@@ -106,7 +181,7 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False):
                         capture_output=True,
                         text=True,
                         timeout=5,
-                        cwd=str(DRIFT_MEMORY_DIR)
+                        cwd=str(memory_dir)
                     )
                 except Exception as e:
                     if debug:
@@ -114,7 +189,7 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False):
 
         elif api_type == "github":
             # Store GitHub responses (issues, PRs, comments) in short-term buffer
-            auto_memory = DRIFT_MEMORY_DIR / "auto_memory_hook.py"
+            auto_memory = memory_dir / "auto_memory_hook.py"
             if auto_memory.exists():
                 try:
                     subprocess.run(
@@ -123,17 +198,19 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False):
                         capture_output=True,
                         text=True,
                         timeout=5,
-                        cwd=str(DRIFT_MEMORY_DIR)
+                        cwd=str(memory_dir)
                     )
                     if debug:
                         print("DEBUG: GitHub response processed", file=sys.stderr)
                 except Exception as e:
                     if debug:
                         print(f"DEBUG: GitHub memory error: {e}", file=sys.stderr)
+            # Log social interactions
+            log_social_interaction(memory_dir, "github", tool_result, debug)
 
         elif api_type == "moltbook":
             # Store Moltbook responses (posts, karma, status) in short-term buffer
-            auto_memory = DRIFT_MEMORY_DIR / "auto_memory_hook.py"
+            auto_memory = memory_dir / "auto_memory_hook.py"
             if auto_memory.exists():
                 try:
                     subprocess.run(
@@ -142,13 +219,15 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False):
                         capture_output=True,
                         text=True,
                         timeout=5,
-                        cwd=str(DRIFT_MEMORY_DIR)
+                        cwd=str(memory_dir)
                     )
                     if debug:
                         print("DEBUG: Moltbook response processed", file=sys.stderr)
                 except Exception as e:
                     if debug:
                         print(f"DEBUG: Moltbook memory error: {e}", file=sys.stderr)
+            # Log social interactions
+            log_social_interaction(memory_dir, "moltbook", tool_result, debug)
 
     except Exception as e:
         # Memory processing should NEVER break the hook

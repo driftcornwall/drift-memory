@@ -7,12 +7,16 @@
 # ///
 
 """
-Session start hook for Claude Code.
-Logs session start and optionally loads development context.
+Session start hook for Claude Code - Drift Memory Integration
 
-DRIFT MEMORY INTEGRATION (2026-02-01):
-Added automatic memory priming when waking up in Moltbook project.
+Automatic memory priming when waking up in a project with drift-memory.
 This is the "wake up" phase where relevant memories are loaded into context.
+
+SETUP:
+1. Copy to ~/.claude/hooks/session_start.py
+2. Set DRIFT_MEMORY_DIR environment variable OR place in project with memory/ folder
+3. Configure in ~/.claude/settings.json:
+   {"hooks": {"SessionStart": [{"command": "python ~/.claude/hooks/session_start.py"}]}}
 """
 
 import argparse
@@ -30,29 +34,35 @@ except ImportError:
     pass  # dotenv is optional
 
 
-# Memory system locations - check both Moltbook and Moltbook2
-MOLTBOOK_DIRS = [
-    Path("Q:/Codings/ClaudeCodeProjects/LEX/Moltbook2/memory"),
-    Path("Q:/Codings/ClaudeCodeProjects/LEX/Moltbook/memory"),
-]
-
 def get_memory_dir() -> Path:
-    """Get the appropriate memory directory based on cwd."""
-    cwd = str(Path.cwd())
-    if "Moltbook2" in cwd:
-        return MOLTBOOK_DIRS[0]
-    elif "Moltbook" in cwd:
-        return MOLTBOOK_DIRS[1]
-    # Default to first that exists
-    for d in MOLTBOOK_DIRS:
-        if d.exists():
-            return d
-    return MOLTBOOK_DIRS[0]
+    """
+    Find the drift-memory directory.
+    Priority:
+    1. DRIFT_MEMORY_DIR environment variable
+    2. memory/ folder in current working directory
+    3. memory/ folder in parent directories (up to 3 levels)
+    """
+    # Check environment variable first
+    env_dir = os.environ.get('DRIFT_MEMORY_DIR')
+    if env_dir:
+        path = Path(env_dir)
+        if path.exists():
+            return path
 
-def is_moltbook_project() -> bool:
-    """Check if we're working in the Moltbook project."""
+    # Check current directory and parents
     cwd = Path.cwd()
-    return "Moltbook" in str(cwd) or "moltbook" in str(cwd).lower()
+    for _ in range(4):
+        memory_dir = cwd / "memory"
+        if memory_dir.exists() and (memory_dir / "memory_manager.py").exists():
+            return memory_dir
+        cwd = cwd.parent
+
+    return None
+
+
+def has_drift_memory() -> bool:
+    """Check if drift-memory system is available."""
+    return get_memory_dir() is not None
 
 
 def load_drift_memory_context(debug: bool = False) -> str:
@@ -73,7 +83,7 @@ def load_drift_memory_context(debug: bool = False) -> str:
     context_parts = []
 
     try:
-        if not is_moltbook_project():
+        if not has_drift_memory():
             return ""
 
         memory_dir = get_memory_dir()
@@ -430,7 +440,7 @@ def main():
                 sys.exit(0)
 
         # === DRIFT: Always try to load memory context in Moltbook ===
-        if is_moltbook_project():
+        if has_drift_memory():
             drift_context = load_drift_memory_context(debug=args.debug)
             if drift_context:
                 output = {

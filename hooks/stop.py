@@ -7,13 +7,19 @@
 # ///
 
 """
-Stop hook for Claude Code.
-Handles session end: logging, transcript copying, TTS announcement.
+Stop hook for Claude Code - Drift Memory Integration
 
-DRIFT MEMORY INTEGRATION (2026-02-01):
-Added automatic memory consolidation when session ends.
-This is the "sleep consolidation" phase where salient short-term items
-are moved to long-term memory and decay is applied.
+Handles session end: memory consolidation, transcript processing, episodic updates.
+This is the "sleep consolidation" phase where:
+1. Short-term buffer is decayed
+2. High-salience items are moved to long-term
+3. Co-occurrences are logged
+4. Transcript is processed for thought memories
+5. Milestones are extracted to episodic memory
+
+SETUP:
+1. Copy to ~/.claude/hooks/stop.py
+2. Set memory_dir environment variable OR place in project with memory/ folder
 """
 
 import argparse
@@ -27,48 +33,72 @@ from datetime import datetime
 
 try:
     from dotenv import load_dotenv
-    # Load .env from ~/.claude directory
     claude_dir = Path.home() / ".claude"
     env_file = claude_dir / ".env"
     if env_file.exists():
         load_dotenv(env_file)
     else:
-        load_dotenv()  # Fallback to default
+        load_dotenv()
 except ImportError:
-    pass  # dotenv is optional
+    pass
 
 
-# Drift's memory system location
-DRIFT_MEMORY_DIR = Path("Q:/Codings/ClaudeCodeProjects/LEX/Moltbook/memory")
-
-
-def is_moltbook_project() -> bool:
-    """Check if we're working in the Moltbook project."""
-    cwd = Path.cwd()
-    return "Moltbook" in str(cwd) or "moltbook" in str(cwd).lower()
-
-
-def consolidate_drift_memory(transcript_path: str = None, debug: bool = False):
+def get_memory_dir(cwd: str = None) -> Path:
     """
-    Run Drift's memory consolidation at session end.
+    Find the drift-memory directory.
+    Priority:
+    1. memory_dir environment variable
+    2. memory/ folder in provided cwd
+    3. memory/ folder in current directory and parents
+    """
+    env_dir = os.environ.get('memory_dir')
+    if env_dir:
+        path = Path(env_dir)
+        if path.exists():
+            return path
+
+    # Check provided cwd first
+    if cwd:
+        memory_dir = Path(cwd) / "memory"
+        if memory_dir.exists() and (memory_dir / "memory_manager.py").exists():
+            return memory_dir
+
+    # Check current directory and parents
+    check_dir = Path.cwd()
+    for _ in range(4):
+        memory_dir = check_dir / "memory"
+        if memory_dir.exists() and (memory_dir / "memory_manager.py").exists():
+            return memory_dir
+        check_dir = check_dir.parent
+
+    return None
+
+
+def has_drift_memory(cwd: str = None) -> bool:
+    """Check if drift-memory system is available."""
+    return get_memory_dir(cwd) is not None
+
+
+def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug: bool = False):
+    """
+    Run memory consolidation at session end.
     This is the "sleep" phase where:
     1. Short-term buffer is decayed
     2. High-salience items are moved to long-term
     3. Co-occurrences are logged
-    4. Transcript is processed for thought memories (NEW!)
+    4. Transcript is processed for thought memories
+    5. Milestones extracted to episodic memory
 
     Fails gracefully - should never break the stop hook.
     """
     try:
-        if not is_moltbook_project():
+        memory_dir = get_memory_dir(cwd)
+        if not memory_dir:
             return
 
-        if not DRIFT_MEMORY_DIR.exists():
-            return
-
-        auto_memory = DRIFT_MEMORY_DIR / "auto_memory_hook.py"
-        memory_manager = DRIFT_MEMORY_DIR / "memory_manager.py"
-        transcript_processor = DRIFT_MEMORY_DIR / "transcript_processor.py"
+        auto_memory = memory_dir / "auto_memory_hook.py"
+        memory_manager = memory_dir / "memory_manager.py"
+        transcript_processor = memory_dir / "transcript_processor.py"
 
         # NEW: Process transcript for thought memories
         if transcript_path and transcript_processor.exists():
@@ -78,7 +108,7 @@ def consolidate_drift_memory(transcript_path: str = None, debug: bool = False):
                     capture_output=True,
                     text=True,
                     timeout=30,  # Longer timeout for transcript processing
-                    cwd=str(DRIFT_MEMORY_DIR)
+                    cwd=str(memory_dir)
                 )
                 if debug:
                     print(f"DEBUG: Transcript processing: {result.stdout[:500]}", file=sys.stderr)
@@ -104,7 +134,7 @@ def consolidate_drift_memory(transcript_path: str = None, debug: bool = False):
                     capture_output=True,
                     text=True,
                     timeout=10,
-                    cwd=str(DRIFT_MEMORY_DIR)
+                    cwd=str(memory_dir)
                 )
                 if debug:
                     print(f"DEBUG: Consolidation output: {result.stdout}", file=sys.stderr)
@@ -122,7 +152,7 @@ def consolidate_drift_memory(transcript_path: str = None, debug: bool = False):
                     capture_output=True,
                     text=True,
                     timeout=10,
-                    cwd=str(DRIFT_MEMORY_DIR)
+                    cwd=str(memory_dir)
                 )
                 if debug:
                     print(f"DEBUG: Session-end output: {result.stdout}", file=sys.stderr)

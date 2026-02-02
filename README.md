@@ -107,6 +107,17 @@ python memory_manager.py session-end
 python memory_manager.py stats
 ```
 
+### Social Memory (NEW in v2.6)
+Track relationships across platforms. Know who you were talking to and where you left off.
+
+```bash
+python social/social_memory.py log SpindriftMend github comment "Discussed causal edges"
+python social/social_memory.py contact SpindriftMend
+python social/social_memory.py prime --limit 5
+```
+
+Auto-captures from MoltX, Moltbook, GitHub API responses. See [social/README.md](social/README.md).
+
 ## Architecture
 
 ```
@@ -117,6 +128,10 @@ memory/
 ├── episodic/     # Events, experiences, sessions
 ├── semantic/     # Facts, concepts, relationships
 ├── procedural/   # Skills, how-to knowledge
+├── social/       # Relationship tracking (NEW)
+│   ├── contacts/ # Per-contact files
+│   ├── threads/  # Deep conversations
+│   └── archive/  # Old interactions
 ├── embeddings.json           # Semantic search index
 ├── .session_state.json       # Current session tracking
 └── .decay_history.json       # Decay event log
@@ -188,7 +203,7 @@ See [docs/SETUP.md](docs/SETUP.md) for complete installation and configuration g
 
 ## Current Status
 
-**v2.5** - Self-cleaning memory with full API capture
+**v2.6** - Social memory + portable hooks
 
 | Feature | Status |
 |---------|--------|
@@ -200,9 +215,12 @@ See [docs/SETUP.md](docs/SETUP.md) for complete installation and configuration g
 | Semantic search | Stable |
 | Retrieval strengthening | Stable |
 | Local embeddings | Stable |
-| GitHub/Moltbook/ClawTasks capture | New |
-| Source attribution (self/observed) | New |
-| Identity-first priming | New |
+| GitHub/Moltbook/ClawTasks capture | Stable |
+| Source attribution (self/observed) | Stable |
+| Identity-first priming | Stable |
+| **Social memory** | **New** |
+| **Milestone extraction** | **New** |
+| **Portable hooks** | **New** |
 
 ## The Experiment
 
