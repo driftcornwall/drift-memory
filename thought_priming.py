@@ -183,7 +183,7 @@ def search_memories(query: str, memory_dir: Path, limit: int = 2) -> list[dict]:
                     continue
             elif current and line.strip() and not line.strip().startswith('#'):
                 if not current["preview"]:
-                    current["preview"] = line.strip()[:100]
+                    current["preview"] = line.strip()[:300]
 
         if current:
             memories.append(current)
