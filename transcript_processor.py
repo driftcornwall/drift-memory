@@ -36,7 +36,15 @@ INSIGHT_KEYWORDS = [
 
 ERROR_KEYWORDS = [
     "error", "failed", "traceback", "exception", "bug", "issue", "problem",
-    "doesn't work", "broken", "fix"
+    "doesn't work", "broken", "crash", "undefined"
+]
+
+# v2.14: Separate FIX keywords for problem→solution detection
+# Credit: SpindriftMend's transcript processor enhancement
+FIX_KEYWORDS = [
+    "fix", "fixed", "solution", "solved", "resolved", "worked", "works now",
+    "the issue was", "the problem was", "because", "instead", "should use",
+    "now it", "after changing", "corrected"
 ]
 
 DECISION_KEYWORDS = [
@@ -133,12 +141,31 @@ def compute_thought_salience(text: str) -> tuple[float, list[str]]:
                 categories.append("insight")
             break
 
+    has_error = False
     for keyword in ERROR_KEYWORDS:
         if keyword in text_lower:
             score += 0.2
+            has_error = True
             if "error" not in categories:
                 categories.append("error")
             break
+
+    # v2.14: Check for fix/solution keywords (from SpindriftMend)
+    has_fix = False
+    for keyword in FIX_KEYWORDS:
+        if keyword in text_lower:
+            score += 0.15
+            has_fix = True
+            if "fix" not in categories:
+                categories.append("fix")
+            break
+
+    # BONUS: Problem → Solution pattern (both error AND fix present)
+    # This is the most valuable learning - when I fail and then fix it
+    if has_error and has_fix:
+        score += 0.3  # Big bonus for problem→solution
+        if "problem_solved" not in categories:
+            categories.append("problem_solved")
 
     for keyword in DECISION_KEYWORDS:
         if keyword in text_lower:
@@ -354,8 +381,10 @@ def process_for_memory(transcript_path: Path, store: bool = False, max_store: in
                         # Truncate content for storage
                         content = mem['content'][:500]
 
+                        # v2.10: Include event_time for bi-temporal tracking
+                        event_time = datetime.now().strftime('%Y-%m-%d')
                         result = subprocess.run(
-                            ["python", str(memory_manager), "store", mem_id, content, "--tags", tags],
+                            ["python", str(memory_manager), "store", mem_id, content, f"--tags={tags}", f"--event-time={event_time}"],
                             capture_output=True,
                             text=True,
                             timeout=10,
@@ -653,8 +682,10 @@ def store_session_summary(summary: dict, memory_dir: Path) -> Optional[str]:
     tags = ['session-summary', 'amalgamated' if summary.get('summary_count', 1) > 1 else 'single']
 
     try:
+        # v2.10: Include event_time for bi-temporal tracking
+        event_time = datetime.now().strftime('%Y-%m-%d')
         result = subprocess.run(
-            ["python", str(memory_manager), "store", mem_id, content[:2000], "--tags", ','.join(tags)],
+            ["python", str(memory_manager), "store", mem_id, content[:2000], f"--tags={','.join(tags)}", f"--event-time={event_time}"],
             capture_output=True,
             text=True,
             timeout=10,
