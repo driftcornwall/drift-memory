@@ -47,6 +47,7 @@ SENSITIVE_FILES = {
     'credentials.md',
     'secrets.md',
     'api-keys.md',
+    'capabilities.md',    # Contains actual API keys and tokens
     'CLAUDE.md',
     'claude.md',
     '.env',
