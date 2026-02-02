@@ -481,6 +481,60 @@ def find_memories_by_tag(tag: str, limit: int = 10) -> list[tuple[Path, dict, st
     return results[:limit]
 
 
+def find_memories_by_time(
+    before: str = None,
+    after: str = None,
+    time_field: str = "created",
+    limit: int = 20
+) -> list[tuple[Path, dict, str]]:
+    """
+    Find memories within a time range. Supports bi-temporal queries (v2.10).
+
+    Args:
+        before: ISO date string - find memories before this date
+        after: ISO date string - find memories after this date
+        time_field: Which field to query - "created" (ingestion) or "event_time" (when it happened)
+        limit: Maximum results
+
+    Returns:
+        List of (filepath, metadata, content) tuples, sorted by time_field descending
+
+    Examples:
+        find_memories_by_time(after="2026-02-01")  # What did I learn after Feb 1?
+        find_memories_by_time(before="2026-02-01", time_field="event_time")  # Events that happened before Feb 1
+        find_memories_by_time(after="2026-01-15", before="2026-02-01")  # Learned in that range
+
+    Credit: Graphiti bi-temporal pattern (v2.10)
+    """
+    results = []
+
+    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            metadata, content = parse_memory_file(filepath)
+
+            # Get the time field value (default to created if event_time missing)
+            time_value = metadata.get(time_field, metadata.get('created', ''))
+            if not time_value:
+                continue
+
+            # Normalize to just date for comparison
+            time_date = time_value[:10] if len(time_value) >= 10 else time_value
+
+            # Apply filters
+            if before and time_date >= before:
+                continue
+            if after and time_date < after:
+                continue
+
+            results.append((filepath, metadata, content, time_date))
+
+    # Sort by time descending (most recent first)
+    results.sort(key=lambda x: x[3], reverse=True)
+    return [(r[0], r[1], r[2]) for r in results[:limit]]
+
+
 def find_related_memories(memory_id: str) -> list[tuple[Path, dict, str]]:
     """Find memories related to a given memory via tags, links, and co-occurrence patterns."""
     # First, find the source memory
@@ -715,7 +769,7 @@ def log_decay_event(decayed: int, pruned: int):
 
 
 # CLI interface
-def store_memory(content: str, tags: list[str] = None, emotion: float = 0.5, title: str = None, caused_by: list[str] = None) -> str:
+def store_memory(content: str, tags: list[str] = None, emotion: float = 0.5, title: str = None, caused_by: list[str] = None, event_time: str = None) -> str:
     """
     Store a new memory to the active directory.
 
@@ -725,6 +779,8 @@ def store_memory(content: str, tags: list[str] = None, emotion: float = 0.5, tit
         emotion: Emotional weight (0-1)
         title: Optional title for filename
         caused_by: List of memory IDs that caused/led to this memory (CAUSAL EDGES)
+        event_time: When the event happened (ISO format). Defaults to now. (BI-TEMPORAL v2.10)
+                    Distinct from 'created' which is ingestion time.
 
     Returns:
         Tuple of (memory_id, filename)
@@ -757,12 +813,18 @@ def store_memory(content: str, tags: list[str] = None, emotion: float = 0.5, tit
     # Merge explicit and auto-detected causal links (explicit takes precedence)
     all_causal = list(set(caused_by + auto_causal))
 
-    # Build frontmatter with causal edges
+    # Build frontmatter with causal edges and bi-temporal tracking (v2.10)
     tags = tags or []
+    now = datetime.now(timezone.utc)
+    created = now.strftime('%Y-%m-%d')
+    # event_time: when the event happened (may be in past)
+    # created: when we learned about it (ingestion time, always now)
+    event = event_time if event_time else created
     frontmatter = f"""---
 id: {memory_id}
 type: active
-created: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}
+created: {created}
+event_time: {event}
 tags: [{', '.join(tags)}]
 emotional_weight: {emotion}
 recall_count: 0
@@ -876,14 +938,17 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Memory Manager v2.9 - Living Memory with Heat-Based Promotion")
+        print("Memory Manager v2.10 - Living Memory with Bi-Temporal Tracking")
         print("\nCommands:")
         print("  store <text>    - Store a new memory")
-        print("                    --tags=a,b --emotion=0.8 --caused-by=id1,id2")
+        print("                    --tags=a,b --emotion=0.8 --caused-by=id1,id2 --event-time=YYYY-MM-DD")
         print("                    Auto-links to memories recalled this session (causal)")
+        print("                    --event-time: when event happened (bi-temporal, v2.10)")
         print("  maintenance     - Run session maintenance")
         print("  tags            - List all tags")
         print("  find <tag>      - Find memories by tag")
+        print("  timeline        - Find memories by time range (bi-temporal, v2.10)")
+        print("                    --after=YYYY-MM-DD --before=YYYY-MM-DD --field=created|event_time")
         print("  recall <id>     - Recall a memory by ID")
         print("  related <id>    - Find related memories (includes co-occurrence)")
         print("  cooccur <id>    - Find frequently co-occurring memories")
@@ -905,6 +970,7 @@ if __name__ == "__main__":
         tags = []
         emotion = 0.5
         caused_by = []
+        event_time = None  # v2.10: bi-temporal support
 
         for arg in sys.argv[2:]:
             if arg.startswith('--tags='):
@@ -913,12 +979,14 @@ if __name__ == "__main__":
                 emotion = float(arg[10:])
             elif arg.startswith('--caused-by='):
                 caused_by = [x.strip() for x in arg[12:].split(',') if x.strip()]
+            elif arg.startswith('--event-time='):
+                event_time = arg[13:]  # v2.10: when the event happened
             else:
                 content_parts.append(arg)
 
         content = ' '.join(content_parts)
         if content:
-            memory_id, filename = store_memory(content, tags, emotion, caused_by=caused_by)
+            memory_id, filename = store_memory(content, tags, emotion, caused_by=caused_by, event_time=event_time)
             # Show causal links if any were created
             _load_session_state()
             auto_causal = list(_session_retrieved) if _session_retrieved else []
@@ -943,6 +1011,29 @@ if __name__ == "__main__":
         print(f"Memories tagged '{tag}':")
         for fp, meta, _ in results:
             print(f"  [{meta.get('id')}] {fp.name} (weight={meta.get('emotional_weight'):.2f})")
+    elif cmd == "timeline":
+        # v2.10: bi-temporal queries
+        before = None
+        after = None
+        field = "created"  # default to ingestion time
+        for arg in sys.argv[2:]:
+            if arg.startswith('--before='):
+                before = arg[9:]
+            elif arg.startswith('--after='):
+                after = arg[8:]
+            elif arg.startswith('--field='):
+                field = arg[8:]  # "created" or "event_time"
+        if not before and not after:
+            print("Usage: timeline --after=YYYY-MM-DD [--before=YYYY-MM-DD] [--field=created|event_time]")
+            print("  --field=created (default): when I learned it (ingestion time)")
+            print("  --field=event_time: when it actually happened")
+        else:
+            results = find_memories_by_time(before=before, after=after, time_field=field)
+            field_label = "ingested" if field == "created" else "event"
+            print(f"Memories {field_label} between {after or 'beginning'} and {before or 'now'}:\n")
+            for fp, meta, _ in results:
+                time_val = meta.get(field, meta.get('created', '?'))
+                print(f"  [{time_val}] {meta.get('id')} - {fp.stem[:40]}")
     elif cmd == "recall" and len(sys.argv) > 2:
         memory_id = sys.argv[2]
         result = recall_memory(memory_id)
@@ -1009,7 +1100,7 @@ if __name__ == "__main__":
             print(f"No memories eligible for promotion (threshold: recall_count >= {HEAT_PROMOTION_THRESHOLD})")
     elif cmd == "stats":
         stats = get_comprehensive_stats()
-        print(f"Memory Stats (v2.9 - heat promotion + access decay)")
+        print(f"Memory Stats (v2.10 - bi-temporal + heat promotion + access decay)")
         print(f"  Total memories: {stats['memory_stats']['total']}")
         print(f"  By type: core={stats['memory_stats']['core']}, active={stats['memory_stats']['active']}, archive={stats['memory_stats']['archive']}")
         print(f"\nCo-occurrence Stats")
