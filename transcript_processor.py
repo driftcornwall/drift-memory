@@ -61,6 +61,24 @@ MILESTONE_KEYWORDS = [
     "enabled github pages", "commit", "pr merged", "feature complete"
 ]
 
+# Summary structure patterns - these indicate structured session summaries
+SUMMARY_PATTERNS = [
+    r"##\s*(session\s+)?summary",  # ## Summary or ## Session Summary
+    r"###\s*what\s+i\s+did",       # ### What I Did
+    r"###\s*ecosystem\s+activity", # ### Ecosystem Activity
+    r"\|\s*agent\s*\|",            # Table with Agent column
+    r"waiting\s+on\s*[:\n]",       # Waiting On section
+    r"next\s+(steps|priorities)",  # Next Steps or Next Priorities
+    r"###\s*research\s+findings",  # Research findings
+    r"###\s*key\s+discoveries",    # Key discoveries
+]
+
+# Summary section headers to extract
+SUMMARY_SECTIONS = [
+    "what i did", "ecosystem activity", "waiting on", "next steps",
+    "research findings", "key discoveries", "the feeling", "summary"
+]
+
 # Indicators that content is OBSERVED (from others) rather than SELF-generated
 OBSERVED_INDICATORS = [
     # Third-person references to Drift (me)
@@ -461,6 +479,195 @@ def extract_milestones(transcript_path: Path) -> list[dict]:
     return unique
 
 
+def extract_session_summaries(transcript_path: Path) -> list[dict]:
+    """
+    Extract structured session summaries from transcript.
+    These are the rich, amalgamated summaries given to Lex at session end.
+
+    Returns list of summary dicts with:
+    - full_content: The complete summary text
+    - sections: Dict of extracted sections (what_i_did, ecosystem, etc.)
+    - has_table: Whether it contains markdown tables
+    - timestamp: When it was generated
+    - word_count: Approximate size
+    """
+    summaries = []
+
+    if not transcript_path.exists():
+        return summaries
+
+    with open(transcript_path, encoding='utf-8') as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+
+                if data.get('type') != 'assistant':
+                    continue
+
+                msg = data.get('message', {})
+                if not isinstance(msg, dict):
+                    continue
+
+                content = msg.get('content', [])
+                timestamp = data.get('timestamp', datetime.now().isoformat())
+
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+
+                    if block.get('type') != 'text':
+                        continue
+
+                    text = block.get('text', '')
+                    text_lower = text.lower()
+
+                    # Check if this looks like a structured summary
+                    is_summary = False
+                    for pattern in SUMMARY_PATTERNS:
+                        if re.search(pattern, text_lower):
+                            is_summary = True
+                            break
+
+                    if not is_summary:
+                        continue
+
+                    # Must be substantive (>200 chars with multiple sections)
+                    if len(text) < 200:
+                        continue
+
+                    # Count section indicators
+                    section_count = sum(1 for s in SUMMARY_SECTIONS if s in text_lower)
+                    if section_count < 2:
+                        continue  # Need at least 2 sections to be a real summary
+
+                    # Extract individual sections
+                    sections = {}
+                    for section_name in SUMMARY_SECTIONS:
+                        # Look for the section header
+                        pattern = rf'(?:^|\n)(?:#+\s*)?{re.escape(section_name)}[:\s]*\n(.*?)(?=\n(?:#+\s*)?(?:{"|".join(SUMMARY_SECTIONS)})|$)'
+                        match = re.search(pattern, text_lower, re.IGNORECASE | re.DOTALL)
+                        if match:
+                            # Get the actual (not lowercased) content
+                            start = match.start(1)
+                            end = match.end(1)
+                            sections[section_name.replace(' ', '_')] = text[start:end].strip()[:500]
+
+                    # Check for tables
+                    has_table = bool(re.search(r'\|.*\|.*\|', text))
+
+                    summaries.append({
+                        'full_content': text,
+                        'sections': sections,
+                        'has_table': has_table,
+                        'timestamp': timestamp,
+                        'word_count': len(text.split()),
+                        'section_count': section_count
+                    })
+
+            except json.JSONDecodeError:
+                continue
+            except Exception:
+                continue
+
+    # Sort by comprehensiveness (more sections = better)
+    summaries.sort(key=lambda x: x['section_count'], reverse=True)
+
+    return summaries
+
+
+def amalgamate_summaries(summaries: list[dict]) -> dict:
+    """
+    Combine multiple session summaries into one comprehensive summary.
+    Used when multiple summaries exist in the same context window.
+
+    Returns a merged summary with all unique content preserved.
+    """
+    if not summaries:
+        return {}
+
+    if len(summaries) == 1:
+        return summaries[0]
+
+    # Merge sections from all summaries
+    merged_sections = {}
+    for summary in summaries:
+        for key, value in summary.get('sections', {}).items():
+            if key not in merged_sections:
+                merged_sections[key] = []
+            merged_sections[key].append(value)
+
+    # Deduplicate and join sections
+    for key in merged_sections:
+        unique_items = []
+        seen = set()
+        for item in merged_sections[key]:
+            # Simple dedup by first 50 chars
+            sig = item[:50].lower()
+            if sig not in seen:
+                seen.add(sig)
+                unique_items.append(item)
+        merged_sections[key] = '\n---\n'.join(unique_items)
+
+    return {
+        'sections': merged_sections,
+        'summary_count': len(summaries),
+        'total_words': sum(s['word_count'] for s in summaries),
+        'timestamps': [s['timestamp'] for s in summaries],
+        'has_table': any(s['has_table'] for s in summaries)
+    }
+
+
+def store_session_summary(summary: dict, memory_dir: Path) -> Optional[str]:
+    """
+    Store a session summary as a special memory type.
+    Links to episodic memory for the same day.
+
+    Returns the memory ID if stored successfully.
+    """
+    import subprocess
+
+    if not summary or not summary.get('sections'):
+        return None
+
+    memory_manager = memory_dir / "memory_manager.py"
+    if not memory_manager.exists():
+        return None
+
+    # Create summary content
+    today = datetime.now().strftime("%Y-%m-%d")
+    lines = [f"# Session Summary - {today}\n"]
+
+    sections = summary.get('sections', {})
+    for key, value in sections.items():
+        header = key.replace('_', ' ').title()
+        lines.append(f"\n## {header}\n")
+        lines.append(value)
+
+    content = '\n'.join(lines)
+
+    # Create a unique ID based on content hash
+    content_hash = hashlib.md5(content[:500].encode()).hexdigest()[:8]
+    mem_id = f"summary-{today}-{content_hash}"
+
+    # Tags
+    tags = ['session-summary', 'amalgamated' if summary.get('summary_count', 1) > 1 else 'single']
+
+    try:
+        result = subprocess.run(
+            ["python", str(memory_manager), "store", mem_id, content[:2000], "--tags", ','.join(tags)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(memory_dir)
+        )
+        if result.returncode == 0:
+            return mem_id
+    except Exception:
+        pass
+
+    return None
+
+
 def format_milestones_for_episodic(milestones: list[dict]) -> str:
     """
     Format extracted milestones into markdown for episodic memory.
@@ -513,6 +720,8 @@ if __name__ == "__main__":
     parser.add_argument("--max", type=int, default=5, help="Max memories to store (default: 5)")
     parser.add_argument("--milestones", action="store_true", help="Extract milestones for episodic memory")
     parser.add_argument("--milestones-md", action="store_true", help="Output milestones as markdown")
+    parser.add_argument("--summaries", action="store_true", help="Extract session summaries")
+    parser.add_argument("--store-summary", action="store_true", help="Store amalgamated summary to memory")
     args = parser.parse_args()
 
     if args.test:
@@ -520,8 +729,27 @@ if __name__ == "__main__":
     elif args.path:
         transcript = Path(args.path)
         if transcript.exists():
+            # Session summary extraction mode
+            if args.summaries or args.store_summary:
+                summaries = extract_session_summaries(transcript)
+                if args.store_summary and summaries:
+                    # Amalgamate all summaries and store
+                    amalgamated = amalgamate_summaries(summaries)
+                    mem_id = store_session_summary(amalgamated, MEMORY_DIR)
+                    print(json.dumps({
+                        'summaries_found': len(summaries),
+                        'stored_as': mem_id,
+                        'sections': list(amalgamated.get('sections', {}).keys()),
+                        'total_words': amalgamated.get('total_words', 0)
+                    }, indent=2))
+                else:
+                    print(json.dumps([{
+                        'sections': list(s.get('sections', {}).keys()),
+                        'word_count': s['word_count'],
+                        'has_table': s['has_table']
+                    } for s in summaries], indent=2))
             # Milestone extraction mode
-            if args.milestones or args.milestones_md:
+            elif args.milestones or args.milestones_md:
                 milestones = extract_milestones(transcript)
                 if args.milestones_md:
                     print(format_milestones_for_episodic(milestones))
@@ -541,4 +769,11 @@ if __name__ == "__main__":
         else:
             print(f"Transcript not found: {transcript}")
     else:
-        print("Usage: transcript_processor.py <path> [--no-store] [--max N] [--milestones] [--milestones-md] | --test")
+        print("Usage: transcript_processor.py <path> [options] | --test")
+        print("Options:")
+        print("  --no-store       Don't store memories, just analyze")
+        print("  --max N          Max memories to store (default: 5)")
+        print("  --milestones     Extract milestones as JSON")
+        print("  --milestones-md  Extract milestones as markdown")
+        print("  --summaries      Extract session summaries as JSON")
+        print("  --store-summary  Extract, amalgamate, and store session summaries")
