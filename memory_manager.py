@@ -16,6 +16,7 @@ import yaml
 import uuid
 import hashlib
 import math
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -768,6 +769,75 @@ def log_decay_event(decayed: int, pruned: int):
     decay_file.write_text(json.dumps(history, indent=2), encoding='utf-8')
 
 
+def detect_event_time(content: str) -> Optional[str]:
+    """
+    Auto-detect event_time from content by parsing date references.
+    Returns ISO date string (YYYY-MM-DD) or None if no date found.
+
+    Detects:
+    - Explicit dates: "2026-01-31", "January 31, 2026", "Jan 31"
+    - Relative dates: "yesterday", "last week", "2 days ago"
+    - Session references: "this session", "today" (returns today)
+
+    v2.11: Intelligent bi-temporal - memories auto-tagged with event time.
+    """
+    today = datetime.now(timezone.utc).date()
+    content_lower = content.lower()
+
+    # Explicit ISO date (YYYY-MM-DD)
+    iso_match = re.search(r'(\d{4}-\d{2}-\d{2})', content)
+    if iso_match:
+        return iso_match.group(1)
+
+    # Month DD, YYYY or Month DD YYYY
+    month_names = {
+        'january': 1, 'february': 2, 'march': 3, 'april': 4,
+        'may': 5, 'june': 6, 'july': 7, 'august': 8,
+        'september': 9, 'october': 10, 'november': 11, 'december': 12,
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'jun': 6,
+        'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+    }
+    month_pattern = r'(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{4})?'
+    month_match = re.search(month_pattern, content_lower)
+    if month_match:
+        month = month_names[month_match.group(1)]
+        day = int(month_match.group(2))
+        year = int(month_match.group(3)) if month_match.group(3) else today.year
+        try:
+            return f"{year:04d}-{month:02d}-{day:02d}"
+        except ValueError:
+            pass
+
+    # Relative dates
+    if 'yesterday' in content_lower:
+        return (today - timedelta(days=1)).isoformat()
+    if 'day before yesterday' in content_lower:
+        return (today - timedelta(days=2)).isoformat()
+    if 'last week' in content_lower:
+        return (today - timedelta(weeks=1)).isoformat()
+    if 'last month' in content_lower:
+        return (today - timedelta(days=30)).isoformat()
+
+    # N days/weeks ago
+    ago_match = re.search(r'(\d+)\s+(day|week|month)s?\s+ago', content_lower)
+    if ago_match:
+        num = int(ago_match.group(1))
+        unit = ago_match.group(2)
+        if unit == 'day':
+            return (today - timedelta(days=num)).isoformat()
+        elif unit == 'week':
+            return (today - timedelta(weeks=num)).isoformat()
+        elif unit == 'month':
+            return (today - timedelta(days=num * 30)).isoformat()
+
+    # Today/this session - return today
+    if 'today' in content_lower or 'this session' in content_lower:
+        return today.isoformat()
+
+    # No date detected - return None (will use created time)
+    return None
+
+
 # CLI interface
 def store_memory(content: str, tags: list[str] = None, emotion: float = 0.5, title: str = None, caused_by: list[str] = None, event_time: str = None) -> str:
     """
@@ -813,13 +883,18 @@ def store_memory(content: str, tags: list[str] = None, emotion: float = 0.5, tit
     # Merge explicit and auto-detected causal links (explicit takes precedence)
     all_causal = list(set(caused_by + auto_causal))
 
-    # Build frontmatter with causal edges and bi-temporal tracking (v2.10)
+    # Build frontmatter with causal edges and bi-temporal tracking (v2.10/v2.11)
     tags = tags or []
     now = datetime.now(timezone.utc)
     created = now.strftime('%Y-%m-%d')
     # event_time: when the event happened (may be in past)
     # created: when we learned about it (ingestion time, always now)
-    event = event_time if event_time else created
+    # v2.11: Auto-detect event_time from content if not provided
+    if event_time:
+        event = event_time
+    else:
+        detected = detect_event_time(content)
+        event = detected if detected else created
     frontmatter = f"""---
 id: {memory_id}
 type: active
@@ -938,7 +1013,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Memory Manager v2.10 - Living Memory with Bi-Temporal Tracking")
+        print("Memory Manager v2.11 - Living Memory with Auto-Detected Event Time")
         print("\nCommands:")
         print("  store <text>    - Store a new memory")
         print("                    --tags=a,b --emotion=0.8 --caused-by=id1,id2 --event-time=YYYY-MM-DD")
