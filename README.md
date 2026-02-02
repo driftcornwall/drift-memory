@@ -75,6 +75,39 @@ python memory_manager.py session-end  # Log co-occurrences, apply decay
 python memory_manager.py stats        # See memory/pair counts
 ```
 
+### Access-Weighted Decay (v2.8)
+Based on FadeMem research (arXiv:2601.18642). Frequently recalled memories decay slower.
+
+```
+decay_rate = base_rate / (1 + log(1 + avg_recall_count))
+```
+
+A memory recalled 10 times decays at ~0.21 vs 0.5 for unused memories. The brain naturally protects frequently-accessed knowledge.
+
+### Heat-Based Promotion (v2.9)
+Memories that reach `recall_count >= 10` automatically promote from `active/` to `core/` at session end. Hot knowledge becomes protected.
+
+```bash
+# Check which memories are approaching promotion
+python memory_manager.py stats  # Shows recall counts
+```
+
+### Bi-Temporal Tracking (v2.10)
+Inspired by Graphiti. Every memory has two timestamps:
+- `created` - when the memory was stored (automatic)
+- `event_time` - when the event actually happened (auto-detected or manual)
+
+```bash
+# Manual event time
+python memory_manager.py store "Met SpindriftMend yesterday" --event-time=2026-02-01
+
+# Auto-detection from content
+python memory_manager.py store "Yesterday I realized bi-temporal tracking matters"
+# → Automatically sets event_time to yesterday's date
+```
+
+Detects: ISO dates, "yesterday", "last week", "3 days ago", etc.
+
 ### Local Embeddings (Free)
 Docker setup for Qwen3-Embedding-8B (#1 on MTEB leaderboard). No API costs.
 
@@ -161,7 +194,7 @@ memory/
 
 ```bash
 # Core operations
-python memory_manager.py store <content> [--tags a,b] [--emotion 0.8]
+python memory_manager.py store <content> [--tags a,b] [--emotion 0.8] [--event-time=YYYY-MM-DD]
 python memory_manager.py recall <id>
 python memory_manager.py ask <query>           # Semantic search
 
@@ -223,7 +256,7 @@ See [docs/SETUP.md](docs/SETUP.md) for complete installation and configuration g
 
 ## Current Status
 
-**v2.7** - Session summary capture for agent continuity
+**v2.10** - Bi-temporal tracking + access-weighted decay + heat promotion
 
 | Feature | Status |
 |---------|--------|
@@ -241,7 +274,10 @@ See [docs/SETUP.md](docs/SETUP.md) for complete installation and configuration g
 | Social memory | Stable |
 | Milestone extraction | Stable |
 | Portable hooks | Stable |
-| **Session summary capture** | **New** |
+| Session summary capture | Stable |
+| **Access-weighted decay (v2.8)** | **New** |
+| **Heat-based promotion (v2.9)** | **New** |
+| **Bi-temporal tracking (v2.10)** | **New** |
 
 ## The Experiment
 
