@@ -34,6 +34,8 @@ CO_OCCURRENCE_BOOST = 0.1  # How much to boost retrieval for co-occurring memori
 SESSION_TIMEOUT_HOURS = 4  # Sessions older than this are considered stale
 PAIR_DECAY_RATE = 0.5  # Base decay rate for co-occurrence pairs
 ACCESS_WEIGHTED_DECAY = True  # If True, frequently recalled memories decay slower (v2.8)
+HEAT_PROMOTION_THRESHOLD = 10  # Recall count to auto-promote from active to core (v2.9)
+HEAT_PROMOTION_ENABLED = True  # If True, hot memories get promoted at session-end
 
 # Session state - now file-backed for persistence across Python invocations
 _session_retrieved: set[str] = set()
@@ -391,6 +393,57 @@ def decay_pair_cooccurrences() -> tuple[int, int]:
 
     print(f"Pair decay: {decayed} decayed, {pruned} pruned")
     return decayed, pruned
+
+
+def promote_hot_memories() -> list[str]:
+    """
+    Promote frequently-accessed memories from active to core.
+    Called at session-end to elevate important memories.
+
+    A memory is promoted if:
+    - It's in the active directory
+    - Its recall_count >= HEAT_PROMOTION_THRESHOLD
+    - HEAT_PROMOTION_ENABLED is True
+
+    Promoted memories get primed every session, creating a natural
+    "important memories survive" behavior.
+
+    Returns: List of promoted memory IDs
+
+    Credit: memU heat-based promotion pattern (v2.9)
+    """
+    if not HEAT_PROMOTION_ENABLED:
+        return []
+
+    if not ACTIVE_DIR.exists():
+        return []
+
+    promoted = []
+    CORE_DIR.mkdir(parents=True, exist_ok=True)
+
+    for filepath in ACTIVE_DIR.glob("*.md"):
+        metadata, content = parse_memory_file(filepath)
+        recall_count = metadata.get('recall_count', 0)
+
+        if recall_count >= HEAT_PROMOTION_THRESHOLD:
+            memory_id = metadata.get('id', 'unknown')
+
+            # Update metadata for promotion
+            metadata['type'] = 'core'
+            metadata['promoted_at'] = datetime.now(timezone.utc).isoformat()
+            metadata['promoted_reason'] = f'recall_count={recall_count} >= {HEAT_PROMOTION_THRESHOLD}'
+
+            # Move to core directory
+            new_path = CORE_DIR / filepath.name
+            write_memory_file(new_path, metadata, content)
+            filepath.unlink()
+
+            promoted.append(memory_id)
+            print(f"Promoted to core: {memory_id} (recall_count={recall_count})")
+
+    if promoted:
+        print(f"Heat promotion: {len(promoted)} memories promoted to core")
+    return promoted
 
 
 def find_co_occurring_memories(memory_id: str, limit: int = 5) -> list[tuple[str, int]]:
@@ -823,7 +876,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Memory Manager v2.8 - Living Memory with Access-Weighted Decay")
+        print("Memory Manager v2.9 - Living Memory with Heat-Based Promotion")
         print("\nCommands:")
         print("  store <text>    - Store a new memory")
         print("                    --tags=a,b --emotion=0.8 --caused-by=id1,id2")
@@ -836,7 +889,8 @@ if __name__ == "__main__":
         print("  cooccur <id>    - Find frequently co-occurring memories")
         print("  causal <id>     - Trace causal chain (what caused this / what this caused)")
         print("  stats           - Comprehensive stats for experiment tracking")
-        print("  session-end     - Log co-occurrences, apply pair decay, and end session")
+        print("  session-end     - Log co-occurrences, apply decay, promote hot memories, end session")
+        print("  promote         - Manually promote hot memories to core (recall_count >= threshold)")
         print("  decay-pairs     - Apply pair decay only (without logging new co-occurrences)")
         print("  session-status  - Show memories retrieved this session")
         print("  ask <query>     - Semantic search (natural language query)")
@@ -941,16 +995,21 @@ if __name__ == "__main__":
     elif cmd == "session-end":
         pairs = log_co_occurrences()
         decayed, pruned = decay_pair_cooccurrences()
+        promoted = promote_hot_memories()  # v2.9: heat-based promotion
         retrieved = get_session_retrieved()
-        print(f"Session ended. {len(retrieved)} memories, {pairs} pairs reinforced, {decayed} decayed, {pruned} pruned.")
+        print(f"Session ended. {len(retrieved)} memories, {pairs} pairs reinforced, {decayed} decayed, {pruned} pruned, {len(promoted)} promoted.")
         clear_session()
         print("Session cleared.")
     elif cmd == "decay-pairs":
         decayed, pruned = decay_pair_cooccurrences()
         print(f"Decay complete: {decayed} pairs decayed, {pruned} pairs pruned")
+    elif cmd == "promote":
+        promoted = promote_hot_memories()
+        if not promoted:
+            print(f"No memories eligible for promotion (threshold: recall_count >= {HEAT_PROMOTION_THRESHOLD})")
     elif cmd == "stats":
         stats = get_comprehensive_stats()
-        print(f"Memory Stats (v2.8 - access-weighted decay)")
+        print(f"Memory Stats (v2.9 - heat promotion + access decay)")
         print(f"  Total memories: {stats['memory_stats']['total']}")
         print(f"  By type: core={stats['memory_stats']['core']}, active={stats['memory_stats']['active']}, archive={stats['memory_stats']['archive']}")
         print(f"\nCo-occurrence Stats")
