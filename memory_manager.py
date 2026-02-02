@@ -48,6 +48,15 @@ IMPORTED_PRUNE_SESSIONS = 14  # Archive never-recalled imports after 14 sessions
 HEAT_PROMOTION_THRESHOLD = 10  # Recall count to auto-promote from active to core (v2.9)
 HEAT_PROMOTION_ENABLED = True  # If True, hot memories get promoted at session-end
 
+# v2.13: Self-evolution - adaptive decay based on retrieval success
+# Credit: MemRL/MemEvolve research patterns
+SELF_EVOLUTION_ENABLED = True  # If True, decay rates adapt to retrieval outcomes
+SUCCESS_DECAY_BONUS = 0.7  # Multiply decay by this for high-success memories (slower decay)
+FAILURE_DECAY_PENALTY = 1.5  # Multiply decay by this for low-success memories (faster decay)
+SUCCESS_THRESHOLD = 0.6  # Above this success rate = bonus
+FAILURE_THRESHOLD = 0.3  # Below this success rate = penalty
+MIN_RETRIEVALS_FOR_EVOLUTION = 3  # Need at least this many retrievals to judge
+
 # Session state - now file-backed for persistence across Python invocations
 _session_retrieved: set[str] = set()
 _session_loaded: bool = False
@@ -298,30 +307,53 @@ def _get_recall_count(memory_id: str) -> int:
     return 0
 
 
+def _get_memory_metadata(memory_id: str) -> Optional[dict]:
+    """Get metadata for a memory by ID."""
+    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob(f"*-{memory_id}.md"):
+            metadata, _ = parse_memory_file(filepath)
+            return metadata
+    return None
+
+
 def _calculate_effective_decay(memory_id: str, other_id: str) -> float:
     """
-    Calculate effective decay rate based on recall counts of both memories.
-    Frequently recalled memories decay their pairs more slowly.
+    Calculate effective decay rate based on:
+    1. Recall counts (ACCESS_WEIGHTED_DECAY)
+    2. Retrieval success rates (SELF_EVOLUTION_ENABLED) - v2.13
 
-    Formula: effective_decay = PAIR_DECAY_RATE / (1 + log(1 + avg_recall_count))
+    Formula: effective_decay = PAIR_DECAY_RATE / (1 + log(1 + avg_recall)) * evolution_multiplier
 
-    Examples:
-    - avg_recall_count=0 → decay = 0.5 / 1 = 0.5 (normal)
-    - avg_recall_count=9 → decay = 0.5 / (1 + log(10)) ≈ 0.22 (slower)
-    - avg_recall_count=99 → decay = 0.5 / (1 + log(100)) ≈ 0.14 (much slower)
+    The evolution multiplier adjusts based on how "useful" the memories are:
+    - High success rate → multiplier < 1 → slower decay
+    - Low success rate → multiplier > 1 → faster decay
 
-    Credit: FadeMem paper (arXiv:2601.18642) - adaptive decay based on access frequency
+    Credit: FadeMem paper (access frequency), MemRL/MemEvolve (self-evolution)
     """
-    if not ACCESS_WEIGHTED_DECAY:
-        return PAIR_DECAY_RATE
+    base_decay = PAIR_DECAY_RATE
 
-    recall_1 = _get_recall_count(memory_id)
-    recall_2 = _get_recall_count(other_id)
-    avg_recall = (recall_1 + recall_2) / 2
+    # Access-weighted decay
+    if ACCESS_WEIGHTED_DECAY:
+        recall_1 = _get_recall_count(memory_id)
+        recall_2 = _get_recall_count(other_id)
+        avg_recall = (recall_1 + recall_2) / 2
+        base_decay = PAIR_DECAY_RATE / (1 + math.log(1 + avg_recall))
 
-    # Using natural log for smooth scaling
-    effective_decay = PAIR_DECAY_RATE / (1 + math.log(1 + avg_recall))
-    return effective_decay
+    # Self-evolution adjustment (v2.13)
+    if SELF_EVOLUTION_ENABLED:
+        meta1 = _get_memory_metadata(memory_id)
+        meta2 = _get_memory_metadata(other_id)
+
+        # Average the evolution multipliers
+        mult1 = calculate_evolution_decay_multiplier(meta1) if meta1 else 1.0
+        mult2 = calculate_evolution_decay_multiplier(meta2) if meta2 else 1.0
+        evolution_mult = (mult1 + mult2) / 2
+
+        base_decay *= evolution_mult
+
+    return base_decay
 
 
 def decay_pair_cooccurrences() -> tuple[int, int]:
@@ -945,6 +977,177 @@ def detect_event_time(content: str) -> Optional[str]:
 
 
 # ============================================================================
+# v2.13: SELF-EVOLUTION - Adaptive decay based on retrieval success
+# Credit: MemRL/MemEvolve research patterns
+# ============================================================================
+
+def log_retrieval_outcome(memory_id: str, outcome: str) -> bool:
+    """
+    Log the outcome of a memory retrieval for self-evolution.
+
+    Outcomes:
+    - "productive": Memory led to another recall or useful work
+    - "generative": Memory led to creation of new memory (highest value)
+    - "dead_end": Memory was recalled but nothing followed
+
+    The system tracks these to calculate success rates and adjust decay.
+
+    Args:
+        memory_id: The memory that was retrieved
+        outcome: One of "productive", "generative", "dead_end"
+
+    Returns:
+        True if logged successfully
+    """
+    valid_outcomes = {"productive", "generative", "dead_end"}
+    if outcome not in valid_outcomes:
+        print(f"Invalid outcome: {outcome}. Must be one of {valid_outcomes}")
+        return False
+
+    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob(f"*-{memory_id}.md"):
+            metadata, content = parse_memory_file(filepath)
+
+            # Initialize or update retrieval_outcomes
+            outcomes = metadata.get('retrieval_outcomes', {
+                'productive': 0,
+                'generative': 0,
+                'dead_end': 0,
+                'total': 0
+            })
+
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+            outcomes['total'] = outcomes.get('total', 0) + 1
+            metadata['retrieval_outcomes'] = outcomes
+
+            # Calculate and store success rate
+            total = outcomes['total']
+            if total > 0:
+                # Generative counts as 2x productive for success calculation
+                successes = outcomes.get('productive', 0) + (outcomes.get('generative', 0) * 2)
+                max_success = total * 2  # If all were generative
+                metadata['retrieval_success_rate'] = round(successes / (total + outcomes.get('generative', 0)), 3)
+
+            write_memory_file(filepath, metadata, content)
+            return True
+
+    return False
+
+
+def get_retrieval_success_rate(memory_id: str) -> Optional[float]:
+    """Get the retrieval success rate for a memory."""
+    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob(f"*-{memory_id}.md"):
+            metadata, _ = parse_memory_file(filepath)
+            return metadata.get('retrieval_success_rate')
+    return None
+
+
+def calculate_evolution_decay_multiplier(metadata: dict) -> float:
+    """
+    Calculate decay multiplier based on retrieval success (self-evolution).
+
+    High success rate → slower decay (memory is valuable)
+    Low success rate → faster decay (memory is noise)
+    Insufficient data → no adjustment (multiplier = 1.0)
+
+    Returns:
+        Multiplier to apply to decay rate (< 1.0 = slower decay, > 1.0 = faster)
+    """
+    if not SELF_EVOLUTION_ENABLED:
+        return 1.0
+
+    outcomes = metadata.get('retrieval_outcomes', {})
+    total = outcomes.get('total', 0)
+
+    # Need enough data to judge
+    if total < MIN_RETRIEVALS_FOR_EVOLUTION:
+        return 1.0
+
+    success_rate = metadata.get('retrieval_success_rate', 0.5)
+
+    if success_rate >= SUCCESS_THRESHOLD:
+        return SUCCESS_DECAY_BONUS  # Slower decay for valuable memories
+    elif success_rate <= FAILURE_THRESHOLD:
+        return FAILURE_DECAY_PENALTY  # Faster decay for noise
+    else:
+        return 1.0  # Normal decay
+
+
+def auto_log_retrieval_outcomes() -> dict:
+    """
+    Automatically infer retrieval outcomes from session patterns.
+    Call at session-end to update success rates.
+
+    Logic:
+    - If memory A was recalled, then memory B was recalled → A is "productive"
+    - If memory A was recalled, then new memory C was stored with A in caused_by → A is "generative"
+    - If memory A was recalled but was the last thing in session → A is "dead_end"
+
+    Returns:
+        Dict with counts of each outcome type logged
+    """
+    _load_session_state()
+    retrieved = list(_session_retrieved)
+
+    if not retrieved:
+        return {"productive": 0, "generative": 0, "dead_end": 0}
+
+    results = {"productive": 0, "generative": 0, "dead_end": 0}
+
+    # Check which memories led to others (order matters)
+    for i, mem_id in enumerate(retrieved[:-1]):
+        # If there's a next memory, this one was productive
+        log_retrieval_outcome(mem_id, "productive")
+        results["productive"] += 1
+
+    # Check for generative outcomes (memories that caused new memories)
+    # Look at recently created memories and check their caused_by
+    today = datetime.now(timezone.utc).date().isoformat()
+    for directory in [ACTIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            metadata, _ = parse_memory_file(filepath)
+            created = metadata.get('created', '')
+            # Handle both string and date objects
+            if hasattr(created, 'isoformat'):
+                created = created.isoformat()
+            created = str(created)[:10]
+            if created != today:
+                continue
+
+            # Check if any retrieved memory is in caused_by
+            caused_by = metadata.get('caused_by', [])
+            for mem_id in retrieved:
+                if mem_id in caused_by:
+                    log_retrieval_outcome(mem_id, "generative")
+                    results["generative"] += 1
+
+    # Last memory in session is a dead end (unless it was generative)
+    if retrieved:
+        last_mem = retrieved[-1]
+        # Check if it was already logged as generative
+        for directory in [CORE_DIR, ACTIVE_DIR]:
+            if not directory.exists():
+                continue
+            for filepath in directory.glob(f"*-{last_mem}.md"):
+                metadata, _ = parse_memory_file(filepath)
+                outcomes = metadata.get('retrieval_outcomes', {})
+                # Only mark as dead_end if not already productive/generative this session
+                if outcomes.get('generative', 0) == 0:
+                    log_retrieval_outcome(last_mem, "dead_end")
+                    results["dead_end"] += 1
+                break
+
+    return results
+
+
+# ============================================================================
 # v2.12: CONSOLIDATION - Merge semantically similar memories
 # Credit: Mem0 consolidation, MemEvolve self-organization
 # ============================================================================
@@ -1292,7 +1495,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Memory Manager v2.12 - Living Memory with Consolidation")
+        print("Memory Manager v2.13 - Living Memory with Self-Evolution")
         print("\nCommands:")
         print("  store <text>    - Store a new memory")
         print("                    --tags=a,b --emotion=0.8 --caused-by=id1,id2 --event-time=YYYY-MM-DD")
@@ -1319,6 +1522,8 @@ if __name__ == "__main__":
         print("  consolidate-candidates - Find similar memory pairs for merging (v2.12)")
         print("                    --threshold=0.85 --limit=10")
         print("  consolidate <id1> <id2> - Merge two memories (id2 absorbed into id1) (v2.12)")
+        print("  evolution <id>    - Show self-evolution stats for a memory (v2.13)")
+        print("  evolution-stats   - Overview of valuable/noisy memories (v2.13)")
         sys.exit(0)
 
     cmd = sys.argv[1]
@@ -1444,10 +1649,14 @@ if __name__ == "__main__":
             print("  LEADS TO: (none - no downstream effects yet)")
     elif cmd == "session-end":
         pairs = log_co_occurrences()
+        # v2.13: Auto-log retrieval outcomes for self-evolution
+        evolution_results = auto_log_retrieval_outcomes()
         decayed, pruned = decay_pair_cooccurrences()
         promoted = promote_hot_memories()  # v2.9: heat-based promotion
         retrieved = get_session_retrieved()
         print(f"Session ended. {len(retrieved)} memories, {pairs} pairs reinforced, {decayed} decayed, {pruned} pruned, {len(promoted)} promoted.")
+        if any(evolution_results.values()):
+            print(f"Evolution: {evolution_results['productive']} productive, {evolution_results['generative']} generative, {evolution_results['dead_end']} dead-ends")
         clear_session()
         print("Session cleared.")
     elif cmd == "decay-pairs":
@@ -1571,6 +1780,82 @@ if __name__ == "__main__":
                 print(f"  Weight: {mem['emotional_weight']:.2f}")
                 print(f"  Status: {status}")
                 print()
+
+    # v2.13: Self-evolution commands
+    elif cmd == "evolution" and len(sys.argv) > 2:
+        mem_id = sys.argv[2]
+        found = False
+        for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+            if not directory.exists():
+                continue
+            for filepath in directory.glob(f"*-{mem_id}.md"):
+                metadata, _ = parse_memory_file(filepath)
+                found = True
+
+                outcomes = metadata.get('retrieval_outcomes', {})
+                success_rate = metadata.get('retrieval_success_rate', None)
+                evolution_mult = calculate_evolution_decay_multiplier(metadata)
+
+                print(f"\n=== Evolution Stats: {mem_id} ===")
+                print(f"Retrieval outcomes:")
+                print(f"  Productive: {outcomes.get('productive', 0)}")
+                print(f"  Generative: {outcomes.get('generative', 0)}")
+                print(f"  Dead-ends: {outcomes.get('dead_end', 0)}")
+                print(f"  Total: {outcomes.get('total', 0)}")
+                print()
+                if success_rate is not None:
+                    print(f"Success rate: {success_rate:.1%}")
+                else:
+                    print(f"Success rate: Not enough data (need {MIN_RETRIEVALS_FOR_EVOLUTION} retrievals)")
+                print(f"Decay multiplier: {evolution_mult:.2f}x", end="")
+                if evolution_mult < 1.0:
+                    print(" (slower decay - valuable memory)")
+                elif evolution_mult > 1.0:
+                    print(" (faster decay - noisy memory)")
+                else:
+                    print(" (normal decay)")
+                break
+            if found:
+                break
+        if not found:
+            print(f"Memory not found: {mem_id}")
+
+    elif cmd == "evolution-stats":
+        # Show overview of memories with evolution data
+        print("\n=== Self-Evolution Overview ===\n")
+        valuable = []
+        noisy = []
+        neutral = []
+
+        for directory in [CORE_DIR, ACTIVE_DIR]:
+            if not directory.exists():
+                continue
+            for filepath in directory.glob("*.md"):
+                metadata, _ = parse_memory_file(filepath)
+                mem_id = metadata.get('id', filepath.stem)
+                outcomes = metadata.get('retrieval_outcomes', {})
+                total = outcomes.get('total', 0)
+
+                if total >= MIN_RETRIEVALS_FOR_EVOLUTION:
+                    mult = calculate_evolution_decay_multiplier(metadata)
+                    rate = metadata.get('retrieval_success_rate', 0)
+                    if mult < 1.0:
+                        valuable.append((mem_id, rate, total))
+                    elif mult > 1.0:
+                        noisy.append((mem_id, rate, total))
+                    else:
+                        neutral.append((mem_id, rate, total))
+
+        print(f"Valuable memories (slower decay): {len(valuable)}")
+        for mem_id, rate, total in valuable[:5]:
+            print(f"  [{mem_id}] {rate:.1%} success ({total} retrievals)")
+
+        print(f"\nNoisy memories (faster decay): {len(noisy)}")
+        for mem_id, rate, total in noisy[:5]:
+            print(f"  [{mem_id}] {rate:.1%} success ({total} retrievals)")
+
+        print(f"\nNeutral: {len(neutral)}")
+        print(f"\nTotal memories with evolution data: {len(valuable) + len(noisy) + len(neutral)}")
 
     # v2.12: Consolidation commands
     elif cmd == "consolidate-candidates":
