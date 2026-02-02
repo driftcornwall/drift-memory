@@ -621,8 +621,20 @@ def log_decay_event(decayed: int, pruned: int):
 
 
 # CLI interface
-def store_memory(content: str, tags: list[str] = None, emotion: float = 0.5, title: str = None) -> str:
-    """Store a new memory to the active directory."""
+def store_memory(content: str, tags: list[str] = None, emotion: float = 0.5, title: str = None, caused_by: list[str] = None) -> str:
+    """
+    Store a new memory to the active directory.
+
+    Args:
+        content: The memory content
+        tags: Keywords for retrieval
+        emotion: Emotional weight (0-1)
+        title: Optional title for filename
+        caused_by: List of memory IDs that caused/led to this memory (CAUSAL EDGES)
+
+    Returns:
+        Tuple of (memory_id, filename)
+    """
     import random
     import string
 
@@ -640,7 +652,18 @@ def store_memory(content: str, tags: list[str] = None, emotion: float = 0.5, tit
     filename = f"{slug}-{memory_id}.md"
     filepath = ACTIVE_DIR / filename
 
-    # Build frontmatter
+    # Process causal links
+    caused_by = caused_by or []
+
+    # Auto-detect causal links: if memories were recalled this session before storing,
+    # they may have caused this memory (the "recall → store" pattern)
+    _load_session_state()
+    auto_causal = list(_session_retrieved) if _session_retrieved else []
+
+    # Merge explicit and auto-detected causal links (explicit takes precedence)
+    all_causal = list(set(caused_by + auto_causal))
+
+    # Build frontmatter with causal edges
     tags = tags or []
     frontmatter = f"""---
 id: {memory_id}
@@ -650,6 +673,8 @@ tags: [{', '.join(tags)}]
 emotional_weight: {emotion}
 recall_count: 0
 co_occurrences: {{}}
+caused_by: [{', '.join(all_causal)}]
+leads_to: []
 ---
 
 """
@@ -657,6 +682,10 @@ co_occurrences: {{}}
     # Write file
     full_content = frontmatter + content
     filepath.write_text(full_content, encoding='utf-8')
+
+    # Update the "leads_to" field in the causing memories (bidirectional link)
+    for cause_id in all_causal:
+        _add_leads_to_link(cause_id, memory_id)
 
     # Try to embed for semantic search (fails gracefully if no API key)
     try:
@@ -668,19 +697,103 @@ co_occurrences: {{}}
     return memory_id, filepath.name
 
 
+def _add_leads_to_link(source_id: str, target_id: str) -> bool:
+    """Add a leads_to link from source memory to target memory."""
+    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob(f"*-{source_id}.md"):
+            metadata, content = parse_memory_file(filepath)
+
+            leads_to = metadata.get('leads_to', [])
+            if target_id not in leads_to:
+                leads_to.append(target_id)
+                metadata['leads_to'] = leads_to
+                write_memory_file(filepath, metadata, content)
+                return True
+    return False
+
+
+def find_causal_chain(memory_id: str, direction: str = "both", max_depth: int = 5) -> dict:
+    """
+    Trace the causal chain from a memory.
+
+    Args:
+        memory_id: Starting memory
+        direction: "causes" (what this led to), "effects" (what caused this), or "both"
+        max_depth: Maximum chain depth to traverse
+
+    Returns:
+        Dict with 'causes' (upstream) and 'effects' (downstream) chains
+    """
+    result = {"causes": [], "effects": [], "root": memory_id}
+
+    def get_memory_meta(mid: str) -> Optional[dict]:
+        for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+            if not directory.exists():
+                continue
+            for filepath in directory.glob(f"*-{mid}.md"):
+                metadata, _ = parse_memory_file(filepath)
+                return metadata
+        return None
+
+    def trace_causes(mid: str, depth: int, visited: set) -> list:
+        if depth > max_depth or mid in visited:
+            return []
+        visited.add(mid)
+
+        meta = get_memory_meta(mid)
+        if not meta:
+            return []
+
+        caused_by = meta.get('caused_by', [])
+        chain = []
+        for cause_id in caused_by:
+            chain.append({"id": cause_id, "depth": depth})
+            chain.extend(trace_causes(cause_id, depth + 1, visited))
+        return chain
+
+    def trace_effects(mid: str, depth: int, visited: set) -> list:
+        if depth > max_depth or mid in visited:
+            return []
+        visited.add(mid)
+
+        meta = get_memory_meta(mid)
+        if not meta:
+            return []
+
+        leads_to = meta.get('leads_to', [])
+        chain = []
+        for effect_id in leads_to:
+            chain.append({"id": effect_id, "depth": depth})
+            chain.extend(trace_effects(effect_id, depth + 1, visited))
+        return chain
+
+    if direction in ["causes", "both"]:
+        result["causes"] = trace_causes(memory_id, 1, set())
+
+    if direction in ["effects", "both"]:
+        result["effects"] = trace_effects(memory_id, 1, set())
+
+    return result
+
+
 if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Memory Manager v2.4 - Living Memory System with Store Command")
+        print("Memory Manager v2.5 - Living Memory System with Causal Edges")
         print("\nCommands:")
-        print("  store <text>    - Store a new memory (use --tags=a,b --emotion=0.8)")
+        print("  store <text>    - Store a new memory")
+        print("                    --tags=a,b --emotion=0.8 --caused-by=id1,id2")
+        print("                    Auto-links to memories recalled this session (causal)")
         print("  maintenance     - Run session maintenance")
         print("  tags            - List all tags")
         print("  find <tag>      - Find memories by tag")
         print("  recall <id>     - Recall a memory by ID")
         print("  related <id>    - Find related memories (includes co-occurrence)")
         print("  cooccur <id>    - Find frequently co-occurring memories")
+        print("  causal <id>     - Trace causal chain (what caused this / what this caused)")
         print("  stats           - Comprehensive stats for experiment tracking")
         print("  session-end     - Log co-occurrences, apply pair decay, and end session")
         print("  decay-pairs     - Apply pair decay only (without logging new co-occurrences)")
@@ -696,19 +809,30 @@ if __name__ == "__main__":
         content_parts = []
         tags = []
         emotion = 0.5
+        caused_by = []
 
         for arg in sys.argv[2:]:
             if arg.startswith('--tags='):
                 tags = arg[7:].split(',')
             elif arg.startswith('--emotion='):
                 emotion = float(arg[10:])
+            elif arg.startswith('--caused-by='):
+                caused_by = [x.strip() for x in arg[12:].split(',') if x.strip()]
             else:
                 content_parts.append(arg)
 
         content = ' '.join(content_parts)
         if content:
-            memory_id, filename = store_memory(content, tags, emotion)
-            print(f"Stored memory [{memory_id}] -> {filename}")
+            memory_id, filename = store_memory(content, tags, emotion, caused_by=caused_by)
+            # Show causal links if any were created
+            _load_session_state()
+            auto_causal = list(_session_retrieved) if _session_retrieved else []
+            all_causal = list(set(caused_by + auto_causal))
+            if all_causal:
+                print(f"Stored memory [{memory_id}] -> {filename}")
+                print(f"  Causal links: {', '.join(all_causal)}")
+            else:
+                print(f"Stored memory [{memory_id}] -> {filename}")
         else:
             print("Error: No content provided")
     elif cmd == "maintenance":
@@ -751,6 +875,28 @@ if __name__ == "__main__":
         print(f"Memories frequently co-occurring with {memory_id}:")
         for other_id, count in co_occurring:
             print(f"  [{other_id}] - {count} co-occurrences")
+    elif cmd == "causal" and len(sys.argv) > 2:
+        memory_id = sys.argv[2]
+        chain = find_causal_chain(memory_id)
+        print(f"Causal chain for {memory_id}:\n")
+
+        if chain["causes"]:
+            print("  CAUSED BY (what led to this memory):")
+            for item in chain["causes"]:
+                indent = "    " * item["depth"]
+                print(f"{indent}<-- [{item['id']}]")
+        else:
+            print("  CAUSED BY: (none - this is a root memory)")
+
+        print()
+
+        if chain["effects"]:
+            print("  LEADS TO (what this memory caused):")
+            for item in chain["effects"]:
+                indent = "    " * item["depth"]
+                print(f"{indent}--> [{item['id']}]")
+        else:
+            print("  LEADS TO: (none - no downstream effects yet)")
     elif cmd == "session-end":
         pairs = log_co_occurrences()
         decayed, pruned = decay_pair_cooccurrences()
