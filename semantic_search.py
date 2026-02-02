@@ -338,6 +338,75 @@ def embed_single(memory_id: str, content: str) -> bool:
     return True
 
 
+# ============================================================================
+# v2.12: CONSOLIDATION - Find and merge semantically similar memories
+# Credit: Mem0 consolidation pattern, MemEvolve self-organization
+# ============================================================================
+
+def find_similar_pairs(threshold: float = 0.85, limit: int = 20) -> list[dict]:
+    """
+    Find pairs of memories that are semantically similar.
+    These are candidates for consolidation (merging).
+
+    Args:
+        threshold: Minimum cosine similarity to consider (0.85 = very similar)
+        limit: Maximum pairs to return
+
+    Returns:
+        List of dicts with {id1, id2, similarity, preview1, preview2}
+    """
+    data = load_embeddings()
+    memories = data.get("memories", {})
+
+    if len(memories) < 2:
+        return []
+
+    # Compare all pairs
+    pairs = []
+    memory_ids = list(memories.keys())
+
+    for i, id1 in enumerate(memory_ids):
+        emb1 = memories[id1].get("embedding")
+        if not emb1:
+            continue
+
+        for id2 in memory_ids[i+1:]:
+            emb2 = memories[id2].get("embedding")
+            if not emb2:
+                continue
+
+            sim = cosine_similarity(emb1, emb2)
+            if sim >= threshold:
+                pairs.append({
+                    "id1": id1,
+                    "id2": id2,
+                    "similarity": round(sim, 4),
+                    "preview1": memories[id1].get("preview", "")[:80],
+                    "preview2": memories[id2].get("preview", "")[:80]
+                })
+
+    # Sort by similarity descending
+    pairs.sort(key=lambda x: x["similarity"], reverse=True)
+    return pairs[:limit]
+
+
+def get_memory_embedding(memory_id: str) -> Optional[list[float]]:
+    """Get the embedding for a specific memory."""
+    data = load_embeddings()
+    mem = data.get("memories", {}).get(memory_id)
+    return mem.get("embedding") if mem else None
+
+
+def remove_from_index(memory_id: str) -> bool:
+    """Remove a memory from the embedding index (after consolidation)."""
+    data = load_embeddings()
+    if memory_id in data.get("memories", {}):
+        del data["memories"][memory_id]
+        save_embeddings(data)
+        return True
+    return False
+
+
 if __name__ == "__main__":
     import argparse
 
