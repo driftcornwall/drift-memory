@@ -57,6 +57,13 @@ SUCCESS_THRESHOLD = 0.6  # Above this success rate = bonus
 FAILURE_THRESHOLD = 0.3  # Below this success rate = penalty
 MIN_RETRIEVALS_FOR_EVOLUTION = 3  # Need at least this many retrievals to judge
 
+# v2.14: Activation Decay - Hebbian time-based activation
+# Credit: SpindriftMend's v3.1, Shodh-Memory research (github.com/varun29ankuS/shodh-memory)
+# Formula: A(t) = A₀ · e^(-λt) where t is time since last recall
+ACTIVATION_DECAY_ENABLED = True
+ACTIVATION_HALF_LIFE_HOURS = 24 * 7  # 7 days for activation to halve without recall
+ACTIVATION_MIN_FLOOR = 0.01  # Minimum activation (prevents complete forgetting)
+
 # Session state - now file-backed for persistence across Python invocations
 _session_retrieved: set[str] = set()
 _session_loaded: bool = False
@@ -977,6 +984,92 @@ def detect_event_time(content: str) -> Optional[str]:
 
 
 # ============================================================================
+# v2.14: ACTIVATION DECAY - Hebbian time-based activation
+# Credit: SpindriftMend's v3.1, Shodh-Memory research
+# ============================================================================
+
+def calculate_activation(metadata: dict) -> float:
+    """
+    Calculate memory activation score using exponential time decay.
+
+    Inspired by SpindriftMend's Hebbian learning implementation.
+    Formula: A(t) = A₀ · e^(-λt)
+
+    Components:
+    - Base activation from emotional weight and recall count
+    - Time decay based on hours since last recall
+    - Minimum activation floor to prevent complete forgetting
+
+    Returns:
+        Activation score (0.0 to 1.0+, can exceed 1.0 for highly reinforced memories)
+    """
+    if not ACTIVATION_DECAY_ENABLED:
+        return metadata.get('emotional_weight', 0.5)
+
+    # Base activation from emotional weight
+    emotional_weight = metadata.get('emotional_weight', 0.5)
+
+    # Recall count bonus (logarithmic to prevent runaway)
+    recall_count = metadata.get('recall_count', 1)
+    recall_bonus = math.log(recall_count + 1) / 5  # Max ~0.6 at 20 recalls
+
+    # Base activation (A₀)
+    base_activation = emotional_weight + recall_bonus
+
+    # Calculate time since last recall
+    last_recalled_str = metadata.get('last_recalled')
+    if last_recalled_str:
+        try:
+            # Handle both string and datetime objects
+            if hasattr(last_recalled_str, 'isoformat'):
+                last_recalled_str = last_recalled_str.isoformat()
+            last_recalled = datetime.fromisoformat(str(last_recalled_str).replace('Z', '+00:00'))
+            if last_recalled.tzinfo is None:
+                last_recalled = last_recalled.replace(tzinfo=timezone.utc)
+            hours_since_recall = (datetime.now(timezone.utc) - last_recalled).total_seconds() / 3600
+        except (ValueError, TypeError):
+            hours_since_recall = ACTIVATION_HALF_LIFE_HOURS
+    else:
+        hours_since_recall = ACTIVATION_HALF_LIFE_HOURS
+
+    # Calculate decay factor using exponential decay
+    # A(t) = A₀ · e^(-λt) where λ = ln(2) / half_life
+    lambda_rate = math.log(2) / ACTIVATION_HALF_LIFE_HOURS
+    decay_factor = math.exp(-lambda_rate * hours_since_recall)
+
+    # Apply decay to base activation
+    activation = base_activation * decay_factor
+
+    # Minimum floor (emotional memories resist complete decay)
+    min_floor = 0.1 if emotional_weight >= EMOTIONAL_WEIGHT_THRESHOLD else ACTIVATION_MIN_FLOOR
+
+    return max(min_floor, round(activation, 4))
+
+
+def get_most_activated_memories(limit: int = 10) -> list[tuple[str, float, dict]]:
+    """
+    Get the most activated memories (highest time-weighted activation).
+
+    Returns:
+        List of (memory_id, activation_score, metadata) tuples
+    """
+    results = []
+
+    for directory in [CORE_DIR, ACTIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            metadata, content = parse_memory_file(filepath)
+            memory_id = metadata.get('id', filepath.stem)
+            activation = calculate_activation(metadata)
+            results.append((memory_id, activation, metadata, content[:100]))
+
+    # Sort by activation descending
+    results.sort(key=lambda x: x[1], reverse=True)
+    return [(r[0], r[1], r[2], r[3]) for r in results[:limit]]
+
+
+# ============================================================================
 # v2.13: SELF-EVOLUTION - Adaptive decay based on retrieval success
 # Credit: MemRL/MemEvolve research patterns
 # ============================================================================
@@ -1495,7 +1588,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Memory Manager v2.13 - Living Memory with Self-Evolution")
+        print("Memory Manager v2.14 - Living Memory with Activation Decay")
         print("\nCommands:")
         print("  store <text>    - Store a new memory")
         print("                    --tags=a,b --emotion=0.8 --caused-by=id1,id2 --event-time=YYYY-MM-DD")
@@ -1524,6 +1617,8 @@ if __name__ == "__main__":
         print("  consolidate <id1> <id2> - Merge two memories (id2 absorbed into id1) (v2.12)")
         print("  evolution <id>    - Show self-evolution stats for a memory (v2.13)")
         print("  evolution-stats   - Overview of valuable/noisy memories (v2.13)")
+        print("  activation <id>   - Show activation score for a memory (v2.14)")
+        print("  activated         - List most activated memories (v2.14)")
         sys.exit(0)
 
     cmd = sys.argv[1]
@@ -1779,6 +1874,54 @@ if __name__ == "__main__":
                 print(f"  Recalls: {mem['recall_count']}, Sessions: {mem['sessions_since_recall']}")
                 print(f"  Weight: {mem['emotional_weight']:.2f}")
                 print(f"  Status: {status}")
+                print()
+
+    # v2.14: Activation decay commands (credit: SpindriftMend)
+    elif cmd == "activation" and len(sys.argv) > 2:
+        mem_id = sys.argv[2]
+        found = False
+        for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+            if not directory.exists():
+                continue
+            for filepath in directory.glob(f"*-{mem_id}.md"):
+                metadata, content = parse_memory_file(filepath)
+                found = True
+
+                activation = calculate_activation(metadata)
+                recall_count = metadata.get('recall_count', 0)
+                emotional_weight = metadata.get('emotional_weight', 0)
+                last_recalled = metadata.get('last_recalled', 'never')
+
+                print(f"\n=== Activation: {mem_id} ===")
+                print(f"Activation score: {activation:.4f}")
+                print(f"Emotional weight: {emotional_weight:.3f}")
+                print(f"Recall count: {recall_count}")
+                print(f"Last recalled: {str(last_recalled)[:19]}")
+                print(f"Content preview: {content[:80]}...")
+                break
+            if found:
+                break
+        if not found:
+            print(f"Memory not found: {mem_id}")
+
+    elif cmd == "activated":
+        limit = 10
+        for arg in sys.argv[2:]:
+            if arg.startswith('--limit='):
+                limit = int(arg[8:])
+
+        print(f"\n=== Most Activated Memories (top {limit}) ===\n")
+        results = get_most_activated_memories(limit=limit)
+
+        if not results:
+            print("No memories found.")
+        else:
+            for mem_id, activation, metadata, preview in results:
+                recall_count = metadata.get('recall_count', 0)
+                weight = metadata.get('emotional_weight', 0)
+                print(f"[{activation:.4f}] {mem_id}")
+                print(f"  recalls={recall_count}, weight={weight:.2f}")
+                print(f"  {preview}...")
                 print()
 
     # v2.13: Self-evolution commands
