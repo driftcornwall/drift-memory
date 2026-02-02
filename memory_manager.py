@@ -886,9 +886,9 @@ def store_memory(content: str, tags: list[str] = None, emotion: float = 0.5, tit
     # Build frontmatter with causal edges and bi-temporal tracking (v2.10/v2.11)
     tags = tags or []
     now = datetime.now(timezone.utc)
-    created = now.strftime('%Y-%m-%d')
-    # event_time: when the event happened (may be in past)
-    # created: when we learned about it (ingestion time, always now)
+    created = now.isoformat()  # Full timestamp for precise ingestion time
+    # event_time: when the event happened (may be in past) - date format for human readability
+    # created: when we learned about it (ingestion time, always now) - full timestamp for precision
     # v2.11: Auto-detect event_time from content if not provided
     if event_time:
         event = event_time
