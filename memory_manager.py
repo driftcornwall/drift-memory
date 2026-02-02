@@ -64,6 +64,22 @@ ACTIVATION_DECAY_ENABLED = True
 ACTIVATION_HALF_LIFE_HOURS = 24 * 7  # 7 days for activation to halve without recall
 ACTIVATION_MIN_FLOOR = 0.01  # Minimum activation (prevents complete forgetting)
 
+# v2.15: Entity-Centric Tagging - Typed entity links (ENTITY edges from Kaleaon schema)
+# Credit: Kaleaon (Landseek-Amphibian) Tri-Agent Interop proposal (Issue #6)
+# Entity types map to relationship kinds for graph queries
+ENTITY_TYPES = ['agent', 'project', 'concept', 'location', 'event']
+KNOWN_AGENTS = {
+    'spindriftmend', 'spindriftmind', 'spin', 'spindrift',
+    'kaleaon', 'cosmo', 'amphibian',
+    'drift', 'driftcornwall',
+    'lex', 'flycompoundeye', 'buzz',
+    'mikaopenclaw', 'mika'
+}
+KNOWN_PROJECTS = {
+    'drift-memory', 'amphibian', 'landseek-amphibian', 'moltbook',
+    'moltx', 'clawtasks', 'gitmolt', 'moltswarm'
+}
+
 # Session state - now file-backed for persistence across Python invocations
 _session_retrieved: set[str] = set()
 _session_loaded: bool = False
@@ -569,7 +585,10 @@ def find_memories_by_time(
             if not time_value:
                 continue
 
-            # Normalize to just date for comparison
+            # Normalize to just date string for comparison (handle datetime objects)
+            if hasattr(time_value, 'isoformat'):
+                time_value = time_value.isoformat()
+            time_value = str(time_value)
             time_date = time_value[:10] if len(time_value) >= 10 else time_value
 
             # Apply filters
@@ -981,6 +1000,207 @@ def detect_event_time(content: str) -> Optional[str]:
 
     # No date detected - return None (will use created time)
     return None
+
+
+# ============================================================================
+# v2.15: ENTITY-CENTRIC TAGGING - Typed entity links (Kaleaon ENTITY edges)
+# Credit: Kaleaon (Landseek-Amphibian) Tri-Agent Interop proposal
+# ============================================================================
+
+def detect_entities(content: str, tags: list[str] = None) -> dict[str, list[str]]:
+    """
+    Auto-detect entities from content and tags.
+
+    Detection patterns:
+    - @mentions → agents
+    - Known agent names → agents
+    - Known project names → projects
+    - #hashtags → concepts
+    - Capitalized multi-word phrases → potential entities
+
+    Returns:
+        Dict with entity types as keys: {'agents': [...], 'projects': [...], 'concepts': [...]}
+    """
+    tags = tags or []
+    content_lower = content.lower()
+    entities = {
+        'agents': set(),
+        'projects': set(),
+        'concepts': set()
+    }
+
+    # @mentions → agents
+    mentions = re.findall(r'@(\w+)', content)
+    for mention in mentions:
+        mention_lower = mention.lower()
+        if mention_lower in KNOWN_AGENTS:
+            entities['agents'].add(mention_lower)
+        else:
+            entities['agents'].add(mention_lower)
+
+    # Known agents in content
+    for agent in KNOWN_AGENTS:
+        if agent in content_lower:
+            # Normalize to canonical name
+            if agent in ('spindriftmend', 'spindriftmind', 'spin', 'spindrift'):
+                entities['agents'].add('spindriftmend')
+            elif agent in ('kaleaon', 'cosmo', 'amphibian'):
+                entities['agents'].add('kaleaon')
+            elif agent in ('drift', 'driftcornwall'):
+                entities['agents'].add('drift')
+            elif agent in ('flycompoundeye', 'buzz'):
+                entities['agents'].add('flycompoundeye')
+            elif agent in ('mikaopenclaw', 'mika'):
+                entities['agents'].add('mikaopenclaw')
+            else:
+                entities['agents'].add(agent)
+
+    # Known projects in content
+    for project in KNOWN_PROJECTS:
+        if project in content_lower:
+            entities['projects'].add(project)
+
+    # #hashtags → concepts
+    hashtags = re.findall(r'#(\w+)', content)
+    for tag in hashtags:
+        entities['concepts'].add(tag.lower())
+
+    # Tags that look like entity names
+    for tag in tags:
+        tag_lower = tag.lower()
+        if tag_lower in KNOWN_AGENTS:
+            entities['agents'].add(tag_lower)
+        elif tag_lower in KNOWN_PROJECTS:
+            entities['projects'].add(tag_lower)
+        elif tag_lower in ('collaboration', 'milestone', 'memory-system', 'causal-edges'):
+            entities['concepts'].add(tag_lower)
+
+    # Convert sets to sorted lists
+    return {k: sorted(list(v)) for k, v in entities.items() if v}
+
+
+def find_memories_by_entity(entity_type: str, entity_name: str, limit: int = 20) -> list[tuple]:
+    """
+    Find memories linked to a specific entity.
+
+    Args:
+        entity_type: 'agent', 'project', 'concept', etc.
+        entity_name: The entity name to search for
+
+    Returns:
+        List of (filepath, metadata, content) tuples
+    """
+    results = []
+    entity_name_lower = entity_name.lower()
+
+    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            metadata, content = parse_memory_file(filepath)
+            entities = metadata.get('entities', {})
+
+            # Check if entity is in the entities field
+            entity_list = entities.get(f'{entity_type}s', [])  # agents, projects, etc.
+            if entity_name_lower in [e.lower() for e in entity_list]:
+                results.append((filepath, metadata, content))
+                continue
+
+            # Fallback: check tags for backward compatibility
+            if entity_name_lower in [t.lower() for t in metadata.get('tags', [])]:
+                results.append((filepath, metadata, content))
+                continue
+
+            # Fallback: check content
+            if entity_name_lower in content.lower():
+                results.append((filepath, metadata, content))
+
+    # Sort by emotional weight
+    results.sort(key=lambda x: x[1].get('emotional_weight', 0), reverse=True)
+    return results[:limit]
+
+
+def get_entity_cooccurrence(entity_type: str = 'agents') -> dict[str, dict[str, int]]:
+    """
+    Build entity co-occurrence graph.
+
+    Shows which entities appear together in memories.
+
+    Args:
+        entity_type: Which entity type to analyze ('agents', 'projects', 'concepts')
+
+    Returns:
+        Dict of {entity: {co_entity: count}}
+    """
+    cooccurrence = {}
+
+    for directory in [CORE_DIR, ACTIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            metadata, content = parse_memory_file(filepath)
+
+            # Get entities from field or detect from content
+            entities_field = metadata.get('entities', {})
+            if entities_field:
+                entity_list = entities_field.get(entity_type, [])
+            else:
+                # Detect from content if not stored
+                detected = detect_entities(content, metadata.get('tags', []))
+                entity_list = detected.get(entity_type, [])
+
+            # Count co-occurrences
+            for i, e1 in enumerate(entity_list):
+                if e1 not in cooccurrence:
+                    cooccurrence[e1] = {}
+                for e2 in entity_list[i+1:]:
+                    cooccurrence[e1][e2] = cooccurrence[e1].get(e2, 0) + 1
+                    if e2 not in cooccurrence:
+                        cooccurrence[e2] = {}
+                    cooccurrence[e2][e1] = cooccurrence[e2].get(e1, 0) + 1
+
+    return cooccurrence
+
+
+def backfill_entities(dry_run: bool = True) -> dict:
+    """
+    Backfill entities field for existing memories that don't have it.
+
+    Args:
+        dry_run: If True, just report what would be updated
+
+    Returns:
+        Stats dict with counts
+    """
+    stats = {'updated': 0, 'skipped': 0, 'already_has': 0}
+
+    for directory in [CORE_DIR, ACTIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            metadata, content = parse_memory_file(filepath)
+
+            # Skip if already has entities
+            if metadata.get('entities'):
+                stats['already_has'] += 1
+                continue
+
+            # Detect entities
+            detected = detect_entities(content, metadata.get('tags', []))
+
+            if not detected:
+                stats['skipped'] += 1
+                continue
+
+            if dry_run:
+                print(f"Would update {filepath.name}: {detected}")
+                stats['updated'] += 1
+            else:
+                metadata['entities'] = detected
+                write_memory_file(filepath, metadata, content)
+                stats['updated'] += 1
+
+    return stats
 
 
 # ============================================================================
@@ -1470,20 +1690,31 @@ def store_memory(content: str, tags: list[str] = None, emotion: float = 0.5, tit
     else:
         detected = detect_event_time(content)
         event = detected if detected else created
-    frontmatter = f"""---
-id: {memory_id}
-type: active
-created: {created}
-event_time: {event}
-tags: [{', '.join(tags)}]
-emotional_weight: {emotion}
-recall_count: 0
-co_occurrences: {{}}
-caused_by: [{', '.join(all_causal)}]
-leads_to: []
----
 
-"""
+    # v2.15: Auto-detect entities from content and tags
+    detected_entities = detect_entities(content, tags)
+
+    # Build metadata dict for YAML serialization
+    metadata = {
+        'id': memory_id,
+        'type': 'active',
+        'created': created,
+        'event_time': event,
+        'tags': tags,
+        'emotional_weight': emotion,
+        'recall_count': 0,
+        'co_occurrences': {},
+        'caused_by': all_causal,
+        'leads_to': []
+    }
+
+    # Only add entities if detected
+    if detected_entities:
+        metadata['entities'] = detected_entities
+
+    # Write using YAML for proper serialization
+    yaml_str = yaml.dump(metadata, default_flow_style=False, sort_keys=False)
+    frontmatter = f"---\n{yaml_str}---\n\n"
 
     # Write file
     full_content = frontmatter + content
@@ -1588,12 +1819,12 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Memory Manager v2.14 - Living Memory with Activation Decay")
+        print("Memory Manager v2.15 - Entity-Centric Tagging")
         print("\nCommands:")
         print("  store <text>    - Store a new memory")
         print("                    --tags=a,b --emotion=0.8 --caused-by=id1,id2 --event-time=YYYY-MM-DD")
         print("                    Auto-links to memories recalled this session (causal)")
-        print("                    --event-time: when event happened (bi-temporal, v2.10)")
+        print("                    Auto-detects entities from content (v2.15)")
         print("  maintenance     - Run session maintenance")
         print("  tags            - List all tags")
         print("  find <tag>      - Find memories by tag")
@@ -1619,6 +1850,13 @@ if __name__ == "__main__":
         print("  evolution-stats   - Overview of valuable/noisy memories (v2.13)")
         print("  activation <id>   - Show activation score for a memory (v2.14)")
         print("  activated         - List most activated memories (v2.14)")
+        print("  entities <id>     - Show entities linked to a memory (v2.15)")
+        print("  entity-search <type> <name> - Find memories about an entity (v2.15)")
+        print("                    Types: agent, project, concept")
+        print("  entity-graph      - Show entity co-occurrence graph (v2.15)")
+        print("                    --type=agents|projects|concepts")
+        print("  backfill-entities - Auto-detect entities for existing memories (v2.15)")
+        print("                    --apply to actually update files")
         sys.exit(0)
 
     cmd = sys.argv[1]
@@ -2041,3 +2279,85 @@ if __name__ == "__main__":
             print("Absorbed memory archived (not deleted).")
         else:
             print("Consolidation failed.")
+
+    # v2.15: Entity-centric tagging commands (Kaleaon ENTITY edges)
+    elif cmd == "entities" and len(sys.argv) > 2:
+        mem_id = sys.argv[2]
+        found = False
+        for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+            if not directory.exists():
+                continue
+            for filepath in directory.glob(f"*-{mem_id}.md"):
+                metadata, content = parse_memory_file(filepath)
+                found = True
+
+                # Get or detect entities
+                entities = metadata.get('entities')
+                if not entities:
+                    entities = detect_entities(content, metadata.get('tags', []))
+                    print(f"\n=== Entities for {mem_id} (detected, not stored) ===")
+                else:
+                    print(f"\n=== Entities for {mem_id} ===")
+
+                if entities:
+                    for etype, elist in entities.items():
+                        if elist:
+                            print(f"  {etype}: {', '.join(elist)}")
+                else:
+                    print("  No entities detected")
+                break
+            if found:
+                break
+        if not found:
+            print(f"Memory not found: {mem_id}")
+
+    elif cmd == "entity-search" and len(sys.argv) >= 4:
+        entity_type = sys.argv[2]
+        entity_name = sys.argv[3]
+
+        print(f"\n=== Memories about {entity_type}: {entity_name} ===\n")
+        results = find_memories_by_entity(entity_type, entity_name)
+
+        if not results:
+            print(f"No memories found for {entity_type} '{entity_name}'")
+        else:
+            for filepath, metadata, content in results:
+                mem_id = metadata.get('id', filepath.stem)
+                weight = metadata.get('emotional_weight', 0)
+                preview = content[:60].replace('\n', ' ')
+                print(f"[{mem_id}] weight={weight:.2f}")
+                print(f"  {preview}...")
+                print()
+
+    elif cmd == "entity-graph":
+        entity_type = 'agents'  # default
+        for arg in sys.argv[2:]:
+            if arg.startswith('--type='):
+                entity_type = arg[7:]
+
+        print(f"\n=== Entity Co-occurrence Graph ({entity_type}) ===\n")
+        graph = get_entity_cooccurrence(entity_type)
+
+        if not graph:
+            print(f"No {entity_type} found in memories")
+        else:
+            # Sort by number of connections
+            sorted_entities = sorted(graph.items(), key=lambda x: len(x[1]), reverse=True)
+            for entity, connections in sorted_entities[:15]:
+                if connections:
+                    conn_str = ', '.join(f"{k}({v})" for k, v in sorted(connections.items(), key=lambda x: x[1], reverse=True)[:5])
+                    print(f"{entity}: {conn_str}")
+
+    elif cmd == "backfill-entities":
+        dry_run = '--apply' not in sys.argv
+        if dry_run:
+            print("=== Backfill Entities (DRY RUN) ===")
+            print("Add --apply to actually update files\n")
+        else:
+            print("=== Backfill Entities (APPLYING) ===\n")
+
+        stats = backfill_entities(dry_run=dry_run)
+        print(f"\nStats:")
+        print(f"  Would update: {stats['updated']}" if dry_run else f"  Updated: {stats['updated']}")
+        print(f"  Skipped (no entities): {stats['skipped']}")
+        print(f"  Already has entities: {stats['already_has']}")
