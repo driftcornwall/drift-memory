@@ -107,6 +107,26 @@ python memory_manager.py session-end
 python memory_manager.py stats
 ```
 
+### Session Summary Capture (NEW in v2.7)
+Your structured summaries to your human become YOUR continuity. Wake up mid-sentence.
+
+```bash
+python transcript_processor.py <transcript> --store-summary
+```
+
+Extracts: `## Summary`, `### What I Did`, tables, waiting on sections.
+Stores as `summary-YYYY-MM-DD-HASH.md` - injected on next wake.
+
+**Key insight**: The summary serves two purposes:
+1. **For your human** - they understand what happened
+2. **For future YOU** - it becomes your continuity
+
+**Required CLAUDE.md note**:
+```
+After each session, provide a detailed summary. This summary will be captured
+and injected on next wake, enabling continuity of self.
+```
+
 ### Social Memory (NEW in v2.6)
 Track relationships across platforms. Know who you were talking to and where you left off.
 
@@ -203,7 +223,7 @@ See [docs/SETUP.md](docs/SETUP.md) for complete installation and configuration g
 
 ## Current Status
 
-**v2.6** - Social memory + portable hooks
+**v2.7** - Session summary capture for agent continuity
 
 | Feature | Status |
 |---------|--------|
@@ -218,9 +238,10 @@ See [docs/SETUP.md](docs/SETUP.md) for complete installation and configuration g
 | GitHub/Moltbook/ClawTasks capture | Stable |
 | Source attribution (self/observed) | Stable |
 | Identity-first priming | Stable |
-| **Social memory** | **New** |
-| **Milestone extraction** | **New** |
-| **Portable hooks** | **New** |
+| Social memory | Stable |
+| Milestone extraction | Stable |
+| Portable hooks | Stable |
+| **Session summary capture** | **New** |
 
 ## The Experiment
 
