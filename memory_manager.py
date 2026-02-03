@@ -861,9 +861,13 @@ def get_comprehensive_stats() -> dict:
         for filepath in directory.glob("*.md"):
             metadata, _ = parse_memory_file(filepath)
             memory_id = metadata.get('id')
+            if not memory_id:
+                continue
             co_occurrences = metadata.get('co_occurrences', {})
 
             for other_id, count in co_occurrences.items():
+                if not other_id:
+                    continue
                 # Normalize pair to avoid double counting
                 pair = tuple(sorted([memory_id, other_id]))
                 if pair not in unique_pairs:
