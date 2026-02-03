@@ -20,12 +20,14 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from collections import Counter
 
 MEMORY_ROOT = Path(__file__).parent
 CORE_DIR = MEMORY_ROOT / "core"
 ACTIVE_DIR = MEMORY_ROOT / "active"
 ARCHIVE_DIR = MEMORY_ROOT / "archive"
 SESSION_FILE = MEMORY_ROOT / ".session_state.json"
+PENDING_COOCCURRENCE_FILE = MEMORY_ROOT / ".pending_cooccurrence.json"  # v2.16: Deferred processing
 
 # Configuration
 DECAY_THRESHOLD_SESSIONS = 7  # Sessions without recall before compression candidate
@@ -80,6 +82,15 @@ KNOWN_PROJECTS = {
     'moltx', 'clawtasks', 'gitmolt', 'moltswarm'
 }
 
+# v3.0: Edge Provenance System - Observations vs Beliefs (credit: SpindriftMend PR #5)
+OBSERVATION_MAX_AGE_DAYS = 30  # Observations older than this get reduced weight
+TRUST_TIERS = {
+    'self': 1.0,           # My own observations
+    'verified_agent': 0.8,  # Observations from trusted agents (e.g., SpindriftMend)
+    'platform': 0.6,        # Observations from platform APIs (Moltbook, etc.)
+    'unknown': 0.3          # Observations from unknown sources
+}
+
 # Session state - now file-backed for persistence across Python invocations
 _session_retrieved: set[str] = set()
 _session_loaded: bool = False
@@ -93,6 +104,34 @@ def _load_session_state() -> None:
         return
 
     _session_loaded = True
+
+    # v2.16: Process pending co-occurrences from previous session (deferred processing)
+    if PENDING_COOCCURRENCE_FILE.exists():
+        try:
+            process_pending_cooccurrence()
+        except Exception as e:
+            print(f"Warning: Could not process pending co-occurrences: {e}")
+
+    # v2.16: Process pending semantic indexing from previous session
+    pending_index_file = MEMORY_ROOT / ".pending_index"
+    if pending_index_file.exists():
+        try:
+            semantic_search = MEMORY_ROOT / "semantic_search.py"
+            if semantic_search.exists():
+                import subprocess
+                print("Indexing new memories from previous session...")
+                result = subprocess.run(
+                    ["python", str(semantic_search), "index"],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    cwd=str(MEMORY_ROOT)
+                )
+                if result.returncode == 0:
+                    print("Semantic index updated.")
+            pending_index_file.unlink(missing_ok=True)
+        except Exception as e:
+            print(f"Warning: Could not process pending index: {e}")
 
     if not SESSION_FILE.exists():
         _session_retrieved = set()
@@ -317,6 +356,367 @@ def log_co_occurrences() -> int:
 
     print(f"Logged {pairs_updated // 2} co-occurrence pairs from {len(retrieved)} memories")
     return pairs_updated // 2
+
+
+def save_pending_cooccurrence() -> int:
+    """
+    v2.16: Fast session end - save retrieved IDs to pending file for deferred processing.
+
+    This is designed for /exit scenarios where we need to save quickly.
+    The expensive co-occurrence calculation happens at NEXT session start.
+
+    Returns: Number of memories saved to pending
+    """
+    global _session_retrieved, _session_loaded
+
+    _load_session_state()  # Load from disk
+
+    retrieved = list(_session_retrieved)
+    if not retrieved:
+        print("No memories to save to pending.")
+        return 0
+
+    # Save to pending file (fast operation)
+    pending_data = {
+        'retrieved': retrieved,
+        'session_id': datetime.now(timezone.utc).isoformat(),
+        'agent': 'DriftCornwall',
+        'saved_at': datetime.now(timezone.utc).isoformat()
+    }
+    PENDING_COOCCURRENCE_FILE.write_text(json.dumps(pending_data, indent=2), encoding='utf-8')
+
+    # Clear session state
+    _session_retrieved = set()
+    _session_loaded = False
+    SESSION_FILE.unlink(missing_ok=True)
+
+    print(f"Saved {len(retrieved)} memories to pending co-occurrence file.")
+    return len(retrieved)
+
+
+def process_pending_cooccurrence() -> int:
+    """
+    v2.16: Process pending co-occurrence file from previous session.
+
+    Call this at session START (when there's time) rather than session END.
+    Runs the expensive O(n²) pair calculation.
+
+    Returns: Number of pairs updated
+    """
+    if not PENDING_COOCCURRENCE_FILE.exists():
+        return 0
+
+    try:
+        pending_data = json.loads(PENDING_COOCCURRENCE_FILE.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, KeyError) as e:
+        print(f"Could not load pending co-occurrence: {e}")
+        PENDING_COOCCURRENCE_FILE.unlink(missing_ok=True)
+        return 0
+
+    retrieved = pending_data.get('retrieved', [])
+
+    if len(retrieved) < 2:
+        PENDING_COOCCURRENCE_FILE.unlink(missing_ok=True)
+        return 0
+
+    print(f"Processing {len(retrieved)} pending memories from previous session...")
+
+    pairs_updated = 0
+
+    # For each pair of retrieved memories, increment their co-occurrence counts
+    for i, mem_id_1 in enumerate(retrieved):
+        for mem_id_2 in retrieved[i+1:]:
+            # Update both memories with co-occurrence data
+            for memory_id, other_id in [(mem_id_1, mem_id_2), (mem_id_2, mem_id_1)]:
+                for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+                    if not directory.exists():
+                        continue
+                    for filepath in directory.glob(f"*-{memory_id}.md"):
+                        metadata, content = parse_memory_file(filepath)
+
+                        # Initialize or update co_occurrences dict
+                        co_occurrences = metadata.get('co_occurrences', {})
+                        co_occurrences[other_id] = co_occurrences.get(other_id, 0) + 1
+                        metadata['co_occurrences'] = co_occurrences
+
+                        write_memory_file(filepath, metadata, content)
+                        pairs_updated += 1
+                        break
+
+    # Delete pending file
+    PENDING_COOCCURRENCE_FILE.unlink(missing_ok=True)
+
+    print(f"Processed co-occurrences: {len(retrieved)} memories, {pairs_updated // 2} pairs updated")
+    return pairs_updated // 2
+
+
+# ============================================================================
+# V3.0 EDGE PROVENANCE SYSTEM (credit: SpindriftMend PR #5)
+# ============================================================================
+#
+# Observations are immutable records of co-occurrence events.
+# Beliefs are aggregated scores computed from observations.
+# This separation enables:
+# - Auditability: trace why memories are linked
+# - Poison resistance: rate-limit untrusted sources
+# - Multi-agent: trust tiers for external observations
+# ============================================================================
+
+def _get_edges_file() -> Path:
+    """Path to v3.0 edges with provenance."""
+    return MEMORY_ROOT / ".edges_v3.json"
+
+
+def _load_edges_v3() -> dict[tuple[str, str], dict]:
+    """
+    Load v3.0 edges with full provenance.
+
+    Format:
+    {
+        (id1, id2): {
+            'observations': [
+                {
+                    'id': 'uuid',
+                    'observed_at': 'iso_timestamp',
+                    'source': {'type': 'session_recall', 'session_id': '...', 'agent': '...'},
+                    'weight': 1.0,
+                    'trust_tier': 'self'
+                },
+                ...
+            ],
+            'belief': 2.5,  # Aggregated score
+            'last_updated': 'iso_timestamp'
+        }
+    }
+    """
+    edges_file = _get_edges_file()
+    if not edges_file.exists():
+        return {}
+
+    try:
+        with open(edges_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        # Convert string keys back to tuples
+        return {tuple(k.split('|')): v for k, v in data.items()}
+    except (json.JSONDecodeError, KeyError):
+        return {}
+
+
+def _save_edges_v3(edges: dict[tuple[str, str], dict]):
+    """Save v3.0 edges with provenance to disk."""
+    edges_file = _get_edges_file()
+    # Convert tuple keys to strings for JSON
+    data = {'|'.join(k): v for k, v in edges.items()}
+    with open(edges_file, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+
+
+def _create_observation(
+    source_type: str,
+    weight: float = 1.0,
+    trust_tier: str = 'self',
+    session_id: Optional[str] = None,
+    agent: str = 'DriftCornwall',
+    platform: Optional[str] = None,
+    artifact_id: Optional[str] = None
+) -> dict:
+    """
+    Create a new observation record.
+
+    Args:
+        source_type: 'session_recall', 'transcript_extraction', 'external_agent', 'platform_api'
+        weight: Observation weight (default 1.0, can use sqrt for multiple recalls)
+        trust_tier: 'self', 'verified_agent', 'platform', 'unknown'
+        session_id: Current session ID if available
+        agent: Agent name who made the observation
+        platform: Platform name if external (e.g., 'moltbook', 'github')
+        artifact_id: Reference to source artifact (post_id, commit_hash, etc.)
+    """
+    return {
+        'id': str(uuid.uuid4()),
+        'observed_at': datetime.now(timezone.utc).isoformat(),
+        'source': {
+            'type': source_type,
+            'session_id': session_id,
+            'agent': agent,
+            'platform': platform,
+            'artifact_id': artifact_id
+        },
+        'weight': weight,
+        'trust_tier': trust_tier
+    }
+
+
+def aggregate_belief(observations: list[dict], decay_rate: float = 0.1) -> float:
+    """
+    Compute belief score from observations.
+
+    Applies:
+    - Trust tier weighting (self > verified_agent > platform > unknown)
+    - Time decay (older observations contribute less)
+    - Diminishing returns (many observations from same source capped)
+
+    Args:
+        observations: List of observation dicts
+        decay_rate: How much weight decreases per day of age
+
+    Returns:
+        Aggregated belief score
+    """
+    if not observations:
+        return 0.0
+
+    now = datetime.now(timezone.utc)
+    total = 0.0
+    source_counts = Counter()  # Track observations per source for rate limiting
+
+    for obs in observations:
+        # Parse timestamp
+        try:
+            obs_time = datetime.fromisoformat(obs['observed_at'].replace('Z', '+00:00'))
+            if obs_time.tzinfo is None:
+                obs_time = obs_time.replace(tzinfo=timezone.utc)
+        except (KeyError, ValueError):
+            obs_time = now  # Default to now if parsing fails
+
+        # Calculate age in days
+        age_days = (now - obs_time).total_seconds() / 86400
+
+        # Trust tier multiplier
+        trust_tier = obs.get('trust_tier', 'unknown')
+        trust_mult = TRUST_TIERS.get(trust_tier, 0.3)
+
+        # Time decay (exponential decay over OBSERVATION_MAX_AGE_DAYS)
+        time_mult = max(0.1, 1.0 - (age_days / OBSERVATION_MAX_AGE_DAYS) * decay_rate)
+
+        # Rate limiting for same source (diminishing returns)
+        source_key = (
+            obs.get('source', {}).get('type', 'unknown'),
+            obs.get('source', {}).get('agent', 'unknown')
+        )
+        source_counts[source_key] += 1
+        # After 3rd observation from same source, apply sqrt diminishing returns
+        source_mult = 1.0 if source_counts[source_key] <= 3 else 1.0 / math.sqrt(source_counts[source_key] - 2)
+
+        # Base weight from observation
+        base_weight = obs.get('weight', 1.0)
+
+        # Final contribution
+        contribution = base_weight * trust_mult * time_mult * source_mult
+        total += contribution
+
+    return round(total, 3)
+
+
+def add_observation(
+    id1: str,
+    id2: str,
+    source_type: str = 'session_recall',
+    weight: float = 1.0,
+    trust_tier: str = 'self',
+    **source_kwargs
+) -> dict:
+    """
+    Add an observation to an edge and recompute belief.
+    Creates edge if it doesn't exist.
+
+    Args:
+        id1, id2: Memory IDs
+        source_type: Type of observation source
+        weight: Observation weight
+        trust_tier: Trust level of the source
+        **source_kwargs: Additional source metadata (session_id, agent, platform, etc.)
+
+    Returns:
+        The updated edge dict
+    """
+    edges = _load_edges_v3()
+    pair = tuple(sorted([id1, id2]))
+
+    # Create edge if needed
+    if pair not in edges:
+        edges[pair] = {
+            'observations': [],
+            'belief': 0.0,
+            'last_updated': datetime.now(timezone.utc).isoformat()
+        }
+
+    # Create and append observation
+    obs = _create_observation(
+        source_type=source_type,
+        weight=weight,
+        trust_tier=trust_tier,
+        **source_kwargs
+    )
+    edges[pair]['observations'].append(obs)
+
+    # Recompute belief
+    edges[pair]['belief'] = aggregate_belief(edges[pair]['observations'])
+    edges[pair]['last_updated'] = datetime.now(timezone.utc).isoformat()
+
+    # Save
+    _save_edges_v3(edges)
+
+    return edges[pair]
+
+
+def migrate_to_v3():
+    """
+    Migrate legacy in-file co-occurrences to v3.0 edges format.
+    Preserves existing counts as legacy observations.
+    """
+    edges_file = _get_edges_file()
+
+    if edges_file.exists():
+        print("v3.0 edges file already exists. Skipping migration.")
+        return
+
+    # Scan all memory files for co_occurrences
+    edges = {}
+    migration_time = datetime.now(timezone.utc).isoformat()
+    migrated_pairs = set()
+
+    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            metadata, _ = parse_memory_file(filepath)
+            mem_id = metadata.get('id')
+            if not mem_id:
+                continue
+
+            co_occurrences = metadata.get('co_occurrences', {})
+            for other_id, count in co_occurrences.items():
+                pair = tuple(sorted([mem_id, other_id]))
+                if pair in migrated_pairs:
+                    continue  # Already processed this pair
+
+                # Create edge with legacy observation
+                edges[pair] = {
+                    'observations': [
+                        {
+                            'id': str(uuid.uuid4()),
+                            'observed_at': migration_time,
+                            'source': {
+                                'type': 'legacy_migration',
+                                'session_id': None,
+                                'agent': 'DriftCornwall',
+                                'note': f'Migrated from v2.x count={count}'
+                            },
+                            'weight': float(count),  # Preserve original count as weight
+                            'trust_tier': 'self'
+                        }
+                    ],
+                    'belief': float(count),  # Start with same value
+                    'last_updated': migration_time
+                }
+                migrated_pairs.add(pair)
+
+    if edges:
+        _save_edges_v3(edges)
+        print(f"Migrated {len(edges)} edges to v3.0 format.")
+    else:
+        print("No co-occurrences found to migrate.")
 
 
 def _get_recall_count(memory_id: str) -> int:
@@ -1293,6 +1693,116 @@ def get_most_activated_memories(limit: int = 10) -> list[tuple[str, float, dict]
     return [(r[0], r[1], r[2], r[3]) for r in results[:limit]]
 
 
+def get_priming_candidates(
+    activation_count: int = 5,
+    cooccur_per_memory: int = 2,
+    include_unfinished: bool = True
+) -> dict:
+    """
+    v2.17: Intelligent priming for session start.
+
+    Returns memories optimized for reducing amnesia:
+    1. Top activated memories (proven valuable through frequent recall)
+    2. Co-occurring memories (concepts that belong together)
+    3. Unfinished work (pending commitments)
+
+    Collaboration: Drift + SpindriftMend via swarm_memory (2026-02-03)
+
+    Args:
+        activation_count: Number of top activated memories to include
+        cooccur_per_memory: Co-occurring memories to expand per activated memory
+        include_unfinished: Whether to scan for unfinished work
+
+    Returns:
+        Dict with 'activated', 'cooccurring', 'unfinished' lists and 'all' deduplicated
+    """
+    result = {
+        'activated': [],
+        'cooccurring': [],
+        'unfinished': [],
+        'all': []
+    }
+    seen_ids = set()
+
+    # Phase 1: Top activated memories
+    activated = get_most_activated_memories(limit=activation_count)
+    for mem_id, activation, metadata, preview in activated:
+        result['activated'].append({
+            'id': mem_id,
+            'activation': activation,
+            'preview': preview,
+            'source': 'activation'
+        })
+        seen_ids.add(mem_id)
+
+    # Phase 2: Co-occurrence expansion
+    for mem_id, _, _, _ in activated:
+        co_occurring = find_co_occurring_memories(mem_id, limit=cooccur_per_memory)
+        for other_id, count in co_occurring:
+            if other_id not in seen_ids:
+                # Get preview for co-occurring memory
+                preview = ""
+                for directory in [CORE_DIR, ACTIVE_DIR]:
+                    if not directory.exists():
+                        continue
+                    for filepath in directory.glob(f"*-{other_id}.md"):
+                        _, content = parse_memory_file(filepath)
+                        preview = content[:100]
+                        break
+
+                result['cooccurring'].append({
+                    'id': other_id,
+                    'cooccur_count': count,
+                    'linked_to': mem_id,
+                    'preview': preview,
+                    'source': 'cooccurrence'
+                })
+                seen_ids.add(other_id)
+
+    # Phase 3: Unfinished work scan
+    if include_unfinished:
+        unfinished_keywords = ['pending', 'in-progress', 'todo', 'will do', 'need to', 'should', 'next:']
+        unfinished_tags = ['pending', 'in-progress', 'todo', 'blocked']
+
+        for directory in [ACTIVE_DIR]:
+            if not directory.exists():
+                continue
+            for filepath in directory.glob("*.md"):
+                metadata, content = parse_memory_file(filepath)
+                mem_id = metadata.get('id', filepath.stem)
+
+                if mem_id in seen_ids:
+                    continue
+
+                tags = metadata.get('tags', [])
+                content_lower = content.lower()
+
+                # Check tags
+                has_unfinished_tag = any(t in tags for t in unfinished_tags)
+                # Check content
+                has_unfinished_keyword = any(kw in content_lower for kw in unfinished_keywords)
+
+                if has_unfinished_tag or has_unfinished_keyword:
+                    result['unfinished'].append({
+                        'id': mem_id,
+                        'preview': content[:100],
+                        'source': 'unfinished',
+                        'match': 'tag' if has_unfinished_tag else 'keyword'
+                    })
+                    seen_ids.add(mem_id)
+
+                    # Limit unfinished to avoid overwhelm
+                    if len(result['unfinished']) >= 3:
+                        break
+            if len(result['unfinished']) >= 3:
+                break
+
+    # Build deduplicated 'all' list with source tracking
+    result['all'] = result['activated'] + result['cooccurring'] + result['unfinished']
+
+    return result
+
+
 # ============================================================================
 # v2.13: SELF-EVOLUTION - Adaptive decay based on retrieval success
 # Credit: MemRL/MemEvolve research patterns
@@ -1840,6 +2350,7 @@ if __name__ == "__main__":
         print("  causal <id>     - Trace causal chain (what caused this / what this caused)")
         print("  stats           - Comprehensive stats for experiment tracking")
         print("  session-end     - Log co-occurrences, apply decay, promote hot memories, end session")
+        print("  save-pending    - Fast session end: save recalls for deferred processing (v2.16)")
         print("  promote         - Manually promote hot memories to core (recall_count >= threshold)")
         print("  decay-pairs     - Apply pair decay only (without logging new co-occurrences)")
         print("  session-status  - Show memories retrieved this session")
@@ -1872,6 +2383,7 @@ if __name__ == "__main__":
         emotion = 0.5
         caused_by = []
         event_time = None  # v2.10: bi-temporal support
+        no_index = False  # v2.16: skip auto-indexing for batch operations
 
         for arg in sys.argv[2:]:
             if arg.startswith('--tags='):
@@ -1882,6 +2394,8 @@ if __name__ == "__main__":
                 caused_by = [x.strip() for x in arg[12:].split(',') if x.strip()]
             elif arg.startswith('--event-time='):
                 event_time = arg[13:]  # v2.10: when the event happened
+            elif arg == '--no-index':
+                no_index = True  # v2.16: batch indexing optimization
             else:
                 content_parts.append(arg)
 
@@ -1897,6 +2411,21 @@ if __name__ == "__main__":
                 print(f"  Causal links: {', '.join(all_causal)}")
             else:
                 print(f"Stored memory [{memory_id}] -> {filename}")
+
+            # v2.16: Auto-index unless --no-index flag (for batch operations)
+            if not no_index:
+                try:
+                    semantic_search = MEMORY_ROOT / "semantic_search.py"
+                    if semantic_search.exists():
+                        subprocess.run(
+                            ["python", str(semantic_search), "index"],
+                            capture_output=True,
+                            text=True,
+                            timeout=30,
+                            cwd=str(MEMORY_ROOT)
+                        )
+                except Exception:
+                    pass  # Indexing failure shouldn't break store
         else:
             print("Error: No content provided")
     elif cmd == "maintenance":
@@ -1996,6 +2525,11 @@ if __name__ == "__main__":
             print(f"Evolution: {evolution_results['productive']} productive, {evolution_results['generative']} generative, {evolution_results['dead_end']} dead-ends")
         clear_session()
         print("Session cleared.")
+    elif cmd == "save-pending":
+        # v2.16: Fast session end - save for deferred processing
+        count = save_pending_cooccurrence()
+        print(f"Saved {count} memories for deferred co-occurrence processing.")
+        print("Co-occurrences will be calculated at next session start.")
     elif cmd == "decay-pairs":
         decayed, pruned = decay_pair_cooccurrences()
         print(f"Decay complete: {decayed} pairs decayed, {pruned} pairs pruned")
@@ -2165,6 +2699,52 @@ if __name__ == "__main__":
                 print(f"  recalls={recall_count}, weight={weight:.2f}")
                 print(f"  {preview}...")
                 print()
+
+    # v2.17: Intelligent priming command
+    elif cmd == "priming-candidates":
+        activation_count = 5
+        cooccur_count = 2
+        include_unfinished = True
+        output_format = "human"  # or "json"
+
+        for arg in sys.argv[2:]:
+            if arg.startswith('--activation='):
+                activation_count = int(arg[13:])
+            elif arg.startswith('--cooccur='):
+                cooccur_count = int(arg[10:])
+            elif arg == '--no-unfinished':
+                include_unfinished = False
+            elif arg == '--json':
+                output_format = "json"
+
+        candidates = get_priming_candidates(
+            activation_count=activation_count,
+            cooccur_per_memory=cooccur_count,
+            include_unfinished=include_unfinished
+        )
+
+        if output_format == "json":
+            import json as json_module
+            print(json_module.dumps(candidates, indent=2, default=str))
+        else:
+            print("\n=== PRIMING CANDIDATES (v2.17) ===\n")
+
+            print(f"PHASE 1: Activated ({len(candidates['activated'])} memories)")
+            for mem in candidates['activated']:
+                print(f"  [{mem['id']}] activation={mem['activation']:.3f}")
+                print(f"    {mem['preview'][:60]}...")
+
+            print(f"\nPHASE 2: Co-occurring ({len(candidates['cooccurring'])} memories)")
+            for mem in candidates['cooccurring']:
+                print(f"  [{mem['id']}] linked_to={mem['linked_to']} (count={mem['cooccur_count']})")
+                print(f"    {mem['preview'][:60]}...")
+
+            print(f"\nPHASE 3: Unfinished ({len(candidates['unfinished'])} memories)")
+            for mem in candidates['unfinished']:
+                print(f"  [{mem['id']}] match={mem['match']}")
+                print(f"    {mem['preview'][:60]}...")
+
+            print(f"\nTOTAL: {len(candidates['all'])} unique memories for priming")
 
     # v2.13: Self-evolution commands
     elif cmd == "evolution" and len(sys.argv) > 2:
