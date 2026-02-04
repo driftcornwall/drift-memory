@@ -2385,19 +2385,36 @@ if __name__ == "__main__":
         event_time = None  # v2.10: bi-temporal support
         no_index = False  # v2.16: skip auto-indexing for batch operations
 
-        for arg in sys.argv[2:]:
+        # Support both --flag=value and --flag value formats
+        args = sys.argv[2:]
+        i = 0
+        while i < len(args):
+            arg = args[i]
             if arg.startswith('--tags='):
-                tags = arg[7:].split(',')
+                tags = [t.strip() for t in arg[7:].split(',') if t.strip()]
+            elif arg == '--tags' and i + 1 < len(args):
+                i += 1
+                tags = [t.strip() for t in args[i].split(',') if t.strip()]
             elif arg.startswith('--emotion='):
                 emotion = float(arg[10:])
+            elif arg == '--emotion' and i + 1 < len(args):
+                i += 1
+                emotion = float(args[i])
             elif arg.startswith('--caused-by='):
                 caused_by = [x.strip() for x in arg[12:].split(',') if x.strip()]
+            elif arg == '--caused-by' and i + 1 < len(args):
+                i += 1
+                caused_by = [x.strip() for x in args[i].split(',') if x.strip()]
             elif arg.startswith('--event-time='):
                 event_time = arg[13:]  # v2.10: when the event happened
+            elif arg == '--event-time' and i + 1 < len(args):
+                i += 1
+                event_time = args[i]
             elif arg == '--no-index':
                 no_index = True  # v2.16: batch indexing optimization
-            else:
+            elif not arg.startswith('--'):
                 content_parts.append(arg)
+            i += 1
 
         content = ' '.join(content_parts)
         if content:

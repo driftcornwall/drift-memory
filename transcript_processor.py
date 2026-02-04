@@ -376,15 +376,22 @@ def process_for_memory(transcript_path: Path, store: bool = False, max_store: in
                         # Create a short ID from hash
                         source = mem.get('source', 'self')
                         mem_id = f"thought-{mem['hash']}"
-                        tags = ','.join(['thought', mem['type'], f"source:{source}"] + mem['categories'])
+
+                        # Build tags - add 'resolution' if this contains a fix/solution
+                        # This triggers search boosting so solutions surface before problems
+                        base_tags = ['thought', mem['type'], f"source:{source}"] + mem['categories']
+                        if 'problem_solved' in mem['categories'] or 'fix' in mem['categories']:
+                            base_tags.append('resolution')
+                        tags = ','.join(base_tags)
 
                         # Truncate content for storage
                         content = mem['content'][:500]
 
                         # v2.10: Include event_time for bi-temporal tracking
+                        # v2.16: Use --no-index to batch index later (faster)
                         event_time = datetime.now().strftime('%Y-%m-%d')
                         result = subprocess.run(
-                            ["python", str(memory_manager), "store", mem_id, content, f"--tags={tags}", f"--event-time={event_time}"],
+                            ["python", str(memory_manager), "store", mem_id, content, f"--tags={tags}", f"--event-time={event_time}", "--no-index"],
                             capture_output=True,
                             text=True,
                             timeout=10,
@@ -398,6 +405,15 @@ def process_for_memory(transcript_path: Path, store: bool = False, max_store: in
 
             summary['stored'] = stored_count
             summary['skipped_duplicates'] = len([m for m in memories[:max_store] if m['salience'] >= 0.5]) - stored_count
+
+            # v2.16: Mark for deferred indexing (index at session START, not end)
+            if stored_count > 0:
+                try:
+                    pending_index_file = MEMORY_DIR / ".pending_index"
+                    pending_index_file.write_text(str(stored_count))
+                    summary['indexed'] = 'deferred'
+                except Exception:
+                    summary['indexed'] = False
 
     return summary
 

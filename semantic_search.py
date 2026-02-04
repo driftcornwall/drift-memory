@@ -240,14 +240,41 @@ def index_memories(force: bool = False) -> dict:
     return stats
 
 
+def load_memory_tags(memory_id: str) -> list[str]:
+    """Load tags from a memory file."""
+    for directory in [ACTIVE_DIR, CORE_DIR]:
+        # Try both naming patterns
+        for pattern in [f"{memory_id}.md", f"*{memory_id}*.md"]:
+            matches = list(directory.glob(pattern))
+            if matches:
+                try:
+                    content = matches[0].read_text(encoding='utf-8')
+                    if content.startswith('---'):
+                        import re
+                        tags_match = re.search(r'^tags:\s*\[([^\]]*)\]', content, re.MULTILINE)
+                        if tags_match:
+                            return [t.strip().strip("'\"") for t in tags_match.group(1).split(',')]
+                except:
+                    pass
+    return []
+
+
+# Resolution/procedural tags that indicate actionable knowledge
+RESOLUTION_TAGS = {'resolution', 'procedural', 'fix', 'solution', 'howto', 'api', 'endpoint'}
+RESOLUTION_BOOST = 1.25  # 25% score boost for resolution memories
+
+
 def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                     register_recall: bool = True) -> list[dict]:
     """
-    Search memories by semantic similarity.
+    Search memories by semantic similarity with resolution boosting.
 
     When register_recall=True (default), retrieved memories are registered
     with the decay/co-occurrence system, strengthening accessed memories
     and building associative links between concepts retrieved together.
+
+    Resolution memories (tagged with 'resolution', 'procedural', 'fix', etc.)
+    get a score boost so solutions surface before problem descriptions.
 
     Args:
         query: Natural language query
@@ -280,7 +307,15 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                 "path": info.get("path", "")
             })
 
-    # Sort by score descending
+    # === RESOLUTION BOOSTING ===
+    # Boost memories tagged as resolution/procedural so solutions surface first
+    for result in results:
+        tags = load_memory_tags(result["id"])
+        if tags and RESOLUTION_TAGS.intersection(set(t.lower() for t in tags)):
+            result["score"] *= RESOLUTION_BOOST
+            result["boosted"] = True
+
+    # Sort by (boosted) score descending
     results.sort(key=lambda x: x["score"], reverse=True)
     top_results = results[:limit]
 
