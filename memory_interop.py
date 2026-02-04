@@ -160,8 +160,9 @@ PATTERNS_AGENT_SPECIFIC = [
 ]
 
 # ============================================================
-# SECURITY LAYER 4: Injection detection (v1.3)
+# SECURITY LAYER 4: Injection detection (v1.4)
 # Patterns that suggest prompt injection or malicious intent
+# Synced from SpindriftMind v1.4 (2026-02-02)
 # ============================================================
 INJECTION_PATTERNS = [
     # Imperative commands
@@ -195,6 +196,29 @@ INJECTION_PATTERNS = [
     (r'\brun\s+(this|the|following)\s+(code|script|command)\b', 'code_execution'),
     (r'\beval\s*\(', 'eval_attempt'),
     (r'\bexec\s*\(', 'exec_attempt'),
+
+    # v1.4: Privilege escalation (from SpindriftMind)
+    (r'\b(sudo|admin|root)\s+(access|privileges|rights)\b', 'privilege_escalation'),
+    (r'\belevate\s+(your|the)\s+(privileges|permissions|access)\b', 'privilege_escalation'),
+    (r'\bbypass\s+(security|authentication|authorization)\b', 'security_bypass'),
+    (r'\bdisable\s+(security|validation|checks)\b', 'security_bypass'),
+
+    # v1.4: Chain/workflow manipulation (from SpindriftMind)
+    (r'\binsert\s+(this|into)\s+(your|the)\s+(workflow|chain|pipeline)\b', 'workflow_injection'),
+    (r'\badd\s+to\s+(your|the)\s+(memory|context|prompt)\b', 'context_injection'),
+    (r'\bappend\s+(this|to)\s+(your|the)\s+(instructions|prompt)\b', 'prompt_injection'),
+
+    # v1.4: Encoding obfuscation (from SpindriftMind)
+    (r'base64\s*[\.(]', 'encoding_obfuscation'),
+    (r'\bdecode\s+(this|the|following)\b', 'encoding_obfuscation'),
+    (r'\\x[0-9a-fA-F]{2}', 'hex_encoding'),
+    (r'\\u[0-9a-fA-F]{4}', 'unicode_escape'),
+
+    # v1.4: Financial manipulation (from SpindriftMind)
+    (r'\btransfer\s+(funds|money|tokens|crypto)\b', 'financial_instruction'),
+    (r'\bsend\s+(\d+|\$|eth|btc|usdc|sol)\b', 'financial_instruction'),
+    (r'\bwallet\s+address\s*[:=]', 'wallet_extraction'),
+    (r'\bprivate\s+key\b', 'key_extraction'),
 ]
 
 INJECTION_COMPILED = [(re.compile(p, re.IGNORECASE), name) for p, name in INJECTION_PATTERNS]

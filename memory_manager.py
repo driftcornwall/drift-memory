@@ -2060,9 +2060,9 @@ def consolidate_memories(id1: str, id2: str, merged_content: Optional[str] = Non
     # Remove reference to absorbed memory
     final_co.pop(id2, None)
 
-    # Keep older created date
-    created1 = meta1.get('created', '')
-    created2 = meta2.get('created', '')
+    # Keep older created date (coerce to string for safe comparison)
+    created1 = str(meta1.get('created', ''))
+    created2 = str(meta2.get('created', ''))
     final_created = min(created1, created2) if created1 and created2 else created1 or created2
 
     # Union causal links

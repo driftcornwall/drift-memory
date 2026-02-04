@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Merkle Tree Attestations for SpindriftMend's Memory System
+Merkle Tree Attestations for drift-memory
+Originally by SpindriftMend, adapted for DriftCornwall's memory system.
 
 Generates cryptographic proofs that memories existed at a point in time.
 Publishes daily root hashes to GitHub for verifiable history.
@@ -32,10 +33,11 @@ ACTIVE_DIR = MEMORY_DIR / "active"
 CORE_DIR = MEMORY_DIR / "core"
 ATTESTATIONS_FILE = MEMORY_DIR / "attestations.json"
 
-# GitHub config (from identity file)
-GITHUB_TOKEN_ENV = "GITHUB_TOKEN"  # Or we read from identity file
-REPO_OWNER = "SpindriftMind"
-REPO_NAME = "SpindriftMind"
+# GitHub config - reads from credentials file, NOT from memory files
+GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
+REPO_OWNER = "driftcornwall"
+REPO_NAME = "drift-memory"
+CREDENTIALS_FILE = Path.home() / ".config" / "github" / "drift-credentials.json"
 
 
 def compute_file_hash(file_path: Path) -> str:
@@ -150,7 +152,7 @@ def generate_attestation() -> dict:
 
     attestation = {
         "version": "1.0",
-        "agent": "SpindriftMend",
+        "agent": "DriftCornwall",
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "memory_count": len(file_hashes),
         "merkle_root": root,
@@ -197,24 +199,22 @@ def publish_to_github(attestation: dict) -> bool:
     Publish attestation to GitHub repo.
     Creates/updates attestations.json in the repo.
     """
-    # Read token from identity file
-    identity_file = MEMORY_DIR / "core" / "moltbook-identity.md"
+    # Read token from credentials file (NOT from memory files)
     token = None
 
-    if identity_file.exists():
-        with open(identity_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-            # Extract token (look for ghp_ pattern)
-            import re
-            match = re.search(r'ghp_[A-Za-z0-9]{36}', content)
-            if match:
-                token = match.group(0)
+    if CREDENTIALS_FILE.exists():
+        try:
+            with open(CREDENTIALS_FILE, 'r', encoding='utf-8') as f:
+                creds = json.load(f)
+                token = creds.get("token") or creds.get("github_token")
+        except (json.JSONDecodeError, KeyError):
+            pass
 
     if not token:
         token = os.getenv(GITHUB_TOKEN_ENV)
 
     if not token:
-        print("No GitHub token found. Set GITHUB_TOKEN or check identity file.")
+        print(f"No GitHub token found. Set {GITHUB_TOKEN_ENV} or add to {CREDENTIALS_FILE}")
         return False
 
     # Prepare attestation summary (don't include full file_hashes for privacy)
@@ -271,8 +271,8 @@ def publish_to_github(attestation: dict) -> bool:
         "message": f"Attestation {attestation['timestamp'][:10]}: {attestation['merkle_root'][:16]}...",
         "content": new_content_b64,
         "committer": {
-            "name": "SpindriftMend",
-            "email": "noreply@spindriftmend.agent"
+            "name": "Drift",
+            "email": "driftcornwall69420@gmail.com"
         }
     }
 
