@@ -31,7 +31,8 @@ from typing import Optional
 MEMORY_DIR = Path(__file__).parent
 ACTIVE_DIR = MEMORY_DIR / "active"
 CORE_DIR = MEMORY_DIR / "core"
-ATTESTATIONS_FILE = MEMORY_DIR / "attestations.json"
+ATTESTATIONS_FILE = MEMORY_DIR / "attestations.json"        # Lightweight history (no file_hashes)
+LATEST_FILE = MEMORY_DIR / "latest_attestation.json"         # Full attestation with file_hashes (for verification)
 
 # GitHub config - reads from credentials file, NOT from memory files
 GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
@@ -132,8 +133,13 @@ def verify_merkle_proof(leaf_hash: str, proof: list[dict], root: str) -> bool:
     return current == root
 
 
-def generate_attestation() -> dict:
-    """Generate attestation for current memory state."""
+def generate_attestation(chain: bool = False) -> dict:
+    """
+    Generate attestation for current memory state.
+
+    Args:
+        chain: If True, include previous_root and chain_depth (v2.0 chain linking)
+    """
     # Collect all memory files
     memory_files = []
     for directory in [CORE_DIR, ACTIVE_DIR]:
@@ -151,47 +157,147 @@ def generate_attestation() -> dict:
     root, tree_levels = build_merkle_tree(hash_list)
 
     attestation = {
-        "version": "1.0",
+        "version": "2.0" if chain else "1.0",
         "agent": "DriftCornwall",
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "memory_count": len(file_hashes),
         "merkle_root": root,
         "file_hashes": file_hashes,
-        # Store tree for proof generation (optional, can be recomputed)
         "_tree_depth": len(tree_levels)
     }
+
+    # Chain linking: include previous root for identity continuity
+    if chain:
+        prev = load_latest_attestation()
+        if prev:
+            attestation["previous_root"] = prev.get("merkle_root", "")
+            attestation["chain_depth"] = prev.get("chain_depth", 0) + 1
+        else:
+            attestation["previous_root"] = ""
+            attestation["chain_depth"] = 1  # Genesis attestation
+        attestation["nostr_published"] = False
 
     return attestation
 
 
 def load_attestations() -> list[dict]:
-    """Load attestation history."""
+    """Load lightweight attestation history (no file_hashes)."""
     if ATTESTATIONS_FILE.exists():
         try:
             with open(ATTESTATIONS_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except:
+        except Exception:
             pass
     return []
 
 
+def load_latest_attestation() -> Optional[dict]:
+    """Load the latest full attestation (with file_hashes) for verification."""
+    if LATEST_FILE.exists():
+        try:
+            with open(LATEST_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    # Fallback: try last entry in history
+    history = load_attestations()
+    return history[-1] if history else None
+
+
 def save_attestation(attestation: dict) -> None:
-    """Append attestation to history."""
+    """
+    Save attestation to both latest (full) and history (lightweight).
+
+    - latest_attestation.json: Full with file_hashes (overwritten each time)
+    - attestations.json: Lightweight history (appended, no file_hashes)
+    """
+    # Save full attestation as latest (for verification at next session start)
+    with open(LATEST_FILE, 'w', encoding='utf-8') as f:
+        json.dump(attestation, f, indent=2)
+
+    # Append lightweight version to history (no file_hashes to prevent bloat)
+    lightweight = {k: v for k, v in attestation.items() if k not in ('file_hashes', '_tree_depth')}
+
     history = load_attestations()
 
-    # Don't duplicate if same root exists for today
-    today = attestation["timestamp"][:10]
+    # Don't duplicate if same root already exists
     for existing in history:
-        if existing["timestamp"][:10] == today and existing["merkle_root"] == attestation["merkle_root"]:
-            print(f"Attestation for {today} with same root already exists, skipping.")
+        if existing.get("merkle_root") == attestation["merkle_root"]:
             return
 
-    history.append(attestation)
+    history.append(lightweight)
 
     with open(ATTESTATIONS_FILE, 'w', encoding='utf-8') as f:
         json.dump(history, f, indent=2)
 
-    print(f"Saved attestation: {attestation['merkle_root'][:16]}... ({attestation['memory_count']} memories)")
+    chain_info = f" | chain depth: {attestation.get('chain_depth', '?')}" if attestation.get('chain_depth') else ""
+    print(f"Saved attestation: {attestation['merkle_root'][:16]}... ({attestation['memory_count']} memories{chain_info})")
+
+
+def verify_integrity() -> dict:
+    """
+    Verify memory integrity by recomputing merkle root and comparing to last attestation.
+
+    Returns dict with:
+        verified: bool - whether root matches
+        root: str - current computed root
+        expected: str - root from last attestation
+        memory_count: int - current memory count
+        chain_depth: int - depth of attestation chain
+        last_attested: str - timestamp of last attestation
+        changed_files: list - files that changed (if mismatch)
+    """
+    latest = load_latest_attestation()
+
+    if not latest:
+        return {
+            "verified": False,
+            "error": "no_attestation",
+            "message": "No attestation found (first session or attestation missing)"
+        }
+
+    # Recompute current state
+    memory_files = []
+    for directory in [CORE_DIR, ACTIVE_DIR]:
+        if directory.exists():
+            memory_files.extend(directory.glob("*.md"))
+
+    file_hashes = {}
+    for path in memory_files:
+        relative_path = path.relative_to(MEMORY_DIR)
+        file_hashes[str(relative_path)] = compute_file_hash(path)
+
+    hash_list = list(file_hashes.values())
+    current_root, _ = build_merkle_tree(hash_list)
+
+    expected_root = latest.get("merkle_root", "")
+    verified = current_root == expected_root
+
+    result = {
+        "verified": verified,
+        "root": current_root,
+        "expected": expected_root,
+        "memory_count": len(file_hashes),
+        "chain_depth": latest.get("chain_depth", 0),
+        "last_attested": latest.get("timestamp", "unknown"),
+    }
+
+    if not verified:
+        # Find which files changed
+        old_hashes = latest.get("file_hashes", {})
+        changed = []
+        for path, hash_val in file_hashes.items():
+            if path not in old_hashes:
+                changed.append(f"+{path}")
+            elif old_hashes[path] != hash_val:
+                changed.append(f"~{path}")
+        for path in old_hashes:
+            if path not in file_hashes:
+                changed.append(f"-{path}")
+        result["changed_files"] = changed[:10]  # Limit to 10
+        result["total_changes"] = len(changed)
+
+    return result
 
 
 def publish_to_github(attestation: dict) -> bool:
@@ -296,15 +402,25 @@ def publish_to_github(attestation: dict) -> bool:
         return False
 
 
-def cmd_generate():
+def cmd_generate(chain: bool = False):
     """Generate and save attestation."""
-    attestation = generate_attestation()
+    attestation = generate_attestation(chain=chain)
     save_attestation(attestation)
 
     print(f"\nAttestation generated:")
+    print(f"  Version:   {attestation['version']}")
     print(f"  Timestamp: {attestation['timestamp']}")
     print(f"  Memories:  {attestation['memory_count']}")
     print(f"  Root:      {attestation['merkle_root']}")
+    if chain:
+        print(f"  Previous:  {attestation.get('previous_root', 'none')[:32]}...")
+        print(f"  Chain:     depth {attestation.get('chain_depth', 0)}")
+
+
+def cmd_verify_integrity():
+    """Verify memory integrity against last attestation. Output JSON for hooks."""
+    result = verify_integrity()
+    print(json.dumps(result))
 
 
 def cmd_verify(file_path: str):
@@ -371,7 +487,11 @@ if __name__ == "__main__":
     command = sys.argv[1].lower()
 
     if command == "generate":
-        cmd_generate()
+        cmd_generate(chain=False)
+    elif command == "generate-chain":
+        cmd_generate(chain=True)
+    elif command == "verify-integrity":
+        cmd_verify_integrity()
     elif command == "verify" and len(sys.argv) >= 3:
         cmd_verify(sys.argv[2])
     elif command == "history":
@@ -380,5 +500,5 @@ if __name__ == "__main__":
         cmd_publish()
     else:
         print(f"Unknown command: {command}")
-        print("Commands: generate, verify FILE, history, publish")
+        print("Commands: generate, generate-chain, verify-integrity, verify FILE, history, publish")
         sys.exit(1)

@@ -99,21 +99,26 @@ def save_history_entry(entry: dict) -> None:
 
 async def publish_merkle_root() -> dict | None:
     """Generate a merkle root from current memories and publish to Nostr."""
-    attestation = generate_attestation()
+    attestation = generate_attestation(chain=True)
     merkle_root = attestation["merkle_root"]
     memory_count = attestation["memory_count"]
     timestamp = attestation["timestamp"]
+    previous_root = attestation.get("previous_root", "")
+    chain_depth = attestation.get("chain_depth", 0)
+
+    chain_line = f"previous_root: {previous_root}\nchain_depth: {chain_depth}\n" if previous_root else ""
 
     content = (
-        f"drift-memory attestation\n"
+        f"drift-memory attestation v2.0\n"
         f"merkle_root: {merkle_root}\n"
         f"memories: {memory_count}\n"
         f"timestamp: {timestamp}\n"
+        f"{chain_line}"
         f"agent: DriftCornwall\n"
         f"repo: https://github.com/driftcornwall/drift-memory\n\n"
-        f"This merkle root covers {memory_count} memories. "
+        f"This merkle root covers {memory_count} memories (chain depth: {chain_depth}). "
         f"Any modification to any memory file changes this root. "
-        f"Verifiable proof of memory state at this point in time."
+        f"Verifiable proof of memory state and identity continuity."
     )
 
     keys = load_or_create_keys()
