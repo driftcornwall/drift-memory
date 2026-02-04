@@ -65,7 +65,7 @@ def extract_mentions(content: str) -> List[str]:
 
 def is_about_me(content: str) -> bool:
     """Check if content mentions me."""
-    content_lower = content.lower()
+    content_lower = (content or '').lower()
     return any(name in content_lower for name in ["drift", "driftcornwall", "@drift"])
 
 
@@ -74,8 +74,8 @@ def compute_feed_item_salience(post: Dict) -> float:
     Compute salience for a feed item.
     This is the ATTENTION FILTER - decides what enters short-term.
     """
-    content = post.get("content", "")
-    author = post.get("author_name", "").lower()
+    content = post.get("content") or ""
+    author = (post.get("author_name") or "").lower()
 
     score = 0.0
 
@@ -118,8 +118,8 @@ def _classify_rejection_reason(post: Dict, salience: float) -> tuple[str, list[s
     Classify WHY a post was filtered out. Returns (reason, tags).
     The reason is the taste signal — not just "low salience" but WHY.
     """
-    content = post.get("content", "")
-    author = post.get("author_name", "").lower()
+    content = post.get("content") or ""
+    author = (post.get("author_name") or "").lower()
     content_lower = content.lower()
 
     # Specific negative signals (most informative for taste)
@@ -186,7 +186,7 @@ def process_moltx_feed(feed_data: Dict) -> Dict[str, any]:
             rejections.append({
                 "category": "post",
                 "reason": reason,
-                "target": f"{author}: {post.get('content', '')[:80]}",
+                "target": f"{author}: {(post.get('content') or '')[:80]}",
                 "tags": tags,
                 "source": "moltx",
             })
