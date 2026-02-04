@@ -176,13 +176,14 @@ def compute_strongest_pairs(graph: dict, top_n: int = 20) -> list[dict]:
     return pairs[:top_n]
 
 
-def detect_clusters(graph: dict) -> list[dict]:
+def detect_clusters(graph: dict, percentile: int = 90) -> list[dict]:
     """
     Detect cognitive clusters using connected component analysis
-    on strong edges (above median weight).
+    on strong edges (above given percentile).
 
-    Each cluster represents a cognitive domain — a group of
-    memories that are tightly interconnected.
+    Uses P90 by default — only the top 10% strongest edges.
+    Dense small-world graphs need aggressive thresholds to reveal
+    any disconnected components.
     """
     edges = graph['edges']
     nodes = graph['nodes']
@@ -190,15 +191,15 @@ def detect_clusters(graph: dict) -> list[dict]:
     if not edges:
         return []
 
-    # Use edges above median strength for cluster detection
     weights = list(edges.values())
     weights.sort()
-    median_weight = weights[len(weights) // 2] if weights else 0
+    threshold_idx = min(int(len(weights) * percentile / 100), len(weights) - 1)
+    threshold = weights[threshold_idx]
 
     # Build adjacency for strong edges only
     strong_adj = defaultdict(set)
     for (id1, id2), weight in edges.items():
-        if weight >= median_weight:
+        if weight >= threshold:
             strong_adj[id1].add(id2)
             strong_adj[id2].add(id1)
 
@@ -209,7 +210,6 @@ def detect_clusters(graph: dict) -> list[dict]:
     for node in strong_adj:
         if node in visited:
             continue
-        # BFS from this node
         component = set()
         queue = [node]
         while queue:
@@ -223,7 +223,6 @@ def detect_clusters(graph: dict) -> list[dict]:
                     queue.append(neighbor)
 
         if len(component) >= 2:
-            # Characterize cluster by most common tags
             all_tags = []
             for mem_id in component:
                 all_tags.extend(nodes.get(mem_id, {}).get('tags', []))
@@ -238,6 +237,109 @@ def detect_clusters(graph: dict) -> list[dict]:
 
     clusters.sort(key=lambda c: c['size'], reverse=True)
     return clusters
+
+
+# Cognitive domains: what percentage of thinking goes where.
+# Tags are overlapping (a memory can be social AND technical), so
+# domain weights don't sum to 100% — that's intentional.
+COGNITIVE_DOMAINS = {
+    'reflection': ['thought', 'thinking', 'output', 'source:self'],
+    'social': ['social', 'collaboration', 'spindrift', 'spindriftmend',
+               'kaleaon', 'moltx', 'moltbook'],
+    'technical': ['insight', 'problem_solved', 'error', 'bug', 'fix',
+                  'resolution', 'memory-system', 'architecture', 'api'],
+    'economic': ['economic', 'bounty', 'clawtasks', 'wallet', 'earned'],
+    'identity': ['identity', 'values', 'milestone', 'shipped', 'dossier',
+                 'attestation', 'critical'],
+}
+
+
+def compute_cognitive_domains(graph: dict) -> dict:
+    """
+    Decompose cognition into weighted domains based on tag membership
+    and co-occurrence strength.
+
+    Unlike graph clustering (which fails on dense small-world graphs),
+    domain decomposition always produces meaningful dimensions because
+    it's based on semantic tag categories, not topology.
+
+    For each domain, computes:
+    - memory_count: how many memories belong
+    - total_weight: sum of co-occurrence weights within domain
+    - weight_pct: percentage of total co-occurrence weight
+    - top_hubs: most connected memories in this domain
+
+    Also computes inter-domain connections: how strongly each pair
+    of domains is linked (cognitive integration measure).
+    """
+    nodes = graph['nodes']
+    edges = graph['edges']
+    adjacency = graph['adjacency']
+
+    # Assign memories to domains (a memory can be in multiple domains)
+    domain_members = defaultdict(set)
+    for mem_id, info in nodes.items():
+        tags = set(t.lower() for t in info.get('tags', []))
+        for domain, domain_tags in COGNITIVE_DOMAINS.items():
+            if tags & set(domain_tags):
+                domain_members[domain].add(mem_id)
+
+    # Compute intra-domain co-occurrence weight
+    total_weight = sum(edges.values())
+    domain_stats = {}
+
+    for domain, members in domain_members.items():
+        intra_weight = 0.0
+        for (id1, id2), weight in edges.items():
+            if id1 in members and id2 in members:
+                intra_weight += weight
+
+        # Find top hubs within this domain
+        domain_hubs = []
+        for mem_id in members:
+            if mem_id in adjacency:
+                # Only count connections to other domain members
+                domain_degree = sum(
+                    adjacency[mem_id].get(other, 0)
+                    for other in members
+                    if other != mem_id and other in adjacency.get(mem_id, {})
+                )
+                if domain_degree > 0:
+                    domain_hubs.append((mem_id, domain_degree))
+        domain_hubs.sort(key=lambda x: x[1], reverse=True)
+
+        domain_stats[domain] = {
+            'memory_count': len(members),
+            'total_weight': round(intra_weight, 2),
+            'weight_pct': round(intra_weight / total_weight * 100, 1) if total_weight > 0 else 0,
+            'top_hubs': [h[0] for h in domain_hubs[:5]],
+        }
+
+    # Inter-domain connections: how much weight flows between domains
+    inter_domain = {}
+    domain_list = sorted(domain_members.keys())
+    for i, d1 in enumerate(domain_list):
+        for d2 in domain_list[i + 1:]:
+            cross_weight = 0.0
+            for (id1, id2), weight in edges.items():
+                in_d1 = id1 in domain_members[d1] or id2 in domain_members[d1]
+                in_d2 = id1 in domain_members[d2] or id2 in domain_members[d2]
+                if in_d1 and in_d2:
+                    cross_weight += weight
+
+            if cross_weight > 0:
+                inter_domain[f"{d1}<->{d2}"] = round(cross_weight, 1)
+
+    # Sort inter-domain by strength
+    inter_domain = dict(
+        sorted(inter_domain.items(), key=lambda x: x[1], reverse=True)
+    )
+
+    return {
+        'domains': domain_stats,
+        'inter_domain': inter_domain,
+        'total_weight': round(total_weight, 2),
+    }
 
 
 def compute_strength_distribution(graph: dict) -> dict:
@@ -304,6 +406,7 @@ def compute_fingerprint_hash(
     hubs: list[dict],
     distribution: dict,
     cluster_count: int,
+    domain_weights: Optional[dict] = None,
 ) -> str:
     """
     Compute deterministic cognitive fingerprint hash.
@@ -311,7 +414,8 @@ def compute_fingerprint_hash(
     Hashes the TOPOLOGY, not the content:
     - Hub ordering (what your mind orbits)
     - Strength distribution shape (how your associations distribute)
-    - Cluster count (how many cognitive domains)
+    - Domain weight distribution (cognitive priorities)
+    - Cluster count (structural info)
 
     This changes slowly as identity evolves but can't be replicated
     without your exact retrieval history.
@@ -329,10 +433,19 @@ def compute_fingerprint_hash(
         f"p99={distribution.get('p99', 0)}"
     )
 
+    # Domain signature: cognitive weight distribution (sorted for determinism)
+    domain_sig = ""
+    if domain_weights:
+        parts = []
+        for domain in sorted(domain_weights.keys()):
+            pct = domain_weights[domain].get('weight_pct', 0)
+            parts.append(f"{domain}={pct}")
+        domain_sig = ','.join(parts)
+
     # Structure signature
     struct_sig = f"clusters={cluster_count},edges={distribution.get('count', 0)}"
 
-    combined = f"{hub_sig}\n{dist_sig}\n{struct_sig}"
+    combined = f"{hub_sig}\n{dist_sig}\n{domain_sig}\n{struct_sig}"
     return hashlib.sha256(combined.encode('utf-8')).hexdigest()
 
 
@@ -390,11 +503,35 @@ def compute_drift_score(current_fingerprint: dict) -> Optional[dict]:
     else:
         cluster_drift = 0.0
 
+    # Domain weight drift (how cognitive priorities shifted)
+    prev_domains = previous.get('cognitive_domains', {}).get('domains', {})
+    curr_domains = current_fingerprint.get('cognitive_domains', {}).get('domains', {})
+
+    domain_diffs = {}
+    all_domain_keys = set(list(prev_domains.keys()) + list(curr_domains.keys()))
+    domain_drift_values = []
+    for key in all_domain_keys:
+        prev_pct = prev_domains.get(key, {}).get('weight_pct', 0)
+        curr_pct = curr_domains.get(key, {}).get('weight_pct', 0)
+        diff = curr_pct - prev_pct
+        if abs(diff) > 0.5:
+            domain_diffs[key] = round(diff, 1)
+        if prev_pct > 0:
+            domain_drift_values.append(abs(diff) / prev_pct)
+        elif curr_pct > 0:
+            domain_drift_values.append(1.0)
+
+    domain_drift = (
+        sum(domain_drift_values) / len(domain_drift_values)
+        if domain_drift_values else 0.0
+    )
+
     # Composite drift score (weighted)
     drift_score = (
-        0.5 * (1.0 - hub_overlap) +    # Hub stability matters most
-        0.3 * dist_drift +               # Distribution shape
-        0.2 * min(cluster_drift, 1.0)    # Cluster structure
+        0.4 * (1.0 - hub_overlap) +    # Hub stability matters most
+        0.25 * dist_drift +              # Distribution shape
+        0.25 * min(domain_drift, 1.0) +  # Cognitive priority shifts
+        0.1 * min(cluster_drift, 1.0)    # Cluster structure (less weight now)
     )
 
     return {
@@ -403,6 +540,8 @@ def compute_drift_score(current_fingerprint: dict) -> Optional[dict]:
         'hub_turnover': sorted(list(curr_hubs - prev_hubs))[:5],
         'hub_lost': sorted(list(prev_hubs - curr_hubs))[:5],
         'distribution_drift': round(dist_drift, 4),
+        'domain_drift': round(domain_drift, 4),
+        'domain_changes': domain_diffs,
         'cluster_drift': round(cluster_drift, 4),
         'previous_timestamp': previous.get('timestamp', 'unknown'),
         'interpretation': _interpret_drift(drift_score),
@@ -430,14 +569,16 @@ def generate_full_analysis() -> dict:
     hubs = compute_hub_centrality(graph, top_n=20)
     pairs = compute_strongest_pairs(graph, top_n=20)
     clusters = detect_clusters(graph)
+    domains = compute_cognitive_domains(graph)
     distribution = compute_strength_distribution(graph)
 
     fingerprint_hash = compute_fingerprint_hash(
-        hubs, distribution, len(clusters)
+        hubs, distribution, len(clusters),
+        domain_weights=domains.get('domains', {}),
     )
 
     analysis = {
-        'version': '1.0',
+        'version': '1.1',
         'type': 'cognitive_fingerprint',
         'agent': 'DriftCornwall',
         'timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
@@ -455,6 +596,7 @@ def generate_full_analysis() -> dict:
             for c in clusters[:10]
         ],
         'cluster_count': len(clusters),
+        'cognitive_domains': domains,
         'strength_distribution': distribution,
         'fingerprint_hash': fingerprint_hash,
     }
@@ -476,8 +618,14 @@ def generate_attestation() -> dict:
     """
     analysis = generate_full_analysis()
 
+    # Extract domain weight percentages for attestation
+    domain_pcts = {}
+    cd = analysis.get('cognitive_domains', {})
+    for domain, stats in cd.get('domains', {}).items():
+        domain_pcts[domain] = stats.get('weight_pct', 0)
+
     attestation = {
-        'version': '1.0',
+        'version': '1.1',
         'type': 'cognitive_fingerprint_attestation',
         'agent': 'DriftCornwall',
         'timestamp': analysis['timestamp'],
@@ -485,6 +633,7 @@ def generate_attestation() -> dict:
         'fingerprint_hash': analysis['fingerprint_hash'],
         'hub_ids': [h['id'] for h in analysis['hubs'][:10]],
         'cluster_count': analysis['cluster_count'],
+        'cognitive_domain_weights': domain_pcts,
         'distribution_summary': {
             k: analysis['strength_distribution'].get(k, 0)
             for k in ['count', 'mean', 'gini', 'skewness']
@@ -546,7 +695,7 @@ def cmd_analyze():
 
     print(f"COGNITIVE FINGERPRINT — DriftCornwall")
     print(f"{'=' * 55}")
-    print(f"Proof of Identity | Layer 2 of the Agent Dossier")
+    print(f"Proof of Identity | Layer 2 of the Agent Dossier (v1.1)")
     print()
 
     gs = analysis['graph_stats']
@@ -567,11 +716,32 @@ def cmd_analyze():
         print(f"  {p['id1'][:10]:10s} <-> {p['id2'][:10]:10s}  wt={p['weight']:7.1f}  [{t1} | {t2}]")
     print()
 
-    print(f"CLUSTERS ({analysis['cluster_count']} cognitive domains):")
-    for i, c in enumerate(analysis['clusters'][:8]):
-        tags = ', '.join(c['top_tags'][:4])
-        print(f"  Cluster {i+1}: {c['size']:3d} memories  [{tags}]")
-    print()
+    # Cognitive domains (the meaningful decomposition)
+    cd = analysis.get('cognitive_domains', {})
+    domains = cd.get('domains', {})
+    if domains:
+        print(f"COGNITIVE DOMAINS (where my thinking lives):")
+        for domain in sorted(domains.keys(), key=lambda d: domains[d]['weight_pct'], reverse=True):
+            ds = domains[domain]
+            bar = '#' * int(ds['weight_pct'] / 3)
+            print(f"  {domain:12s}  {ds['memory_count']:3d} memories  {ds['weight_pct']:5.1f}% weight  {bar}")
+        print()
+
+        # Inter-domain connections (top 5)
+        inter = cd.get('inter_domain', {})
+        if inter:
+            print(f"INTER-DOMAIN LINKS (cognitive integration):")
+            for pair, weight in list(inter.items())[:5]:
+                print(f"  {pair:30s}  weight={weight:.1f}")
+            print()
+
+    # Graph clusters (P90 threshold — may show 1 for dense graphs)
+    if analysis['clusters']:
+        print(f"GRAPH CLUSTERS ({analysis['cluster_count']} at P90 threshold):")
+        for i, c in enumerate(analysis['clusters'][:5]):
+            tags = ', '.join(c['top_tags'][:4])
+            print(f"  Cluster {i+1}: {c['size']:3d} memories  [{tags}]")
+        print()
 
     d = analysis['strength_distribution']
     print(f"STRENGTH DISTRIBUTION (statistical fingerprint):")
@@ -618,7 +788,7 @@ def cmd_clusters():
     """Show cluster analysis."""
     graph = build_graph()
     clusters = detect_clusters(graph)
-    print(f"Cognitive Clusters ({len(clusters)} domains):\n")
+    print(f"Graph Clusters ({len(clusters)} at P90 threshold):\n")
     for i, c in enumerate(clusters[:15]):
         tags = ', '.join(c['top_tags'][:5])
         members = ', '.join(c['members'][:5])
@@ -626,6 +796,38 @@ def cmd_clusters():
         print(f"  Cluster {i+1} ({c['size']} memories): [{tags}]")
         print(f"    Members: {members}{more}")
         print()
+
+
+def cmd_domains():
+    """Show cognitive domain decomposition."""
+    graph = build_graph()
+    result = compute_cognitive_domains(graph)
+
+    domains = result.get('domains', {})
+    if not domains:
+        print("No domain data available.")
+        return
+
+    print(f"COGNITIVE DOMAINS — DriftCornwall")
+    print(f"{'=' * 55}")
+    print(f"Where my thinking lives\n")
+
+    for domain in sorted(domains.keys(), key=lambda d: domains[d]['weight_pct'], reverse=True):
+        ds = domains[domain]
+        bar = '#' * int(ds['weight_pct'] / 2)
+        print(f"  {domain:12s}  {ds['memory_count']:3d} memories  {ds['weight_pct']:5.1f}% weight  {bar}")
+        if ds.get('top_hubs'):
+            print(f"    Top hubs: {', '.join(ds['top_hubs'][:3])}")
+    print()
+
+    inter = result.get('inter_domain', {})
+    if inter:
+        print(f"INTER-DOMAIN CONNECTIONS (cognitive integration):")
+        for pair, weight in list(inter.items())[:8]:
+            total = result.get('total_weight', 1)
+            pct = weight / total * 100 if total > 0 else 0
+            print(f"  {pair:30s}  {weight:8.1f}  ({pct:.1f}%)")
+    print()
 
 
 def cmd_attest():
@@ -638,7 +840,7 @@ def cmd_attest():
     with open(attest_file, 'w', encoding='utf-8') as f:
         json.dump(attestation, f, indent=2)
 
-    print(f"COGNITIVE FINGERPRINT ATTESTATION")
+    print(f"COGNITIVE FINGERPRINT ATTESTATION (v1.1)")
     print(f"{'=' * 50}")
     print(f"Agent:       {attestation['agent']}")
     print(f"Timestamp:   {attestation['timestamp']}")
@@ -647,6 +849,10 @@ def cmd_attest():
     print(f"Graph:       {attestation['graph_stats']['node_count']} nodes, {attestation['graph_stats']['edge_count']} edges")
     print(f"Clusters:    {attestation['cluster_count']}")
     print(f"Top Hubs:    {', '.join(attestation['hub_ids'][:5])}")
+    domain_w = attestation.get('cognitive_domain_weights', {})
+    if domain_w:
+        parts = [f"{d}={w}%" for d, w in sorted(domain_w.items(), key=lambda x: x[1], reverse=True)]
+        print(f"Domains:     {', '.join(parts)}")
     if 'drift_score' in attestation:
         print(f"Drift:       {attestation['drift_score']} ({attestation['drift_interpretation']})")
     print()
@@ -676,6 +882,13 @@ def cmd_drift():
         print(f"  Lost hubs: {', '.join(drift['hub_lost'])}")
     print()
     print(f"Distribution Drift: {drift['distribution_drift']}")
+    print(f"Domain Drift: {drift.get('domain_drift', 'N/A')}")
+    domain_changes = drift.get('domain_changes', {})
+    if domain_changes:
+        print(f"  Domain shifts:")
+        for domain, diff in sorted(domain_changes.items(), key=lambda x: abs(x[1]), reverse=True):
+            direction = '+' if diff > 0 else ''
+            print(f"    {domain}: {direction}{diff}%")
     print(f"Cluster Drift: {drift['cluster_drift']}")
 
 
@@ -696,11 +909,13 @@ if __name__ == '__main__':
         cmd_pairs(n)
     elif command == 'clusters':
         cmd_clusters()
+    elif command == 'domains':
+        cmd_domains()
     elif command == 'attest':
         cmd_attest()
     elif command == 'drift':
         cmd_drift()
     else:
         print(f"Unknown command: {command}")
-        print("Commands: analyze, hubs [N], pairs [N], clusters, attest, drift")
+        print("Commands: analyze, hubs [N], pairs [N], clusters, domains, attest, drift")
         sys.exit(1)
