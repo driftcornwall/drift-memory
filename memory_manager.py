@@ -22,6 +22,13 @@ from pathlib import Path
 from typing import Optional
 from collections import Counter
 
+# Rejection log integration — auto-capture memory decay as taste signal
+try:
+    from rejection_log import log_rejection as _log_taste_rejection
+except ImportError:
+    def _log_taste_rejection(**kwargs):
+        pass
+
 MEMORY_ROOT = Path(__file__).parent
 CORE_DIR = MEMORY_ROOT / "core"
 ACTIVE_DIR = MEMORY_ROOT / "active"
@@ -856,6 +863,19 @@ def decay_pair_cooccurrences() -> tuple[int, int]:
 
     # Log for stats tracking (PR #3: SpindriftMend)
     log_decay_event(decayed, pruned)
+
+    # Auto-log pruned pairs as taste signal (rejection_log integration)
+    if pruned > 0:
+        try:
+            _log_taste_rejection(
+                category='memory_decay',
+                reason=f'{pruned} co-occurrence pairs pruned — associations faded from disuse',
+                target=f'session decay: {decayed} weakened, {pruned} forgotten',
+                tags=['auto-decay', 'co-occurrence-prune'],
+                source='internal',
+            )
+        except Exception:
+            pass  # Never let rejection logging break the core system
 
     print(f"Pair decay: {decayed} decayed, {pruned} pruned")
     return decayed, pruned
