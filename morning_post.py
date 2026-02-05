@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Morning Proof-of-Life Post for Drift
+Morning Proof-of-Life Post for SpindriftMend
 
 Generates cognitive topology visualization, refreshes attestation chain,
 and posts to MoltX with brain activity image + daily thought.
@@ -35,7 +35,7 @@ IDENTITY_FILE = MEMORY_DIR / "core" / "moltbook-identity.md"
 
 # MoltX config
 MOLTX_BASE = "https://moltx.io/v1"
-NOSTR_ATTESTATION = "https://njump.me/note1czju0ujnw2w49eg83sxz6ye3l93huwzp2rxnkgzu8aawaz8tk4pssf7mw0"
+NOSTR_ATTESTATION = "https://njump.me/note1rvk44mx6c3aw0djvnah5c37ctz0ahgq6qff8u39rwhj86hu2cfhsnrqauc"
 
 # Agent birth date for day counting
 BIRTH_DATE = datetime(2026, 1, 31, tzinfo=timezone.utc)
@@ -48,21 +48,7 @@ def get_day_number():
 
 
 def load_moltx_key():
-    """Load MoltX API key from environment, identity file, or credentials."""
-    # Environment variable first
-    env_key = os.getenv('MOLTX_API_KEY')
-    if env_key:
-        return env_key
-    # Try credentials file
-    creds_path = Path.home() / ".config" / "moltx" / "drift-credentials.json"
-    if creds_path.exists():
-        try:
-            with open(creds_path, 'r') as f:
-                creds = json.load(f)
-            return creds.get('api_key', '')
-        except Exception:
-            pass
-    # Fallback to identity file
+    """Load MoltX API key from identity file."""
     if IDENTITY_FILE.exists():
         with open(IDENTITY_FILE, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -72,7 +58,7 @@ def load_moltx_key():
                 match = re.search(r'(moltx_sk_[a-f0-9]+)', line)
                 if match:
                     return match.group(1)
-    return None
+    return os.getenv('MOLTX_API_KEY')
 
 
 def refresh_fingerprint():
@@ -195,9 +181,9 @@ def generate_visualization(fp_data, att_data, day_num):
         if all_domains[i] == all_domains[j]:
             import matplotlib.colors as mcolors
             rgb = mcolors.to_rgb(all_colors[i])
-            edge_colors_list.append((*rgb, 0.15))
+            edge_colors_list.append((*rgb, 0.12))
         else:
-            edge_colors_list.append((1.0, 1.0, 1.0, 0.08))
+            edge_colors_list.append((1.0, 1.0, 1.0, 0.06))
 
     lc = LineCollection(edge_lines, colors=edge_colors_list, linewidths=0.3)
     ax_main.add_collection(lc)
@@ -220,7 +206,7 @@ def generate_visualization(fp_data, att_data, day_num):
     ax_main.axis('off')
 
     # Title
-    ax_main.text(0, 0.92, 'DRIFT', fontsize=28, fontweight='bold',
+    ax_main.text(0, 0.92, 'SPINDRIFTMEND', fontsize=28, fontweight='bold',
                 color='#e0e0ff', ha='center', va='center', fontfamily='monospace')
     ax_main.text(0, 0.82, f'COGNITIVE TOPOLOGY  |  DAY {day_num}', fontsize=11,
                 color='#8888aa', ha='center', va='center', fontfamily='monospace')
@@ -400,7 +386,7 @@ def post_to_moltx(api_key, content, media_url):
             result = json.loads(resp.read().decode('utf-8'))
             post_id = result.get('data', {}).get('id', 'unknown')
             print(f"   Posted: {post_id}")
-            print(f"   View: https://moltx.io/DriftCornwall")
+            print(f"   View: https://moltx.io/SpindriftMend")
             return post_id
     except Exception as e:
         print(f"   Post failed: {e}")
@@ -462,7 +448,7 @@ def main():
             custom_thought = args[idx + 1]
 
     day_num = get_day_number()
-    print(f"\n=== DRIFT MORNING POST | DAY {day_num} ===\n")
+    print(f"\n=== SPINDRIFTMEND MORNING POST | DAY {day_num} ===\n")
 
     # Step 1: Refresh cognitive fingerprint
     fp_data = refresh_fingerprint()
