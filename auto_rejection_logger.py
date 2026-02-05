@@ -24,6 +24,50 @@ from typing import Dict, List, Tuple, Optional
 
 MEMORY_DIR = Path(__file__).parent
 REJECTION_LOG = MEMORY_DIR / ".rejection_log.json"
+SESSION_FILE = MEMORY_DIR / ".session_state.json"
+SESSION_PLATFORMS_FILE = MEMORY_DIR / ".session_platforms.json"
+
+
+def _get_session_context() -> Dict:
+    """
+    Get current session context for dimensional rejection logging.
+    Returns: {activity, platforms, active_memories}
+    """
+    context = {
+        "activity": None,
+        "platforms": [],
+        "active_memories": [],
+    }
+
+    # Get session activity type
+    try:
+        from activity_context import get_session_activity
+        activity_data = get_session_activity()
+        if activity_data:
+            context["activity"] = activity_data.get("dominant")
+    except Exception:
+        pass
+
+    # Get session platforms
+    try:
+        if SESSION_PLATFORMS_FILE.exists():
+            data = json.loads(SESSION_PLATFORMS_FILE.read_text(encoding='utf-8'))
+            context["platforms"] = data.get("platforms", [])
+    except Exception:
+        pass
+
+    # Get recently active memories (what I was thinking about)
+    try:
+        if SESSION_FILE.exists():
+            data = json.loads(SESSION_FILE.read_text(encoding='utf-8'))
+            # Get last 5 recalled memories as context
+            retrieved = data.get("retrieved", [])
+            context["active_memories"] = retrieved[-5:] if retrieved else []
+    except Exception:
+        pass
+
+    return context
+
 
 # === SPAM DETECTION PATTERNS (cross-platform) ===
 
@@ -180,6 +224,9 @@ def log_rejections(rejections: List[Dict]) -> int:
         return 0
 
     try:
+        # Get session context for dimensional linking
+        session_context = _get_session_context()
+
         # Load existing log
         data = {"rejections": [], "stats": {}}
         if REJECTION_LOG.exists():
@@ -188,10 +235,17 @@ def log_rejections(rejections: List[Dict]) -> int:
             except:
                 pass
 
-        # Add timestamp to each rejection
+        # Add timestamp and session context to each rejection
         timestamp = datetime.now(timezone.utc).isoformat()
         for r in rejections:
             r["timestamp"] = timestamp
+            # Add dimensional context (Option C - contextual rejections)
+            if session_context.get("activity"):
+                r["session_activity"] = session_context["activity"]
+            if session_context.get("platforms"):
+                r["session_platforms"] = session_context["platforms"]
+            if session_context.get("active_memories"):
+                r["thinking_about"] = session_context["active_memories"]
 
         # Append rejections
         data["rejections"].extend(rejections)
