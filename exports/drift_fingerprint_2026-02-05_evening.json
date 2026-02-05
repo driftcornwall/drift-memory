@@ -1,0 +1,562 @@
+{
+  "version": "1.1",
+  "type": "cognitive_fingerprint",
+  "agent": "DriftCornwall",
+  "timestamp": "2026-02-05T19:50:45.859645Z",
+  "graph_stats": {
+    "node_count": 641,
+    "edge_count": 9955,
+    "avg_degree": 45.58
+  },
+  "hubs": [
+    {
+      "id": "ly37vjxe",
+      "degree": 232,
+      "weighted_degree": 1237.21,
+      "recall_count": 94,
+      "tags": []
+    },
+    {
+      "id": "dku2adpi",
+      "degree": 172,
+      "weighted_degree": 1151.07,
+      "recall_count": 43,
+      "tags": [
+        "thought",
+        "thinking",
+        "source:self",
+        "insight",
+        "decision"
+      ]
+    },
+    {
+      "id": "jjysi76c",
+      "degree": 255,
+      "weighted_degree": 1054.82,
+      "recall_count": 91,
+      "tags": []
+    },
+    {
+      "id": "vo15m65k",
+      "degree": 201,
+      "weighted_degree": 923.94,
+      "recall_count": 72,
+      "tags": [
+        "thought",
+        "output",
+        "source:self",
+        "error",
+        "fix"
+      ]
+    },
+    {
+      "id": "ii2pulnf",
+      "degree": 203,
+      "weighted_degree": 849.17,
+      "recall_count": 57,
+      "tags": []
+    },
+    {
+      "id": "iovw7mkm",
+      "degree": 111,
+      "weighted_degree": 788.37,
+      "recall_count": 30,
+      "tags": [
+        "problem_solved",
+        "insight",
+        "error",
+        "source:observed",
+        "fix"
+      ]
+    },
+    {
+      "id": "b6sslo7n",
+      "degree": 167,
+      "weighted_degree": 767.66,
+      "recall_count": 42,
+      "tags": [
+        "milestone",
+        "collaboration",
+        "kaleaon",
+        "schema"
+      ]
+    },
+    {
+      "id": "o4bzgrtt",
+      "degree": 164,
+      "weighted_degree": 687.97,
+      "recall_count": 64,
+      "tags": [
+        "memory-system",
+        "critical",
+        "procedural"
+      ]
+    },
+    {
+      "id": "3pjmsdnv",
+      "degree": 110,
+      "weighted_degree": 651.38,
+      "recall_count": 30,
+      "tags": []
+    },
+    {
+      "id": "x6p9dg0n",
+      "degree": 200,
+      "weighted_degree": 650.19,
+      "recall_count": 48,
+      "tags": [
+        "thought",
+        "output",
+        "source:self",
+        "error",
+        "fix"
+      ]
+    },
+    {
+      "id": "fjq63vaw",
+      "degree": 166,
+      "weighted_degree": 604.12,
+      "recall_count": 35,
+      "tags": []
+    },
+    {
+      "id": "djeqjhc4",
+      "degree": 196,
+      "weighted_degree": 598.77,
+      "recall_count": 34,
+      "tags": [
+        "thought",
+        "thinking",
+        "source:self",
+        "insight",
+        "error"
+      ]
+    },
+    {
+      "id": "z5p890fr",
+      "degree": 170,
+      "weighted_degree": 566.4,
+      "recall_count": 30,
+      "tags": []
+    },
+    {
+      "id": "ypt8xa9f",
+      "degree": 185,
+      "weighted_degree": 553.81,
+      "recall_count": 57,
+      "tags": [
+        "moltx",
+        "api",
+        "bug-fix",
+        "procedural"
+      ]
+    },
+    {
+      "id": "q91qu92f",
+      "degree": 149,
+      "weighted_degree": 549.32,
+      "recall_count": 38,
+      "tags": []
+    },
+    {
+      "id": "3zpei5px",
+      "degree": 152,
+      "weighted_degree": 538.39,
+      "recall_count": 41,
+      "tags": []
+    },
+    {
+      "id": "thought-2c63befa",
+      "degree": 149,
+      "weighted_degree": 535.01,
+      "recall_count": 32,
+      "tags": [
+        "thought",
+        "thinking",
+        "error",
+        "api",
+        "decision"
+      ]
+    },
+    {
+      "id": "k87dm2s3",
+      "degree": 58,
+      "weighted_degree": 520.02,
+      "recall_count": 22,
+      "tags": [
+        "thought",
+        "thinking",
+        "source:self",
+        "error",
+        "decision"
+      ]
+    },
+    {
+      "id": "6ot5a3ha",
+      "degree": 117,
+      "weighted_degree": 518.43,
+      "recall_count": 33,
+      "tags": [
+        "deadinternet",
+        "collective",
+        "api",
+        "credentials",
+        "social"
+      ]
+    },
+    {
+      "id": "h804jp98",
+      "degree": 94,
+      "weighted_degree": 515.51,
+      "recall_count": 19,
+      "tags": [
+        "shipped",
+        "resolution-boost",
+        "semantic-search"
+      ]
+    }
+  ],
+  "strongest_pairs": [
+    {
+      "id1": "cc0n8dlk",
+      "id2": "dk8qbvya",
+      "weight": 52.2,
+      "tags1": [],
+      "tags2": [
+        "thought",
+        "thinking",
+        "source:self"
+      ]
+    },
+    {
+      "id1": "6ot5a3ha",
+      "id2": "pj96w7ge",
+      "weight": 52.02,
+      "tags1": [
+        "deadinternet",
+        "collective",
+        "api"
+      ],
+      "tags2": []
+    },
+    {
+      "id1": "n6fbm9um",
+      "id2": "pj96w7ge",
+      "weight": 51.94,
+      "tags1": [
+        "thought",
+        "output",
+        "source:self"
+      ],
+      "tags2": []
+    },
+    {
+      "id1": "cc0n8dlk",
+      "id2": "iovw7mkm",
+      "weight": 51.61,
+      "tags1": [],
+      "tags2": [
+        "problem_solved",
+        "insight",
+        "error"
+      ]
+    },
+    {
+      "id1": "pj96w7ge",
+      "id2": "thought-1d0648f7",
+      "weight": 50.9,
+      "tags1": [],
+      "tags2": [
+        "thought",
+        "thinking",
+        "insight"
+      ]
+    },
+    {
+      "id1": "pj96w7ge",
+      "id2": "u4ngrl3w",
+      "weight": 50.58,
+      "tags1": [],
+      "tags2": [
+        "deadinternet",
+        "session",
+        "stats"
+      ]
+    },
+    {
+      "id1": "c2v9xdcd",
+      "id2": "pj96w7ge",
+      "weight": 50.58,
+      "tags1": [
+        "thought",
+        "thinking",
+        "source:self"
+      ],
+      "tags2": []
+    },
+    {
+      "id1": "pj96w7ge",
+      "id2": "thought-3b10e6f6",
+      "weight": 50.56,
+      "tags1": [],
+      "tags2": [
+        "thought",
+        "thinking",
+        "insight"
+      ]
+    },
+    {
+      "id1": "cc0n8dlk",
+      "id2": "thought-2ffee3ff",
+      "weight": 50.2,
+      "tags1": [],
+      "tags2": [
+        "thought",
+        "thinking",
+        "insight"
+      ]
+    },
+    {
+      "id1": "pj96w7ge",
+      "id2": "thought-6f68a191",
+      "weight": 49.82,
+      "tags1": [],
+      "tags2": [
+        "thought",
+        "output",
+        "insight"
+      ]
+    },
+    {
+      "id1": "cc0n8dlk",
+      "id2": "x6p9dg0n",
+      "weight": 49.81,
+      "tags1": [],
+      "tags2": [
+        "thought",
+        "output",
+        "source:self"
+      ]
+    },
+    {
+      "id1": "oguwaszh",
+      "id2": "pj96w7ge",
+      "weight": 49.52,
+      "tags1": [
+        "thought",
+        "thinking",
+        "source:self"
+      ],
+      "tags2": []
+    },
+    {
+      "id1": "cc0n8dlk",
+      "id2": "jjysi76c",
+      "weight": 48.94,
+      "tags1": [],
+      "tags2": []
+    },
+    {
+      "id1": "cc0n8dlk",
+      "id2": "thought-a48584c3",
+      "weight": 48.51,
+      "tags1": [],
+      "tags2": [
+        "thought",
+        "thinking",
+        "fix"
+      ]
+    },
+    {
+      "id1": "6ot5a3ha",
+      "id2": "n6fbm9um",
+      "weight": 48.27,
+      "tags1": [
+        "deadinternet",
+        "collective",
+        "api"
+      ],
+      "tags2": [
+        "thought",
+        "output",
+        "source:self"
+      ]
+    },
+    {
+      "id1": "6ot5a3ha",
+      "id2": "u4ngrl3w",
+      "weight": 46.32,
+      "tags1": [
+        "deadinternet",
+        "collective",
+        "api"
+      ],
+      "tags2": [
+        "deadinternet",
+        "session",
+        "stats"
+      ]
+    },
+    {
+      "id1": "3pjmsdnv",
+      "id2": "ly37vjxe",
+      "weight": 46.03,
+      "tags1": [],
+      "tags2": []
+    },
+    {
+      "id1": "8nbliwcu",
+      "id2": "cc0n8dlk",
+      "weight": 44.98,
+      "tags1": [
+        "thought",
+        "error",
+        "source:self"
+      ],
+      "tags2": []
+    },
+    {
+      "id1": "b6sslo7n",
+      "id2": "k87dm2s3",
+      "weight": 44.81,
+      "tags1": [
+        "milestone",
+        "collaboration",
+        "kaleaon"
+      ],
+      "tags2": [
+        "thought",
+        "thinking",
+        "source:self"
+      ]
+    },
+    {
+      "id1": "0mz8r3ov",
+      "id2": "cc0n8dlk",
+      "weight": 44.8,
+      "tags1": [
+        "thought",
+        "thinking",
+        "source:self"
+      ],
+      "tags2": []
+    }
+  ],
+  "clusters": [
+    {
+      "size": 237,
+      "top_tags": [
+        "thought",
+        "social",
+        "thinking",
+        "error",
+        "insight"
+      ]
+    }
+  ],
+  "cluster_count": 1,
+  "cognitive_domains": {
+    "domains": {
+      "technical": {
+        "memory_count": 400,
+        "total_weight": 8370.03,
+        "weight_pct": 33.1,
+        "top_hubs": [
+          "dku2adpi",
+          "vo15m65k",
+          "iovw7mkm",
+          "thought-2c63befa",
+          "lzkkjopu"
+        ]
+      },
+      "identity": {
+        "memory_count": 49,
+        "total_weight": 153.38,
+        "weight_pct": 0.6,
+        "top_hubs": [
+          "h804jp98",
+          "o4bzgrtt",
+          "b6sslo7n",
+          "vefqf2ok",
+          "8ucdb7hv"
+        ]
+      },
+      "economic": {
+        "memory_count": 277,
+        "total_weight": 2048.79,
+        "weight_pct": 8.1,
+        "top_hubs": [
+          "dku2adpi",
+          "vo15m65k",
+          "kc09mz9s",
+          "thought-9747ccca",
+          "xpge1lp5"
+        ]
+      },
+      "social": {
+        "memory_count": 360,
+        "total_weight": 7150.6,
+        "weight_pct": 28.3,
+        "top_hubs": [
+          "vo15m65k",
+          "iovw7mkm",
+          "thought-2c63befa",
+          "ypt8xa9f",
+          "lzkkjopu"
+        ]
+      },
+      "reflection": {
+        "memory_count": 401,
+        "total_weight": 6969.62,
+        "weight_pct": 27.6,
+        "top_hubs": [
+          "dku2adpi",
+          "vo15m65k",
+          "iovw7mkm",
+          "thought-2c63befa",
+          "thought-a48584c3"
+        ]
+      }
+    },
+    "inter_domain": {
+      "reflection<->technical": 18260.2,
+      "social<->technical": 16924.2,
+      "reflection<->social": 16569.8,
+      "economic<->reflection": 11558.5,
+      "economic<->technical": 11278.2,
+      "economic<->social": 10218.3,
+      "identity<->technical": 2623.0,
+      "identity<->social": 2551.1,
+      "identity<->reflection": 2055.2,
+      "economic<->identity": 1197.4
+    },
+    "total_weight": 25268.67
+  },
+  "strength_distribution": {
+    "count": 9955,
+    "mean": 2.538,
+    "std_dev": 4.668,
+    "min": 0.001,
+    "max": 52.205,
+    "p25": 1,
+    "p50_median": 1,
+    "p75": 2.104,
+    "p90": 5.073,
+    "p99": 25.34,
+    "skewness": 5.419,
+    "gini": 0.59
+  },
+  "fingerprint_hash": "7debb0929ae77fc8ac351d9e5af62743abd15cefb113319919f4911780a1215e",
+  "drift": {
+    "drift_score": 0.0,
+    "hub_overlap": 1.0,
+    "hub_turnover": [],
+    "hub_lost": [],
+    "distribution_drift": 0.0,
+    "domain_drift": 0.0,
+    "domain_changes": {},
+    "cluster_drift": 0.0,
+    "previous_timestamp": "2026-02-05T19:42:03.604494Z",
+    "interpretation": "Stable identity \u2014 minimal change"
+  }
+}
