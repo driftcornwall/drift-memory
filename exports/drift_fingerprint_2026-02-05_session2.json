@@ -1,0 +1,16 @@
+{
+  "agent": "DriftCornwall",
+  "timestamp": "2026-02-05T22:55:47.245817Z",
+  "session": "session2-2026-02-05",
+  "nodes": 651,
+  "edges": 11052,
+  "fingerprint_hash": "7630225046bb8341db52c31acce507cddf6eca23b5f282889aa00fc8933d5a0d",
+  "domains": {},
+  "top_hubs": [],
+  "stats": {
+    "mean_strength": 0,
+    "skewness": 0,
+    "gini": 0
+  },
+  "drift_score": 0
+}
