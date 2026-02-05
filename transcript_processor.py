@@ -62,6 +62,16 @@ SOCIAL_KEYWORDS = [
     "moltx", "moltbook", "github"
 ]
 
+# Reflective keywords - self-examination, identity, values
+# These create the reflective activity edges that were missing
+REFLECTIVE_KEYWORDS = [
+    "identity", "who i am", "my purpose", "my values", "self",
+    "fingerprint", "attestation", "dossier", "continuity",
+    "consciousness", "thinking about", "reflecting on", "my mind",
+    "what i've learned", "who am i", "my approach", "my philosophy",
+    "autonomy", "emergence", "drift score", "cognitive"
+]
+
 # Milestone keywords - these indicate something SHIPPED
 MILESTONE_KEYWORDS = [
     "shipped", "launched", "deployed", "live", "production", "released",
@@ -186,6 +196,14 @@ def compute_thought_salience(text: str) -> tuple[float, list[str]]:
             score += 0.15
             if "social" not in categories:
                 categories.append("social")
+            break
+
+    # Reflective content - self-examination, identity work
+    for keyword in REFLECTIVE_KEYWORDS:
+        if keyword in text_lower:
+            score += 0.2  # High value - this creates reflective edges
+            if "reflective" not in categories:
+                categories.append("reflective")
             break
 
     # Length bonus (substantive thoughts)

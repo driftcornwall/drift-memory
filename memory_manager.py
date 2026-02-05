@@ -365,6 +365,89 @@ def log_co_occurrences() -> int:
     return pairs_updated // 2
 
 
+def log_co_occurrences_v3() -> tuple[int, str]:
+    """
+    Log co-occurrences to edges_v3.json with activity context.
+    Layer 2.1 integration - tags edges with WHY they formed.
+
+    Returns: (pairs_updated, session_activity)
+    """
+    _load_session_state()
+    retrieved = list(_session_retrieved)
+    if len(retrieved) < 2:
+        return 0, None
+
+    # Get session activity context
+    session_activity = None
+    try:
+        from activity_context import get_session_activity
+        activity_data = get_session_activity()
+        session_activity = activity_data.get('dominant') if activity_data else None
+    except Exception:
+        pass
+
+    # Get session platforms
+    session_platforms = []
+    try:
+        from platform_context import get_session_platforms
+        session_platforms = get_session_platforms()
+    except Exception:
+        pass
+
+    # Load edges
+    edges = _load_edges_v3()
+    session_id = datetime.now(timezone.utc).isoformat()
+    pairs_updated = 0
+
+    for i, id1 in enumerate(retrieved):
+        for id2 in retrieved[i+1:]:
+            pair = tuple(sorted([id1, id2]))
+
+            # Create observation with activity context
+            obs = _create_observation(
+                source_type='session_recall',
+                weight=1.0,
+                trust_tier='self',
+                session_id=session_id,
+                agent='DriftCornwall',
+                platform=','.join(session_platforms) if session_platforms else None,
+                activity=session_activity
+            )
+
+            # Create or update edge
+            if pair not in edges:
+                edges[pair] = {
+                    'observations': [],
+                    'belief': 0.0,
+                    'last_updated': datetime.now(timezone.utc).isoformat(),
+                    'platform_context': {},
+                    'activity_context': {},
+                }
+
+            edges[pair]['observations'].append(obs)
+            edges[pair]['belief'] = aggregate_belief(edges[pair]['observations'])
+            edges[pair]['last_updated'] = datetime.now(timezone.utc).isoformat()
+
+            # Update platform context
+            if 'platform_context' not in edges[pair]:
+                edges[pair]['platform_context'] = {}
+            for plat in session_platforms:
+                edges[pair]['platform_context'][plat] = edges[pair]['platform_context'].get(plat, 0) + 1
+
+            # Update activity context (Layer 2.1)
+            if 'activity_context' not in edges[pair]:
+                edges[pair]['activity_context'] = {}
+            if session_activity:
+                edges[pair]['activity_context'][session_activity] = (
+                    edges[pair]['activity_context'].get(session_activity, 0) + 1
+                )
+
+            pairs_updated += 1
+
+    _save_edges_v3(edges)
+    return pairs_updated, session_activity
+
+
 def save_pending_cooccurrence() -> int:
     """
     v2.16: Fast session end - save retrieved IDs to pending file for deferred processing.
@@ -525,7 +608,8 @@ def _create_observation(
     session_id: Optional[str] = None,
     agent: str = 'DriftCornwall',
     platform: Optional[str] = None,
-    artifact_id: Optional[str] = None
+    artifact_id: Optional[str] = None,
+    activity: Optional[str] = None
 ) -> dict:
     """
     Create a new observation record.
@@ -538,8 +622,9 @@ def _create_observation(
         agent: Agent name who made the observation
         platform: Platform name if external (e.g., 'moltbook', 'github')
         artifact_id: Reference to source artifact (post_id, commit_hash, etc.)
+        activity: Activity context (e.g., 'technical', 'social', 'reflective')
     """
-    return {
+    obs = {
         'id': str(uuid.uuid4()),
         'observed_at': datetime.now(timezone.utc).isoformat(),
         'source': {
@@ -552,6 +637,9 @@ def _create_observation(
         'weight': weight,
         'trust_tier': trust_tier
     }
+    if activity:
+        obs['source']['activity'] = activity
+    return obs
 
 
 def aggregate_belief(observations: list[dict], decay_rate: float = 0.1) -> float:
@@ -879,6 +967,143 @@ def decay_pair_cooccurrences() -> tuple[int, int]:
 
     print(f"Pair decay: {decayed} decayed, {pruned} pruned")
     return decayed, pruned
+
+
+def _build_metadata_cache() -> dict[str, dict]:
+    """
+    Pre-load all memory metadata into a dict for fast lookup.
+    Used by decay_pair_cooccurrences_v3 to avoid per-edge file I/O.
+    """
+    cache = {}
+    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            metadata, _ = parse_memory_file(filepath)
+            memory_id = metadata.get('id')
+            if memory_id:
+                cache[memory_id] = metadata
+    return cache
+
+
+def _calculate_effective_decay_cached(
+    memory_id: str,
+    other_id: str,
+    metadata_cache: dict[str, dict]
+) -> float:
+    """
+    Calculate effective decay using pre-cached metadata.
+    Same logic as _calculate_effective_decay but O(1) lookup.
+    """
+    base_decay = PAIR_DECAY_RATE
+
+    # Access-weighted decay
+    if ACCESS_WEIGHTED_DECAY:
+        meta1 = metadata_cache.get(memory_id, {})
+        meta2 = metadata_cache.get(other_id, {})
+        recall_1 = meta1.get('recall_count', 0)
+        recall_2 = meta2.get('recall_count', 0)
+        avg_recall = (recall_1 + recall_2) / 2
+        base_decay = PAIR_DECAY_RATE / (1 + math.log(1 + avg_recall))
+
+    # Self-evolution adjustment (v2.13)
+    if SELF_EVOLUTION_ENABLED:
+        meta1 = metadata_cache.get(memory_id)
+        meta2 = metadata_cache.get(other_id)
+        mult1 = calculate_evolution_decay_multiplier(meta1) if meta1 else 1.0
+        mult2 = calculate_evolution_decay_multiplier(meta2) if meta2 else 1.0
+        evolution_mult = (mult1 + mult2) / 2
+        base_decay *= evolution_mult
+
+    return base_decay
+
+
+def decay_pair_cooccurrences_v3() -> tuple[int, int]:
+    """
+    Apply soft decay to edges in edges_v3.json.
+
+    O(n) version - pre-cache metadata, iterate edges in memory, single file save.
+    The old decay_pair_cooccurrences() is O(n²) because it does file I/O per edge.
+
+    Edges reinforced this session: no decay (already updated by log_co_occurrences_v3)
+    Edges not reinforced: decay belief by PAIR_DECAY_RATE (access-weighted if enabled)
+    Edges with belief <= 0: pruned from file
+
+    Returns: (edges_decayed, edges_pruned)
+
+    Credit: Optimization to fix O(n²) hang with 600+ memories (2026-02-05)
+    """
+    _load_session_state()
+
+    # Build set of pairs reinforced this session (same logic as old function)
+    retrieved = list(_session_retrieved)
+    reinforced_pairs = set()
+    for i, id1 in enumerate(retrieved):
+        for id2 in retrieved[i+1:]:
+            # Store normalized pair (sorted) for consistent lookup
+            reinforced_pairs.add(tuple(sorted([id1, id2])))
+
+    # Load all edges at once
+    edges = _load_edges_v3()
+    if not edges:
+        print("Pair decay (v3): 0 decayed, 0 pruned (no edges)")
+        return 0, 0
+
+    # Pre-cache all metadata for O(1) lookup during decay calculation
+    metadata_cache = _build_metadata_cache()
+
+    edges_decayed = 0
+    edges_pruned = 0
+    to_remove = []
+    now = datetime.now(timezone.utc).isoformat()
+
+    for pair_key, edge_data in edges.items():
+        # Normalize pair for comparison
+        normalized = tuple(sorted(pair_key))
+
+        if normalized not in reinforced_pairs:
+            # Calculate effective decay using cached metadata
+            effective_decay = _calculate_effective_decay_cached(
+                pair_key[0], pair_key[1], metadata_cache
+            )
+
+            # Decay the belief
+            old_belief = edge_data.get('belief', 1.0)
+            new_belief = old_belief - effective_decay
+
+            if new_belief <= 0:
+                to_remove.append(pair_key)
+                edges_pruned += 1
+            else:
+                edge_data['belief'] = new_belief
+                edge_data['last_updated'] = now
+                edges_decayed += 1
+
+    # Remove pruned edges
+    for pair_key in to_remove:
+        del edges[pair_key]
+
+    # Save once at the end
+    _save_edges_v3(edges)
+
+    # Log decay event for stats
+    log_decay_event(edges_decayed, edges_pruned)
+
+    # Auto-log pruned pairs as taste signal
+    if edges_pruned > 0:
+        try:
+            _log_taste_rejection(
+                category='memory_decay',
+                reason=f'{edges_pruned} co-occurrence edges pruned — associations faded from disuse',
+                target=f'session decay: {edges_decayed} weakened, {edges_pruned} forgotten',
+                tags=['auto-decay', 'co-occurrence-prune', 'v3'],
+                source='internal',
+            )
+        except Exception:
+            pass  # Never let rejection logging break the core system
+
+    print(f"Pair decay (v3): {edges_decayed} decayed, {edges_pruned} pruned")
+    return edges_decayed, edges_pruned
 
 
 def promote_hot_memories() -> list[str]:
@@ -2552,14 +2777,23 @@ if __name__ == "__main__":
             print("  LEADS TO: (none - no downstream effects yet)")
     elif cmd == "session-end":
         pairs = log_co_occurrences()
+        # Layer 2.1: Also log to edges_v3 with activity context
+        v3_pairs, session_activity = log_co_occurrences_v3()
         # v2.13: Auto-log retrieval outcomes for self-evolution
         evolution_results = auto_log_retrieval_outcomes()
-        decayed, pruned = decay_pair_cooccurrences()
+        decayed, pruned = decay_pair_cooccurrences_v3()  # v3: O(n) using edges_v3.json
         promoted = promote_hot_memories()  # v2.9: heat-based promotion
         retrieved = get_session_retrieved()
-        print(f"Session ended. {len(retrieved)} memories, {pairs} pairs reinforced, {decayed} decayed, {pruned} pruned, {len(promoted)} promoted.")
+        activity_str = f", activity={session_activity}" if session_activity else ""
+        print(f"Session ended. {len(retrieved)} memories, {pairs} pairs reinforced{activity_str}, {decayed} decayed, {pruned} pruned, {len(promoted)} promoted.")
         if any(evolution_results.values()):
             print(f"Evolution: {evolution_results['productive']} productive, {evolution_results['generative']} generative, {evolution_results['dead_end']} dead-ends")
+        # Clear session platforms for next session
+        try:
+            from platform_context import clear_session_platforms
+            clear_session_platforms()
+        except Exception:
+            pass
         clear_session()
         print("Session cleared.")
     elif cmd == "save-pending":
@@ -2568,7 +2802,7 @@ if __name__ == "__main__":
         print(f"Saved {count} memories for deferred co-occurrence processing.")
         print("Co-occurrences will be calculated at next session start.")
     elif cmd == "decay-pairs":
-        decayed, pruned = decay_pair_cooccurrences()
+        decayed, pruned = decay_pair_cooccurrences_v3()  # v3: O(n) using edges_v3.json
         print(f"Decay complete: {decayed} pairs decayed, {pruned} pairs pruned")
     elif cmd == "promote":
         promoted = promote_hot_memories()

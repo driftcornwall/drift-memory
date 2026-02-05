@@ -50,6 +50,10 @@ ACTIVE_DIR = MEMORY_DIR / "active"
 ARCHIVE_DIR = MEMORY_DIR / "archive"
 FINGERPRINT_FILE = MEMORY_DIR / "cognitive_fingerprint.json"
 FINGERPRINT_HISTORY = MEMORY_DIR / ".fingerprint_history.json"
+EDGES_V3_FILE = MEMORY_DIR / ".edges_v3.json"
+
+# Activity types for Layer 2.1 (ported from SpindriftMend)
+ACTIVITY_TYPES = ['social', 'technical', 'reflective', 'collaborative', 'exploratory', 'economic']
 
 
 def parse_memory_file(filepath: Path) -> tuple[dict, str]:
@@ -72,9 +76,14 @@ def parse_memory_file(filepath: Path) -> tuple[dict, str]:
     return metadata, content
 
 
-def build_graph() -> dict:
+def build_graph(activity_filter: str = None) -> dict:
     """
     Build the co-occurrence graph from all memory files.
+
+    Args:
+        activity_filter: Optional activity context to filter by (e.g., 'social',
+            'technical', 'reflective'). When set, uses activity_context from
+            edges_v3.json to build a context-specific topology.
 
     Returns:
         {
@@ -87,6 +96,7 @@ def build_graph() -> dict:
     adjacency = defaultdict(dict)
     edges = {}
 
+    # Load node metadata from memory files
     for directory in [CORE_DIR, ACTIVE_DIR]:
         if not directory.exists():
             continue
@@ -103,16 +113,49 @@ def build_graph() -> dict:
                 'emotional_weight': metadata.get('emotional_weight', 0.5),
             }
 
-            co_occurrences = metadata.get('co_occurrences', {})
-            for other_id, count in co_occurrences.items():
+    # Activity-filtered graph uses edges_v3.json with activity_context
+    if activity_filter and EDGES_V3_FILE.exists():
+        try:
+            with open(EDGES_V3_FILE, 'r', encoding='utf-8') as f:
+                edges_v3 = json.load(f)
+
+            for pair_key, edge_data in edges_v3.items():
+                activity_ctx = edge_data.get('activity_context', {})
+                count = activity_ctx.get(activity_filter, 0)
                 if count <= 0:
                     continue
-                adjacency[mem_id][other_id] = count
-                pair = tuple(sorted([mem_id, other_id]))
-                if pair not in edges:
-                    edges[pair] = count
-                else:
-                    edges[pair] = max(edges[pair], count)
+
+                # Parse pair key (format: "id1|id2")
+                id1, id2 = pair_key.split('|')
+                adjacency[id1][id2] = count
+                adjacency[id2][id1] = count
+                pair = tuple(sorted([id1, id2]))
+                edges[pair] = count
+
+        except Exception as e:
+            print(f"Warning: Could not load edges_v3.json for activity filter: {e}")
+
+    else:
+        # Standard graph from memory frontmatter
+        for directory in [CORE_DIR, ACTIVE_DIR]:
+            if not directory.exists():
+                continue
+            for filepath in directory.glob("*.md"):
+                metadata, _ = parse_memory_file(filepath)
+                mem_id = metadata.get('id')
+                if not mem_id:
+                    continue
+
+                co_occurrences = metadata.get('co_occurrences', {})
+                for other_id, count in co_occurrences.items():
+                    if count <= 0:
+                        continue
+                    adjacency[mem_id][other_id] = count
+                    pair = tuple(sorted([mem_id, other_id]))
+                    if pair not in edges:
+                        edges[pair] = count
+                    else:
+                        edges[pair] = max(edges[pair], count)
 
     return {
         'nodes': nodes,
@@ -400,6 +443,45 @@ def compute_strength_distribution(graph: dict) -> dict:
         'skewness': round(skewness, 3),
         'gini': round(gini, 3),
     }
+
+
+def activity_decomposition() -> dict:
+    """
+    Layer 2.1: Show how cognitive topology differs by activity context.
+
+    Builds a separate graph for each activity type using activity_context
+    from edges_v3.json, then compares their structure. This reveals HOW
+    your mind works differently in different modes — social engagement
+    vs technical work vs reflection.
+
+    Two agents with identical overall topology can still have completely
+    different activity decompositions. This is a strong identity signal.
+
+    Credit: SpindriftMend Layer 2.1 implementation (2026-02-05)
+    """
+    results = {}
+    for activity in ACTIVITY_TYPES:
+        filtered = build_graph(activity_filter=activity)
+        if not filtered['edges']:
+            continue
+
+        active_nodes = set()
+        for (id1, id2) in filtered['edges']:
+            active_nodes.add(id1)
+            active_nodes.add(id2)
+
+        adj = filtered['adjacency']
+        total_degree = sum(len(neighbors) for neighbors in adj.values())
+        num_nodes = max(len(adj), 1)
+
+        results[activity] = {
+            'edge_count': len(filtered['edges']),
+            'node_count': len(active_nodes),
+            'avg_degree': round(total_degree / num_nodes, 2),
+            'max_weight': round(max(filtered['edges'].values()), 2) if filtered['edges'] else 0,
+        }
+
+    return results
 
 
 def compute_fingerprint_hash(
@@ -915,7 +997,23 @@ if __name__ == '__main__':
         cmd_attest()
     elif command == 'drift':
         cmd_drift()
+    elif command == 'context':
+        act_decomp = activity_decomposition()
+        if not act_decomp:
+            print("No activity context data yet.")
+            print("Run: python activity_context.py backfill")
+            sys.exit(0)
+        print(f"ACTIVITY TOPOLOGY — Layer 2.1 (how my mind differs by context)")
+        print(f"{'=' * 65}")
+        print()
+        for activity, stats in sorted(act_decomp.items(), key=lambda x: -x[1]['edge_count']):
+            bar = '#' * min(40, stats['edge_count'] // 50)
+            print(f"  {activity:15s}  edges={stats['edge_count']:4d}  nodes={stats['node_count']:3d}  avg_deg={stats['avg_degree']:.1f}  max_wt={stats['max_weight']:.1f}  {bar}")
+        print()
+        total_ctx_edges = sum(s['edge_count'] for s in act_decomp.values())
+        print(f"  Total context-attributed edges: {total_ctx_edges}")
+        print(f"  Activity types with data: {len(act_decomp)}/{len(ACTIVITY_TYPES)}")
     else:
         print(f"Unknown command: {command}")
-        print("Commands: analyze, hubs [N], pairs [N], clusters, domains, attest, drift")
+        print("Commands: analyze, hubs [N], pairs [N], clusters, domains, attest, drift, context")
         sys.exit(1)
