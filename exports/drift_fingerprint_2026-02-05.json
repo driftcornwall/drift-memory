@@ -2,25 +2,25 @@
   "version": "1.1",
   "type": "cognitive_fingerprint",
   "agent": "DriftCornwall",
-  "timestamp": "2026-02-05T02:22:58.643775Z",
+  "timestamp": "2026-02-05T18:37:41.255963Z",
   "graph_stats": {
-    "node_count": 567,
-    "edge_count": 6810,
-    "avg_degree": 38.02
+    "node_count": 635,
+    "edge_count": 9656,
+    "avg_degree": 45.04
   },
   "hubs": [
     {
       "id": "ly37vjxe",
-      "degree": 247,
-      "weighted_degree": 1163.69,
-      "recall_count": 81,
+      "degree": 232,
+      "weighted_degree": 1237.21,
+      "recall_count": 92,
       "tags": []
     },
     {
       "id": "dku2adpi",
-      "degree": 149,
-      "weighted_degree": 1060.55,
-      "recall_count": 34,
+      "degree": 172,
+      "weighted_degree": 1151.07,
+      "recall_count": 41,
       "tags": [
         "thought",
         "thinking",
@@ -30,10 +30,17 @@
       ]
     },
     {
+      "id": "jjysi76c",
+      "degree": 251,
+      "weighted_degree": 1033.82,
+      "recall_count": 91,
+      "tags": []
+    },
+    {
       "id": "vo15m65k",
-      "degree": 193,
-      "weighted_degree": 904.89,
-      "recall_count": 68,
+      "degree": 201,
+      "weighted_degree": 923.94,
+      "recall_count": 72,
       "tags": [
         "thought",
         "output",
@@ -43,9 +50,16 @@
       ]
     },
     {
+      "id": "ii2pulnf",
+      "degree": 193,
+      "weighted_degree": 826.17,
+      "recall_count": 57,
+      "tags": []
+    },
+    {
       "id": "iovw7mkm",
-      "degree": 139,
-      "weighted_degree": 822.64,
+      "degree": 111,
+      "weighted_degree": 788.37,
       "recall_count": 30,
       "tags": [
         "problem_solved",
@@ -56,24 +70,10 @@
       ]
     },
     {
-      "id": "ii2pulnf",
-      "degree": 200,
-      "weighted_degree": 815.96,
-      "recall_count": 53,
-      "tags": []
-    },
-    {
-      "id": "jjysi76c",
-      "degree": 205,
-      "weighted_degree": 790.85,
-      "recall_count": 77,
-      "tags": []
-    },
-    {
       "id": "b6sslo7n",
-      "degree": 165,
-      "weighted_degree": 736.86,
-      "recall_count": 38,
+      "degree": 167,
+      "weighted_degree": 767.66,
+      "recall_count": 42,
       "tags": [
         "milestone",
         "collaboration",
@@ -83,9 +83,9 @@
     },
     {
       "id": "o4bzgrtt",
-      "degree": 156,
-      "weighted_degree": 596.58,
-      "recall_count": 46,
+      "degree": 164,
+      "weighted_degree": 687.97,
+      "recall_count": 64,
       "tags": [
         "memory-system",
         "critical",
@@ -93,49 +93,83 @@
       ]
     },
     {
+      "id": "x6p9dg0n",
+      "degree": 189,
+      "weighted_degree": 629.19,
+      "recall_count": 46,
+      "tags": [
+        "thought",
+        "output",
+        "source:self",
+        "error",
+        "fix"
+      ]
+    },
+    {
       "id": "3pjmsdnv",
-      "degree": 79,
-      "weighted_degree": 590.63,
-      "recall_count": 26,
+      "degree": 80,
+      "weighted_degree": 604.38,
+      "recall_count": 29,
       "tags": []
     },
     {
       "id": "fjq63vaw",
-      "degree": 146,
-      "weighted_degree": 589.84,
-      "recall_count": 31,
+      "degree": 166,
+      "weighted_degree": 604.12,
+      "recall_count": 35,
       "tags": []
     },
     {
-      "id": "x6p9dg0n",
-      "degree": 176,
-      "weighted_degree": 582.73,
-      "recall_count": 40,
+      "id": "djeqjhc4",
+      "degree": 191,
+      "weighted_degree": 574.77,
+      "recall_count": 34,
       "tags": [
         "thought",
-        "output",
+        "thinking",
         "source:self",
-        "error",
-        "fix"
+        "insight",
+        "error"
       ]
     },
     {
-      "id": "9nonxe1h",
-      "degree": 182,
-      "weighted_degree": 571.86,
+      "id": "z5p890fr",
+      "degree": 170,
+      "weighted_degree": 566.4,
+      "recall_count": 29,
+      "tags": []
+    },
+    {
+      "id": "q91qu92f",
+      "degree": 149,
+      "weighted_degree": 549.32,
+      "recall_count": 38,
+      "tags": []
+    },
+    {
+      "id": "3zpei5px",
+      "degree": 152,
+      "weighted_degree": 538.39,
+      "recall_count": 41,
+      "tags": []
+    },
+    {
+      "id": "thought-2c63befa",
+      "degree": 149,
+      "weighted_degree": 535.01,
       "recall_count": 32,
       "tags": [
         "thought",
-        "output",
-        "source:self",
+        "thinking",
         "error",
-        "fix"
+        "api",
+        "decision"
       ]
     },
     {
       "id": "k87dm2s3",
-      "degree": 63,
-      "weighted_degree": 534.57,
+      "degree": 58,
+      "weighted_degree": 520.02,
       "recall_count": 22,
       "tags": [
         "thought",
@@ -146,54 +180,35 @@
       ]
     },
     {
-      "id": "h804jp98",
-      "degree": 77,
-      "weighted_degree": 499.39,
-      "recall_count": 16,
+      "id": "6ot5a3ha",
+      "degree": 117,
+      "weighted_degree": 518.43,
+      "recall_count": 33,
       "tags": [
-        "shipped",
-        "resolution-boost",
-        "semantic-search"
+        "deadinternet",
+        "collective",
+        "api",
+        "credentials",
+        "social"
       ]
     },
     {
-      "id": "q91qu92f",
-      "degree": 127,
-      "weighted_degree": 470.71,
-      "recall_count": 31,
-      "tags": []
-    },
-    {
-      "id": "y9tlfb3u",
-      "degree": 87,
-      "weighted_degree": 446.56,
-      "recall_count": 10,
+      "id": "ypt8xa9f",
+      "degree": 166,
+      "weighted_degree": 512.81,
+      "recall_count": 56,
       "tags": [
-        "session",
-        "spindriftmend",
-        "github",
-        "moltbook"
+        "moltx",
+        "api",
+        "bug-fix",
+        "procedural"
       ]
-    },
-    {
-      "id": "z5p890fr",
-      "degree": 148,
-      "weighted_degree": 424.19,
-      "recall_count": 26,
-      "tags": []
-    },
-    {
-      "id": "3zpei5px",
-      "degree": 108,
-      "weighted_degree": 423.55,
-      "recall_count": 36,
-      "tags": []
     },
     {
       "id": "thought-a48584c3",
-      "degree": 123,
-      "weighted_degree": 418.82,
-      "recall_count": 24,
+      "degree": 153,
+      "weighted_degree": 509.37,
+      "recall_count": 29,
       "tags": [
         "thought",
         "thinking",
@@ -201,26 +216,13 @@
         "api",
         "decision"
       ]
-    },
-    {
-      "id": "djeqjhc4",
-      "degree": 150,
-      "weighted_degree": 394.28,
-      "recall_count": 26,
-      "tags": [
-        "thought",
-        "thinking",
-        "source:self",
-        "insight",
-        "error"
-      ]
     }
   ],
   "strongest_pairs": [
     {
       "id1": "cc0n8dlk",
       "id2": "dk8qbvya",
-      "weight": 52.46,
+      "weight": 52.2,
       "tags1": [],
       "tags2": [
         "thought",
@@ -231,7 +233,7 @@
     {
       "id1": "6ot5a3ha",
       "id2": "pj96w7ge",
-      "weight": 52.41,
+      "weight": 52.02,
       "tags1": [
         "deadinternet",
         "collective",
@@ -242,7 +244,7 @@
     {
       "id1": "n6fbm9um",
       "id2": "pj96w7ge",
-      "weight": 52.35,
+      "weight": 51.94,
       "tags1": [
         "thought",
         "output",
@@ -253,7 +255,7 @@
     {
       "id1": "cc0n8dlk",
       "id2": "iovw7mkm",
-      "weight": 51.94,
+      "weight": 51.61,
       "tags1": [],
       "tags2": [
         "problem_solved",
@@ -264,7 +266,7 @@
     {
       "id1": "pj96w7ge",
       "id2": "thought-1d0648f7",
-      "weight": 51.34,
+      "weight": 50.9,
       "tags1": [],
       "tags2": [
         "thought",
@@ -275,7 +277,7 @@
     {
       "id1": "pj96w7ge",
       "id2": "u4ngrl3w",
-      "weight": 51.29,
+      "weight": 50.58,
       "tags1": [],
       "tags2": [
         "deadinternet",
@@ -286,7 +288,7 @@
     {
       "id1": "c2v9xdcd",
       "id2": "pj96w7ge",
-      "weight": 51.29,
+      "weight": 50.58,
       "tags1": [
         "thought",
         "thinking",
@@ -297,7 +299,7 @@
     {
       "id1": "pj96w7ge",
       "id2": "thought-3b10e6f6",
-      "weight": 50.96,
+      "weight": 50.56,
       "tags1": [],
       "tags2": [
         "thought",
@@ -308,7 +310,7 @@
     {
       "id1": "cc0n8dlk",
       "id2": "thought-2ffee3ff",
-      "weight": 50.58,
+      "weight": 50.2,
       "tags1": [],
       "tags2": [
         "thought",
@@ -319,7 +321,7 @@
     {
       "id1": "pj96w7ge",
       "id2": "thought-6f68a191",
-      "weight": 50.41,
+      "weight": 49.82,
       "tags1": [],
       "tags2": [
         "thought",
@@ -330,7 +332,7 @@
     {
       "id1": "cc0n8dlk",
       "id2": "x6p9dg0n",
-      "weight": 49.91,
+      "weight": 49.81,
       "tags1": [],
       "tags2": [
         "thought",
@@ -341,7 +343,7 @@
     {
       "id1": "oguwaszh",
       "id2": "pj96w7ge",
-      "weight": 49.85,
+      "weight": 49.52,
       "tags1": [
         "thought",
         "thinking",
@@ -352,14 +354,14 @@
     {
       "id1": "cc0n8dlk",
       "id2": "jjysi76c",
-      "weight": 49.12,
+      "weight": 48.94,
       "tags1": [],
       "tags2": []
     },
     {
       "id1": "cc0n8dlk",
       "id2": "thought-a48584c3",
-      "weight": 48.85,
+      "weight": 48.51,
       "tags1": [],
       "tags2": [
         "thought",
@@ -370,7 +372,7 @@
     {
       "id1": "6ot5a3ha",
       "id2": "n6fbm9um",
-      "weight": 47.58,
+      "weight": 48.27,
       "tags1": [
         "deadinternet",
         "collective",
@@ -385,7 +387,7 @@
     {
       "id1": "6ot5a3ha",
       "id2": "u4ngrl3w",
-      "weight": 45.58,
+      "weight": 46.32,
       "tags1": [
         "deadinternet",
         "collective",
@@ -398,9 +400,16 @@
       ]
     },
     {
+      "id1": "3pjmsdnv",
+      "id2": "ly37vjxe",
+      "weight": 46.03,
+      "tags1": [],
+      "tags2": []
+    },
+    {
       "id1": "8nbliwcu",
       "id2": "cc0n8dlk",
-      "weight": 45.4,
+      "weight": 44.98,
       "tags1": [
         "thought",
         "error",
@@ -409,20 +418,9 @@
       "tags2": []
     },
     {
-      "id1": "0mz8r3ov",
-      "id2": "cc0n8dlk",
-      "weight": 45.25,
-      "tags1": [
-        "thought",
-        "thinking",
-        "source:self"
-      ],
-      "tags2": []
-    },
-    {
       "id1": "b6sslo7n",
       "id2": "k87dm2s3",
-      "weight": 45,
+      "weight": 44.81,
       "tags1": [
         "milestone",
         "collaboration",
@@ -435,20 +433,20 @@
       ]
     },
     {
-      "id1": "cc0n8dlk",
-      "id2": "thought-8e6305ae",
-      "weight": 44.65,
-      "tags1": [],
-      "tags2": [
+      "id1": "0mz8r3ov",
+      "id2": "cc0n8dlk",
+      "weight": 44.8,
+      "tags1": [
         "thought",
         "thinking",
-        "insight"
-      ]
+        "source:self"
+      ],
+      "tags2": []
     }
   ],
   "clusters": [
     {
-      "size": 197,
+      "size": 233,
       "top_tags": [
         "thought",
         "social",
@@ -462,20 +460,20 @@
   "cognitive_domains": {
     "domains": {
       "technical": {
-        "memory_count": 350,
-        "total_weight": 5921.45,
-        "weight_pct": 29.4,
+        "memory_count": 397,
+        "total_weight": 8182.03,
+        "weight_pct": 33.0,
         "top_hubs": [
           "dku2adpi",
-          "iovw7mkm",
           "vo15m65k",
-          "k87dm2s3",
-          "x6p9dg0n"
+          "iovw7mkm",
+          "thought-2c63befa",
+          "lzkkjopu"
         ]
       },
       "identity": {
-        "memory_count": 41,
-        "total_weight": 121.15,
+        "memory_count": 49,
+        "total_weight": 143.38,
         "weight_pct": 0.6,
         "top_hubs": [
           "h804jp98",
@@ -486,88 +484,81 @@
         ]
       },
       "economic": {
-        "memory_count": 239,
-        "total_weight": 1282.93,
-        "weight_pct": 6.4,
+        "memory_count": 274,
+        "total_weight": 2003.79,
+        "weight_pct": 8.1,
         "top_hubs": [
           "dku2adpi",
           "vo15m65k",
-          "xpge1lp5",
           "thought-9747ccca",
-          "wqf2viyb"
+          "xpge1lp5",
+          "695skrar"
         ]
       },
       "social": {
-        "memory_count": 309,
-        "total_weight": 4692.16,
-        "weight_pct": 23.3,
+        "memory_count": 356,
+        "total_weight": 6911.6,
+        "weight_pct": 27.9,
         "top_hubs": [
           "vo15m65k",
           "iovw7mkm",
-          "k87dm2s3",
-          "b6sslo7n",
-          "x6p9dg0n"
+          "thought-2c63befa",
+          "lzkkjopu",
+          "k87dm2s3"
         ]
       },
       "reflection": {
-        "memory_count": 347,
-        "total_weight": 5045.48,
-        "weight_pct": 25.0,
+        "memory_count": 398,
+        "total_weight": 6793.62,
+        "weight_pct": 27.4,
         "top_hubs": [
           "dku2adpi",
-          "iovw7mkm",
           "vo15m65k",
-          "x6p9dg0n",
-          "k87dm2s3"
+          "iovw7mkm",
+          "thought-2c63befa",
+          "thought-a48584c3"
         ]
       }
     },
     "inter_domain": {
-      "reflection<->technical": 13935.9,
-      "social<->technical": 12406.3,
-      "reflection<->social": 12183.6,
-      "economic<->reflection": 8476.4,
-      "economic<->technical": 8234.8,
-      "economic<->social": 7281.1,
-      "identity<->technical": 1978.2,
-      "identity<->social": 1813.0,
-      "identity<->reflection": 1484.0,
-      "economic<->identity": 838.5
+      "reflection<->technical": 17838.2,
+      "social<->technical": 16493.2,
+      "reflection<->social": 16146.8,
+      "economic<->reflection": 11300.5,
+      "economic<->technical": 11028.2,
+      "economic<->social": 9960.3,
+      "identity<->technical": 2525.0,
+      "identity<->social": 2439.1,
+      "identity<->reflection": 1962.2,
+      "economic<->identity": 1163.4
     },
-    "total_weight": 20151.96
+    "total_weight": 24766.67
   },
   "strength_distribution": {
-    "count": 6810,
-    "mean": 2.959,
-    "std_dev": 5.354,
-    "min": 0.0,
-    "max": 52.462,
-    "p25": 0.574,
-    "p50_median": 1.549,
-    "p75": 2.875,
-    "p90": 6.147,
-    "p99": 28.068,
-    "skewness": 4.659,
-    "gini": 0.638
+    "count": 9656,
+    "mean": 2.565,
+    "std_dev": 4.729,
+    "min": 0.001,
+    "max": 52.205,
+    "p25": 1,
+    "p50_median": 1,
+    "p75": 2.204,
+    "p90": 5.177,
+    "p99": 25.441,
+    "skewness": 5.349,
+    "gini": 0.594
   },
-  "fingerprint_hash": "cb81ad8ec4b5f65877a381d5dbcf3a36c76cd67d9e0a619f9699e98d90d0152f",
+  "fingerprint_hash": "1dfb39beff3d51b29984b189212a831cfe8ae50ace45d0ba7a511697fc774e61",
   "drift": {
-    "drift_score": 0.0435,
-    "hub_overlap": 0.9048,
-    "hub_turnover": [
-      "k87dm2s3"
-    ],
-    "hub_lost": [
-      "6ot5a3ha"
-    ],
-    "distribution_drift": 0.0059,
-    "domain_drift": 0.0156,
-    "domain_changes": {
-      "social": 1.0,
-      "technical": 0.6
-    },
+    "drift_score": 0.0,
+    "hub_overlap": 1.0,
+    "hub_turnover": [],
+    "hub_lost": [],
+    "distribution_drift": 0.0,
+    "domain_drift": 0.0,
+    "domain_changes": {},
     "cluster_drift": 0.0,
-    "previous_timestamp": "2026-02-05T02:03:23.326348Z",
+    "previous_timestamp": "2026-02-05T18:36:26.335748Z",
     "interpretation": "Stable identity \u2014 minimal change"
   }
 }
