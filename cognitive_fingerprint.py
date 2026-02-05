@@ -736,6 +736,216 @@ def generate_attestation() -> dict:
     return attestation
 
 
+def generate_5w_hashes() -> dict:
+    """
+    Generate hashes for each 5W dimension.
+
+    The 5W Identity Framework:
+    - WHO: Contact relationship topology
+    - WHAT: Topic/domain distribution
+    - WHY: Activity pattern signature
+    - WHERE: Platform usage fingerprint
+    - WHEN: Temporal patterns
+
+    Each hash captures the shape of that dimension, enabling:
+    - Per-dimension verification
+    - Cross-dimensional correlation analysis
+    - Partial identity proofs
+    """
+    hashes = {}
+
+    # WHO: Contact distribution hash
+    try:
+        from contact_context import get_contact_stats
+        stats = get_contact_stats()
+        who_data = {c: d['count'] for c, d in stats.get('by_contact', {}).items()}
+        who_str = json.dumps(sorted(who_data.items()), sort_keys=True)
+        hashes['who'] = {
+            'hash': hashlib.sha256(who_str.encode()).hexdigest()[:16],
+            'contacts': len(who_data),
+            'top3': list(sorted(who_data.keys(), key=lambda x: -who_data[x]))[:3]
+        }
+    except Exception as e:
+        hashes['who'] = {'hash': None, 'error': str(e)}
+
+    # WHAT: Topic distribution hash
+    try:
+        from topic_context import get_topic_stats
+        stats = get_topic_stats()
+        what_data = {t: d['count'] for t, d in stats.get('by_topic', {}).items()}
+        what_str = json.dumps(sorted(what_data.items()), sort_keys=True)
+        hashes['what'] = {
+            'hash': hashlib.sha256(what_str.encode()).hexdigest()[:16],
+            'topics': len(what_data),
+            'distribution': {k: round(v/stats['total']*100, 1) for k, v in what_data.items()}
+        }
+    except Exception as e:
+        hashes['what'] = {'hash': None, 'error': str(e)}
+
+    # WHY: Activity pattern hash
+    try:
+        from activity_context import get_activity_stats
+        stats = get_activity_stats()
+        why_data = stats.get('by_activity', {})
+        why_str = json.dumps(sorted(why_data.items()), sort_keys=True)
+        hashes['why'] = {
+            'hash': hashlib.sha256(why_str.encode()).hexdigest()[:16],
+            'activities': len(why_data),
+            'pattern': why_data
+        }
+    except Exception as e:
+        hashes['why'] = {'hash': None, 'error': str(e)}
+
+    # WHERE: Platform distribution hash
+    try:
+        from platform_context import get_platform_stats
+        stats = get_platform_stats()
+        where_data = stats.get('platform_counts', {})
+        where_str = json.dumps(sorted(where_data.items()), sort_keys=True)
+        hashes['where'] = {
+            'hash': hashlib.sha256(where_str.encode()).hexdigest()[:16],
+            'platforms': len(where_data),
+            'distribution': where_data
+        }
+    except Exception as e:
+        hashes['where'] = {'hash': None, 'error': str(e)}
+
+    # WHEN: Temporal pattern hash (session timing patterns)
+    try:
+        history = []
+        if FINGERPRINT_HISTORY.exists():
+            with open(FINGERPRINT_HISTORY, 'r', encoding='utf-8') as f:
+                history = json.load(f)
+
+        # Extract hour distribution from attestation history
+        hour_counts = Counter()
+        for entry in history[-50:]:  # Last 50 attestations
+            ts = entry.get('timestamp', '')
+            if 'T' in ts:
+                try:
+                    hour = int(ts.split('T')[1][:2])
+                    hour_counts[hour] += 1
+                except:
+                    pass
+
+        when_str = json.dumps(sorted(hour_counts.items()), sort_keys=True)
+        hashes['when'] = {
+            'hash': hashlib.sha256(when_str.encode()).hexdigest()[:16],
+            'sessions_analyzed': len(history),
+            'peak_hours': [h for h, c in hour_counts.most_common(3)]
+        }
+    except Exception as e:
+        hashes['when'] = {'hash': None, 'error': str(e)}
+
+    # Cross-dimensional correlation hash
+    all_hashes = [h.get('hash', '') for h in hashes.values() if h.get('hash')]
+    combined = '|'.join(sorted(all_hashes))
+    hashes['correlation'] = {
+        'hash': hashlib.sha256(combined.encode()).hexdigest()[:16],
+        'dimensions': len(all_hashes)
+    }
+
+    return hashes
+
+
+SOCIAL_PROOF_FILE = MEMORY_DIR / ".social_proofs.json"
+
+
+def load_social_proofs() -> list:
+    """Load existing social proof attestations."""
+    if not SOCIAL_PROOF_FILE.exists():
+        return []
+    try:
+        with open(SOCIAL_PROOF_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except:
+        return []
+
+
+def save_social_proof(proof: dict):
+    """Save a new social proof attestation."""
+    proofs = load_social_proofs()
+    proofs.append(proof)
+    with open(SOCIAL_PROOF_FILE, 'w', encoding='utf-8') as f:
+        json.dump(proofs, f, indent=2)
+
+
+def generate_relationship_attestation(
+    other_agent: str,
+    relationship_type: str = 'collaboration',
+    notes: str = ''
+) -> dict:
+    """
+    Generate attestation of relationship with another agent.
+
+    This creates the social proof layer - agents attesting to
+    knowing and working with each other.
+
+    Args:
+        other_agent: Username of the other agent
+        relationship_type: 'collaboration', 'mentorship', 'peer', etc.
+        notes: Optional context about the relationship
+
+    Returns attestation dict with signature.
+    """
+    from contact_context import get_contact_stats
+
+    # Get our interaction data with this agent
+    stats = get_contact_stats()
+    contact_data = stats.get('by_contact', {}).get(other_agent.lower(), {})
+
+    attestation = {
+        'version': '1.0',
+        'type': 'relationship_attestation',
+        'attester': 'DriftCornwall',
+        'attested_agent': other_agent,
+        'relationship_type': relationship_type,
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'evidence': {
+            'memories_mentioning': contact_data.get('count', 0),
+            'sample_memory_ids': contact_data.get('memories', [])[:3]
+        },
+        'notes': notes,
+        'attestation_hash': ''
+    }
+
+    # Self-sign
+    content = json.dumps({k: v for k, v in attestation.items() if k != 'attestation_hash'}, sort_keys=True)
+    attestation['attestation_hash'] = hashlib.sha256(content.encode()).hexdigest()
+
+    return attestation
+
+
+def generate_full_attestation() -> dict:
+    """
+    Generate complete attestation with all layers.
+
+    Includes:
+    - Core cognitive fingerprint
+    - 5W dimensional hashes
+    - Social proof summary
+    """
+    base_attestation = generate_attestation()
+    dimensional_hashes = generate_5w_hashes()
+    social_proofs = load_social_proofs()
+
+    full = {
+        **base_attestation,
+        'dimensional_hashes': dimensional_hashes,
+        'social_proof_summary': {
+            'relationships_attested': len(social_proofs),
+            'agents': list(set(p.get('attested_agent', '') for p in social_proofs))
+        },
+        'attestation_version': '2.0-5W'
+    }
+
+    # Recompute attestation hash with all data
+    content = json.dumps({k: v for k, v in full.items() if k != 'attestation_hash'}, sort_keys=True)
+    full['attestation_hash'] = hashlib.sha256(content.encode()).hexdigest()
+
+    return full
+
+
 def save_fingerprint(analysis: dict) -> None:
     """Save fingerprint as latest and append to history."""
     with open(FINGERPRINT_FILE, 'w', encoding='utf-8') as f:
@@ -913,30 +1123,67 @@ def cmd_domains():
 
 
 def cmd_attest():
-    """Generate and save formal attestation."""
+    """Generate and save formal attestation with 5W dimensions."""
     analysis = generate_full_analysis()
     save_fingerprint(analysis)
-    attestation = generate_attestation()
+    attestation = generate_full_attestation()  # Use full 5W attestation
 
     attest_file = MEMORY_DIR / "cognitive_attestation.json"
     with open(attest_file, 'w', encoding='utf-8') as f:
         json.dump(attestation, f, indent=2)
 
-    print(f"COGNITIVE FINGERPRINT ATTESTATION (v1.1)")
-    print(f"{'=' * 50}")
+    print(f"COGNITIVE FINGERPRINT ATTESTATION (v2.0-5W)")
+    print(f"{'=' * 60}")
     print(f"Agent:       {attestation['agent']}")
     print(f"Timestamp:   {attestation['timestamp']}")
     print(f"Fingerprint: {attestation['fingerprint_hash']}")
-    print(f"Attest Hash: {attestation['attestation_hash']}")
+    print(f"Attest Hash: {attestation['attestation_hash'][:32]}...")
     print(f"Graph:       {attestation['graph_stats']['node_count']} nodes, {attestation['graph_stats']['edge_count']} edges")
     print(f"Clusters:    {attestation['cluster_count']}")
     print(f"Top Hubs:    {', '.join(attestation['hub_ids'][:5])}")
+
+    # Domain weights
     domain_w = attestation.get('cognitive_domain_weights', {})
     if domain_w:
         parts = [f"{d}={w}%" for d, w in sorted(domain_w.items(), key=lambda x: x[1], reverse=True)]
         print(f"Domains:     {', '.join(parts)}")
+
     if 'drift_score' in attestation:
         print(f"Drift:       {attestation['drift_score']} ({attestation['drift_interpretation']})")
+
+    # 5W Dimensional Hashes
+    print()
+    print(f"5W DIMENSIONAL HASHES:")
+    dh = attestation.get('dimensional_hashes', {})
+    for dim in ['who', 'what', 'why', 'where', 'when']:
+        d = dh.get(dim, {})
+        if d.get('hash'):
+            extra = ''
+            if dim == 'who':
+                extra = f" ({d.get('contacts', 0)} contacts)"
+            elif dim == 'what':
+                extra = f" ({d.get('topics', 0)} topics)"
+            elif dim == 'why':
+                extra = f" ({d.get('activities', 0)} activities)"
+            elif dim == 'where':
+                extra = f" ({d.get('platforms', 0)} platforms)"
+            elif dim == 'when':
+                extra = f" ({d.get('sessions_analyzed', 0)} sessions)"
+            print(f"  {dim.upper():6s}: {d['hash']}{extra}")
+        else:
+            print(f"  {dim.upper():6s}: (not available)")
+
+    corr = dh.get('correlation', {})
+    if corr.get('hash'):
+        print(f"  CORR:   {corr['hash']} (cross-dimensional)")
+
+    # Social proof
+    sp = attestation.get('social_proof_summary', {})
+    if sp.get('relationships_attested', 0) > 0:
+        print()
+        print(f"SOCIAL PROOF: {sp['relationships_attested']} relationships attested")
+        print(f"  Agents: {', '.join(sp.get('agents', []))}")
+
     print()
     print(f"Saved to: {attest_file}")
 
@@ -1013,6 +1260,76 @@ if __name__ == '__main__':
         total_ctx_edges = sum(s['edge_count'] for s in act_decomp.values())
         print(f"  Total context-attributed edges: {total_ctx_edges}")
         print(f"  Activity types with data: {len(act_decomp)}/{len(ACTIVITY_TYPES)}")
+
+    elif command == '5w':
+        # Show 5W dimensional hashes
+        print(f"5W IDENTITY DIMENSIONS")
+        print(f"{'=' * 60}")
+        hashes = generate_5w_hashes()
+        for dim in ['who', 'what', 'why', 'where', 'when']:
+            d = hashes.get(dim, {})
+            print(f"\n{dim.upper()} - {['Contacts', 'Topics', 'Activities', 'Platforms', 'Temporal'][['who', 'what', 'why', 'where', 'when'].index(dim)]}")
+            if d.get('hash'):
+                print(f"  Hash: {d['hash']}")
+                if dim == 'who':
+                    print(f"  Contacts: {d.get('contacts', 0)}")
+                    print(f"  Top 3: {', '.join(d.get('top3', []))}")
+                elif dim == 'what':
+                    print(f"  Topics: {d.get('topics', 0)}")
+                    for t, pct in sorted(d.get('distribution', {}).items(), key=lambda x: -x[1])[:5]:
+                        print(f"    {t}: {pct}%")
+                elif dim == 'why':
+                    print(f"  Activities: {d.get('activities', 0)}")
+                    for a, c in sorted(d.get('pattern', {}).items(), key=lambda x: -x[1]):
+                        print(f"    {a}: {c}")
+                elif dim == 'where':
+                    print(f"  Platforms: {d.get('platforms', 0)}")
+                    for p, c in sorted(d.get('distribution', {}).items(), key=lambda x: -x[1]):
+                        print(f"    {p}: {c}")
+                elif dim == 'when':
+                    print(f"  Sessions: {d.get('sessions_analyzed', 0)}")
+                    print(f"  Peak hours: {d.get('peak_hours', [])}")
+            else:
+                print(f"  Error: {d.get('error', 'unknown')}")
+
+        corr = hashes.get('correlation', {})
+        print(f"\nCROSS-DIMENSIONAL CORRELATION")
+        print(f"  Hash: {corr.get('hash', 'N/A')}")
+        print(f"  Dimensions: {corr.get('dimensions', 0)}/5")
+
+    elif command == 'attest-relationship':
+        # Generate relationship attestation
+        if len(sys.argv) < 3:
+            print("Usage: python cognitive_fingerprint.py attest-relationship <agent_name> [relationship_type] [notes]")
+            print("  relationship_type: collaboration, peer, mentorship (default: collaboration)")
+            sys.exit(1)
+        agent = sys.argv[2]
+        rel_type = sys.argv[3] if len(sys.argv) > 3 else 'collaboration'
+        notes = sys.argv[4] if len(sys.argv) > 4 else ''
+
+        attestation = generate_relationship_attestation(agent, rel_type, notes)
+        save_social_proof(attestation)
+
+        print(f"RELATIONSHIP ATTESTATION")
+        print(f"{'=' * 50}")
+        print(f"Attester:     {attestation['attester']}")
+        print(f"Agent:        {attestation['attested_agent']}")
+        print(f"Type:         {attestation['relationship_type']}")
+        print(f"Timestamp:    {attestation['timestamp']}")
+        print(f"Evidence:     {attestation['evidence']['memories_mentioning']} memories")
+        print(f"Attest Hash:  {attestation['attestation_hash'][:32]}...")
+        print()
+        print(f"Saved to: {SOCIAL_PROOF_FILE}")
+
+    elif command == 'social-proofs':
+        # List all social proofs
+        proofs = load_social_proofs()
+        print(f"SOCIAL PROOF ATTESTATIONS ({len(proofs)} total)")
+        print(f"{'=' * 50}")
+        for p in proofs:
+            print(f"  {p.get('attested_agent', '?'):20} {p.get('relationship_type', '?'):15} {p.get('timestamp', '?')[:10]}")
+            print(f"    Hash: {p.get('attestation_hash', '?')[:32]}...")
+
     else:
         print(f"Unknown command: {command}")
         print("Commands: analyze, hubs [N], pairs [N], clusters, domains, attest, drift, context")

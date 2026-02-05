@@ -539,3 +539,25 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+def get_activity_stats() -> dict:
+    """Get activity distribution stats for 5W attestation."""
+    from collections import defaultdict
+    stats = defaultdict(int)
+    
+    for directory in [MEMORY_ROOT / "core", MEMORY_ROOT / "active", MEMORY_ROOT / "archive"]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            try:
+                text = filepath.read_text(encoding='utf-8')
+                if 'activity_context:' in text:
+                    import re
+                    match = re.search(r'activity_context:\s*(\w+)', text)
+                    if match:
+                        stats[match.group(1)] += 1
+            except:
+                pass
+    
+    return {'by_activity': dict(stats)}

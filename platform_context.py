@@ -692,3 +692,8 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+def get_platform_stats() -> dict:
+    """Alias for platform_stats for 5W attestation compatibility."""
+    return platform_stats()
