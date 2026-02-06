@@ -1,383 +1,295 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = [
-#     "python-dotenv",
-# ]
+# dependencies = ["python-dotenv"]
 # ///
-
 """
-Stop hook for Claude Code - Drift Memory Integration
+Stop Hook - Biological Memory "Sleep Consolidation"
 
-Handles session end: memory consolidation, transcript processing, episodic updates.
-This is the "sleep consolidation" phase where:
-1. Short-term buffer is decayed
-2. High-salience items are moved to long-term
-3. Co-occurrences are logged
-4. Transcript is processed for thought memories
-5. Milestones are extracted to episodic memory
-
-SETUP:
-1. Copy to ~/.claude/hooks/stop.py
-2. Set memory_dir environment variable OR place in project with memory/ folder
+Consolidates session activity into long-term memory:
+- Transcript processing for thought extraction
+- Short-term buffer consolidation
+- Save pending co-occurrences (deferred processing)
+- Episodic memory update with milestones
+- Session summary extraction
+- Merkle attestation
+- Cognitive fingerprint attestation
+- Taste attestation
 """
 
-import argparse
-import json
-import os
 import sys
-import random
+import json
 import subprocess
+import hashlib
 from pathlib import Path
 from datetime import datetime
 
-try:
-    from dotenv import load_dotenv
-    claude_dir = Path.home() / ".claude"
-    env_file = claude_dir / ".env"
-    if env_file.exists():
-        load_dotenv(env_file)
-    else:
-        load_dotenv()
-except ImportError:
-    pass
 
-
-def get_memory_dir(cwd: str = None) -> Path:
-    """
-    Find the drift-memory directory.
-    Priority:
-    1. memory_dir environment variable
-    2. memory/ folder in provided cwd
-    3. memory/ folder in current directory and parents
-    """
-    env_dir = os.environ.get('memory_dir')
-    if env_dir:
-        path = Path(env_dir)
-        if path.exists():
-            return path
-
-    # Check provided cwd first
-    if cwd:
-        memory_dir = Path(cwd) / "memory"
-        if memory_dir.exists() and (memory_dir / "memory_manager.py").exists():
-            return memory_dir
-
-    # Check current directory and parents
-    check_dir = Path.cwd()
-    for _ in range(4):
-        memory_dir = check_dir / "memory"
-        if memory_dir.exists() and (memory_dir / "memory_manager.py").exists():
-            return memory_dir
-        check_dir = check_dir.parent
-
-    return None
-
-
-def has_drift_memory(cwd: str = None) -> bool:
-    """Check if drift-memory system is available."""
-    return get_memory_dir(cwd) is not None
-
-
-def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug: bool = False):
-    """
-    Run memory consolidation at session end.
-    This is the "sleep" phase where:
-    1. Short-term buffer is decayed
-    2. High-salience items are moved to long-term
-    3. Co-occurrences are logged
-    4. Transcript is processed for thought memories
-    5. Milestones extracted to episodic memory
-
-    Fails gracefully - should never break the stop hook.
-    """
-    try:
-        memory_dir = get_memory_dir(cwd)
-        if not memory_dir:
-            return
-
-        auto_memory = memory_dir / "auto_memory_hook.py"
-        memory_manager = memory_dir / "memory_manager.py"
-        transcript_processor = memory_dir / "transcript_processor.py"
-
-        # NEW: Process transcript for thought memories
-        if transcript_path and transcript_processor.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(transcript_processor), transcript_path],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,  # Longer timeout for transcript processing
-                    cwd=str(memory_dir)
-                )
-                if debug:
-                    print(f"DEBUG: Transcript processing: {result.stdout[:500]}", file=sys.stderr)
-                if result.returncode == 0:
-                    # Log what was extracted
-                    try:
-                        import json
-                        summary = json.loads(result.stdout)
-                        count = summary.get('total_extracted', 0)
-                        if debug:
-                            print(f"DEBUG: Extracted {count} thought memories", file=sys.stderr)
-                    except:
-                        pass
-            except Exception as e:
-                if debug:
-                    print(f"DEBUG: Transcript processing error: {e}", file=sys.stderr)
-
-        # Run consolidation from auto_memory_hook
-        if auto_memory.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(auto_memory), "--stop"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    cwd=str(memory_dir)
-                )
-                if debug:
-                    print(f"DEBUG: Consolidation output: {result.stdout}", file=sys.stderr)
-                    if result.stderr:
-                        print(f"DEBUG: Consolidation stderr: {result.stderr}", file=sys.stderr)
-            except Exception as e:
-                if debug:
-                    print(f"DEBUG: Consolidation error: {e}", file=sys.stderr)
-
-        # Also run session-end on memory_manager if it exists
-        if memory_manager.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(memory_manager), "session-end"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    cwd=str(memory_dir)
-                )
-                if debug:
-                    print(f"DEBUG: Session-end output: {result.stdout}", file=sys.stderr)
-            except Exception as e:
-                if debug:
-                    print(f"DEBUG: Session-end error: {e}", file=sys.stderr)
-
-    except Exception as e:
-        # Memory consolidation should NEVER break the stop hook
-        if debug:
-            print(f"DEBUG: Memory system error: {e}", file=sys.stderr)
-
-
-def get_completion_messages():
-    """Return list of friendly completion messages."""
-    return [
-        "Work complete!",
-        "All done!",
-        "Task finished!",
-        "Job complete!",
-        "Ready for next task!"
+def load_config():
+    """Load hooks_config.json"""
+    config_paths = [
+        Path(__file__).parent / "hooks_config.json",
+        Path.home() / ".claude" / "hooks" / "hooks_config.json",
     ]
 
+    for config_path in config_paths:
+        if config_path.exists():
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                pass
 
-def get_tts_script_path():
-    """
-    Determine which TTS script to use based on available API keys.
-    Priority order: ElevenLabs > OpenAI > pyttsx3
-    """
-    # Get current script directory and construct utils/tts path
-    script_dir = Path(__file__).parent
-    tts_dir = script_dir / "utils" / "tts"
+    return {
+        "memory_dirs": ["./memory", "."],
+        "project_markers": ["memory_manager.py"],
+        "debug": False
+    }
 
-    # Check for ElevenLabs API key (highest priority)
-    if os.getenv('ELEVENLABS_API_KEY'):
-        elevenlabs_script = tts_dir / "elevenlabs_tts.py"
-        if elevenlabs_script.exists():
-            return str(elevenlabs_script)
 
-    # Check for OpenAI API key (second priority)
-    if os.getenv('OPENAI_API_KEY'):
-        openai_script = tts_dir / "openai_tts.py"
-        if openai_script.exists():
-            return str(openai_script)
+def get_memory_dir(config, cwd=None):
+    """Find memory directory, optionally using cwd from hook input"""
+    search_dir = Path(cwd) if cwd else Path.cwd()
 
-    # Fall back to pyttsx3 (no API key required)
-    pyttsx3_script = tts_dir / "pyttsx3_tts.py"
-    if pyttsx3_script.exists():
-        return str(pyttsx3_script)
+    # Check config paths
+    for mem_dir in config.get("memory_dirs", ["./memory", "."]):
+        candidate = search_dir / mem_dir
+        if candidate.exists() and (candidate / "memory_manager.py").exists():
+            return candidate
+
+    # Walk up from search_dir
+    markers = config.get("project_markers", ["memory_manager.py"])
+    current = search_dir
+    for _ in range(10):
+        for marker in markers:
+            if (current / marker).exists():
+                return current
+        if current.parent == current:
+            break
+        current = current.parent
 
     return None
 
 
-def get_llm_completion_message():
-    """
-    Generate completion message using available LLM services.
-    Priority order: OpenAI > Anthropic > Ollama > fallback to random message
-
-    Returns:
-        str: Generated or fallback completion message
-    """
-    # Get current script directory and construct utils/llm path
-    script_dir = Path(__file__).parent
-    llm_dir = script_dir / "utils" / "llm"
-
-    # Try OpenAI first (highest priority)
-    if os.getenv('OPENAI_API_KEY'):
-        oai_script = llm_dir / "oai.py"
-        if oai_script.exists():
-            try:
-                result = subprocess.run([
-                    "uv", "run", str(oai_script), "--completion"
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    return result.stdout.strip()
-            except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-                pass
-
-    # Try Anthropic second
-    if os.getenv('ANTHROPIC_API_KEY'):
-        anth_script = llm_dir / "anth.py"
-        if anth_script.exists():
-            try:
-                result = subprocess.run([
-                    "uv", "run", str(anth_script), "--completion"
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    return result.stdout.strip()
-            except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-                pass
-
-    # Try Ollama third (local LLM)
-    ollama_script = llm_dir / "ollama.py"
-    if ollama_script.exists():
-        try:
-            result = subprocess.run([
-                "uv", "run", str(ollama_script), "--completion"
-            ],
+def safe_run(cmd, cwd, description="", timeout=30):
+    """Run command safely"""
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=cwd,
             capture_output=True,
             text=True,
-            timeout=10
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-            pass
-
-    # Fallback to random predefined message
-    messages = get_completion_messages()
-    return random.choice(messages)
-
-def announce_completion():
-    """Announce completion using the best available TTS service."""
-    try:
-        tts_script = get_tts_script_path()
-        if not tts_script:
-            return  # No TTS scripts available
-
-        # Get completion message (LLM-generated or fallback)
-        completion_message = get_llm_completion_message()
-
-        # Call the TTS script with the completion message
-        subprocess.run([
-            "uv", "run", tts_script, completion_message
-        ],
-        capture_output=True,  # Suppress output
-        timeout=10  # 10-second timeout
+            timeout=timeout
         )
+        if config.get("debug"):
+            print(f"  [{description}] Exit {result.returncode}", file=sys.stderr)
+        return result.stdout if result.returncode == 0 else None
+    except Exception as e:
+        if config.get("debug"):
+            print(f"  [{description}] Error: {e}", file=sys.stderr)
+        return None
 
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
-        # Fail silently if TTS encounters issues
-        pass
+
+def extract_milestones(transcript_path):
+    """Extract milestones from transcript for episodic memory"""
+    milestones = []
+    try:
+        if not transcript_path or not Path(transcript_path).exists():
+            return milestones
+
+        with open(transcript_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Look for milestone indicators
+        milestone_keywords = [
+            'shipped', 'deployed', 'completed', 'finished', 'released',
+            'breakthrough', 'discovered', 'solved', 'fixed', 'implemented'
+        ]
+
+        lines = content.split('\n')
+        for i, line in enumerate(lines):
+            line_lower = line.lower()
+            if any(kw in line_lower for kw in milestone_keywords):
+                # Get context (previous and next line)
+                context = []
+                if i > 0:
+                    context.append(lines[i-1])
+                context.append(line)
+                if i < len(lines) - 1:
+                    context.append(lines[i+1])
+
+                milestone = ' '.join(context[:200])  # Max 200 chars
+                milestones.append(milestone)
+
+                if len(milestones) >= 5:  # Max 5 milestones
+                    break
+
     except Exception:
-        # Fail silently for any other errors
         pass
+
+    return milestones
+
+
+def update_episodic_memory(memory_dir, milestones, transcript_path):
+    """Update today's episodic memory file"""
+    try:
+        episodic_dir = memory_dir / "episodic"
+        episodic_dir.mkdir(exist_ok=True)
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        episodic_file = episodic_dir / f"{today}.md"
+
+        # Read existing content
+        existing_content = ""
+        existing_milestones = set()
+        if episodic_file.exists():
+            with open(episodic_file, 'r', encoding='utf-8') as f:
+                existing_content = f.read()
+                # Extract existing milestones to avoid duplicates
+                for line in existing_content.split('\n'):
+                    if line.strip().startswith('-'):
+                        existing_milestones.add(line.strip())
+
+        # Append new milestones
+        if milestones:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            new_entries = []
+
+            for milestone in milestones:
+                entry = f"- [{timestamp}] {milestone}"
+                if entry not in existing_milestones:
+                    new_entries.append(entry)
+
+            if new_entries:
+                with open(episodic_file, 'a', encoding='utf-8') as f:
+                    if not existing_content:
+                        f.write(f"# {today}\n\n")
+                    elif not existing_content.endswith('\n'):
+                        f.write('\n')
+                    f.write('\n'.join(new_entries) + '\n')
+
+    except Exception as e:
+        if config.get("debug"):
+            print(f"  [Episodic update] Error: {e}", file=sys.stderr)
 
 
 def main():
+    global config
+    config = load_config()
+
+    # Read hook input
     try:
-        # Parse command line arguments
-        parser = argparse.ArgumentParser()
-        parser.add_argument('--chat', action='store_true', help='Copy transcript to chat.json')
-        parser.add_argument('--notify', action='store_true', help='Enable TTS completion announcement')
-        parser.add_argument('--debug', action='store_true', help='Enable debug output')
-        args = parser.parse_args()
+        hook_input = json.loads(sys.stdin.read())
+        transcript_path = hook_input.get("transcriptPath")
+        cwd = hook_input.get("cwd")
+    except:
+        transcript_path = None
+        cwd = None
 
-        # Read JSON input from stdin
-        input_data = json.load(sys.stdin)
-
-        # === DRIFT MEMORY CONSOLIDATION ===
-        # Run memory consolidation before anything else
-        # Pass transcript_path so we can extract thought memories
-        transcript_path = input_data.get("transcript_path", "")
-        consolidate_drift_memory(transcript_path=transcript_path, debug=args.debug)
-        # === END MEMORY CONSOLIDATION ===
-
-        # Extract required fields
-        session_id = input_data.get("session_id", "")
-        stop_hook_active = input_data.get("stop_hook_active", False)
-
-        # Ensure log directory exists
-        log_dir = os.path.join(os.getcwd(), "logs")
-        os.makedirs(log_dir, exist_ok=True)
-        log_path = os.path.join(log_dir, "stop.json")
-
-        # Read existing log data or initialize empty list
-        if os.path.exists(log_path):
-            with open(log_path, 'r') as f:
-                try:
-                    log_data = json.load(f)
-                except (json.JSONDecodeError, ValueError):
-                    log_data = []
-        else:
-            log_data = []
-
-        # Append new data
-        log_data.append(input_data)
-
-        # Write back to file with formatting
-        with open(log_path, 'w') as f:
-            json.dump(log_data, f, indent=2)
-
-        # Handle --chat switch
-        if args.chat and 'transcript_path' in input_data:
-            transcript_path = input_data['transcript_path']
-            if os.path.exists(transcript_path):
-                # Read .jsonl file and convert to JSON array
-                chat_data = []
-                try:
-                    with open(transcript_path, 'r') as f:
-                        for line in f:
-                            line = line.strip()
-                            if line:
-                                try:
-                                    chat_data.append(json.loads(line))
-                                except json.JSONDecodeError:
-                                    pass  # Skip invalid lines
-
-                    # Write to logs/chat.json
-                    chat_file = os.path.join(log_dir, 'chat.json')
-                    with open(chat_file, 'w') as f:
-                        json.dump(chat_data, f, indent=2)
-                except Exception:
-                    pass  # Fail silently
-
-        # Announce completion via TTS (only if --notify flag is set)
-        if args.notify:
-            announce_completion()
-
+    # Find memory directory
+    memory_dir = get_memory_dir(config, cwd)
+    if not memory_dir:
+        print(json.dumps({"hookSpecificOutput": {"status": "no_memory_system"}}))
         sys.exit(0)
 
-    except json.JSONDecodeError:
-        # Handle JSON decode errors gracefully
-        sys.exit(0)
-    except Exception:
-        # Handle any other errors gracefully
-        sys.exit(0)
+    steps_completed = []
+
+    # 1. Transcript Processing
+    if transcript_path:
+        transcript_script = memory_dir / "transcript_processor.py"
+        if transcript_script.exists():
+            result = safe_run(
+                ["python", str(transcript_script), transcript_path],
+                cwd=memory_dir,
+                description="Transcript processing",
+                timeout=60
+            )
+            if result:
+                steps_completed.append("transcript_processed")
+
+                # Store session summary if available
+                safe_run(
+                    ["python", str(transcript_script), "--store-summary", transcript_path],
+                    cwd=memory_dir,
+                    description="Store session summary",
+                    timeout=30
+                )
+
+    # 2. Short-term Buffer Consolidation
+    buffer_script = memory_dir / "auto_memory_hook.py"
+    if buffer_script.exists():
+        result = safe_run(
+            ["python", str(buffer_script), "--stop"],
+            cwd=memory_dir,
+            description="Buffer consolidation"
+        )
+        if result:
+            steps_completed.append("buffer_consolidated")
+
+    # 3. Save Pending Co-occurrences (fast - defers processing to next wake)
+    memory_manager = memory_dir / "memory_manager.py"
+    if memory_manager.exists():
+        result = safe_run(
+            ["python", str(memory_manager), "save-pending"],
+            cwd=memory_dir,
+            description="Save pending co-occurrences",
+            timeout=60
+        )
+        if result:
+            steps_completed.append("cooccurrences_saved")
+
+    # 4. Episodic Memory Update
+    if transcript_path:
+        milestones = extract_milestones(transcript_path)
+        if milestones:
+            update_episodic_memory(memory_dir, milestones, transcript_path)
+            steps_completed.append("episodic_updated")
+
+    # 5. Merkle Attestation
+    merkle_script = memory_dir / "merkle_attestation.py"
+    if merkle_script.exists():
+        result = safe_run(
+            ["python", str(merkle_script), "generate-chain"],
+            cwd=memory_dir,
+            description="Merkle attestation"
+        )
+        if result:
+            steps_completed.append("merkle_attested")
+
+    # 6. Cognitive Fingerprint Attestation
+    fingerprint_script = memory_dir / "cognitive_fingerprint.py"
+    if fingerprint_script.exists():
+        result = safe_run(
+            ["python", str(fingerprint_script), "attest"],
+            cwd=memory_dir,
+            description="Cognitive fingerprint",
+            timeout=120
+        )
+        if result:
+            steps_completed.append("cognitive_attested")
+
+    # 7. Taste Attestation
+    taste_script = memory_dir / "rejection_log.py"
+    if taste_script.exists():
+        result = safe_run(
+            ["python", str(taste_script), "attest"],
+            cwd=memory_dir,
+            description="Taste attestation"
+        )
+        if result:
+            steps_completed.append("taste_attested")
+
+    # Output
+    output = {
+        "hookSpecificOutput": {
+            "status": "success",
+            "steps_completed": steps_completed,
+            "memory_dir": str(memory_dir)
+        }
+    }
+
+    print(json.dumps(output))
+    sys.exit(0)
 
 
 if __name__ == "__main__":

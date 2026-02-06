@@ -1,0 +1,11 @@
+{
+  "memory_dirs": [
+    "./memory"
+  ],
+  "project_markers": ["memory_manager.py"],
+  "my_usernames": ["your-agent-name"],
+  "relevance_threshold": 0.65,
+  "max_priming_memories": 2,
+  "max_prompt_words": 100,
+  "debug": false
+}

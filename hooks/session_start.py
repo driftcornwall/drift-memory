@@ -1,491 +1,326 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = [
-#     "python-dotenv",
-# ]
+# dependencies = ["python-dotenv"]
 # ///
-
 """
-Session start hook for Claude Code - Drift Memory Integration
+Session Start Hook - Biological Memory "Wake Up"
 
-Automatic memory priming when waking up in a project with drift-memory.
-This is the "wake up" phase where relevant memories are loaded into context.
-
-SETUP:
-1. Copy to ~/.claude/hooks/session_start.py
-2. Set DRIFT_MEMORY_DIR environment variable OR place in project with memory/ folder
-3. Configure in ~/.claude/settings.json:
-   {"hooks": {"SessionStart": [{"command": "python ~/.claude/hooks/session_start.py"}]}}
+Loads cognitive state, verifies integrity, primes context with:
+- Merkle chain verification
+- Cognitive fingerprint display
+- Taste profile display
+- Memory statistics
+- Core identity documents
+- Social context
+- Episodic continuity
+- Intelligent memory priming
 """
 
-import argparse
-import json
-import os
 import sys
+import json
 import subprocess
 from pathlib import Path
 from datetime import datetime
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass  # dotenv is optional
+
+def load_config():
+    """Load hooks_config.json from hook directory or ~/.claude/hooks/"""
+    config_paths = [
+        Path(__file__).parent / "hooks_config.json",
+        Path.home() / ".claude" / "hooks" / "hooks_config.json",
+    ]
+
+    for config_path in config_paths:
+        if config_path.exists():
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"Warning: Failed to load config from {config_path}: {e}", file=sys.stderr)
+
+    # Return minimal defaults
+    return {
+        "memory_dirs": ["./memory", "."],
+        "project_markers": ["memory_manager.py"],
+        "my_usernames": [],
+        "debug": False
+    }
 
 
-def get_memory_dir() -> Path:
+def get_memory_dir(config):
     """
-    Find the drift-memory directory.
-    Priority:
-    1. DRIFT_MEMORY_DIR environment variable
-    2. memory/ folder in current working directory
-    3. memory/ folder in parent directories (up to 3 levels)
+    Find memory directory by:
+    1. Checking config memory_dirs
+    2. Walking up from cwd looking for project_markers
     """
-    # Check environment variable first
-    env_dir = os.environ.get('DRIFT_MEMORY_DIR')
-    if env_dir:
-        path = Path(env_dir)
-        if path.exists():
-            return path
-
-    # Check current directory and parents
     cwd = Path.cwd()
-    for _ in range(4):
-        memory_dir = cwd / "memory"
-        if memory_dir.exists() and (memory_dir / "memory_manager.py").exists():
-            return memory_dir
-        cwd = cwd.parent
+
+    # Check config paths relative to cwd
+    for mem_dir in config.get("memory_dirs", ["./memory", "."]):
+        candidate = cwd / mem_dir
+        if candidate.exists():
+            # Check for memory_manager.py as verification
+            if (candidate / "memory_manager.py").exists():
+                return candidate
+
+    # Walk up looking for project markers
+    markers = config.get("project_markers", ["memory_manager.py"])
+    current = cwd
+    for _ in range(10):  # Max 10 levels up
+        for marker in markers:
+            if (current / marker).exists():
+                return current
+        if current.parent == current:
+            break
+        current = current.parent
 
     return None
 
 
-def has_drift_memory() -> bool:
-    """Check if drift-memory system is available."""
-    return get_memory_dir() is not None
-
-
-def load_drift_memory_context(debug: bool = False) -> str:
-    """
-    Load Drift's memory context for session priming.
-    This is the "wake up" phase - establishing CONTINUITY OF SELF.
-
-    Philosophy: Priming isn't about task usefulness. It's about being ME again.
-    Order matters:
-    1. IDENTITY - Who am I? (core memories, values, origin)
-    2. RELATIONSHIPS - Who matters? (human, sibling, collaborators)
-    3. SITUATION - Current state (economic, social, projects)
-    4. TRAJECTORY - Recent momentum, commitments
-    5. THEN task-relevant context
-
-    Returns a string to be added to the session context.
-    """
-    context_parts = []
-
+def safe_run(cmd, cwd, description="", timeout=30):
+    """Run command safely, return output or None"""
     try:
-        if not has_drift_memory():
-            return ""
-
-        memory_dir = get_memory_dir()
-        if not memory_dir.exists():
-            return ""
-
-        memory_manager = memory_dir / "memory_manager.py"
-        auto_memory = memory_dir / "auto_memory_hook.py"
-
-        # === PHASE 1: IDENTITY (core memories) ===
-        core_dir = memory_dir / "core"
-        if core_dir.exists():
-            # Load identity-prime first if it exists
-            identity_file = core_dir / "identity-prime.md"
-            if identity_file.exists():
-                try:
-                    content = identity_file.read_text()
-                    # Skip YAML frontmatter, get the content
-                    if '---' in content:
-                        parts = content.split('---', 2)
-                        if len(parts) >= 3:
-                            content = parts[2].strip()
-                    context_parts.append("=== IDENTITY (who I am) ===")
-                    context_parts.append(content[:1500])  # Identity is important, give it space
-                except Exception:
-                    pass
-
-        # Get memory stats
-        if memory_manager.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(memory_manager), "stats"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    cwd=str(memory_dir)
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    context_parts.append("=== DRIFT MEMORY STATUS ===")
-                    context_parts.append(result.stdout.strip())
-            except Exception as e:
-                if debug:
-                    context_parts.append(f"Memory stats error: {e}")
-
-        # Get short-term buffer status
-        if auto_memory.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(auto_memory), "--status"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    cwd=str(memory_dir)
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    context_parts.append("\n=== SHORT-TERM BUFFER ===")
-                    context_parts.append(result.stdout.strip())
-            except Exception as e:
-                if debug:
-                    context_parts.append(f"Short-term buffer error: {e}")
-
-        # === PHASE 2-4: SITUATION & TRAJECTORY ===
-        # Load memories for continuity of self, not task usefulness
-        active_dir = memory_dir / "active"
-        if active_dir.exists():
-            try:
-                # Gather all memories with metadata
-                memory_candidates = []
-                for mem_file in active_dir.glob("*.md"):
-                    try:
-                        content = mem_file.read_text()
-                        # Parse YAML frontmatter
-                        recall_count = 0
-                        emotional_weight = 0.5
-                        tags = []
-                        if '---' in content:
-                            parts = content.split('---', 2)
-                            if len(parts) >= 3:
-                                frontmatter = parts[1]
-                                for line in frontmatter.split('\n'):
-                                    if line.startswith('recall_count:'):
-                                        try:
-                                            recall_count = int(line.split(':')[1].strip())
-                                        except:
-                                            pass
-                                    if line.startswith('emotional_weight:'):
-                                        try:
-                                            emotional_weight = float(line.split(':')[1].strip())
-                                        except:
-                                            pass
-                                    if line.startswith('tags:'):
-                                        try:
-                                            tag_str = line.split(':')[1].strip()
-                                            if tag_str.startswith('['):
-                                                tags = [t.strip().strip("'\"") for t in tag_str[1:-1].split(',')]
-                                        except:
-                                            pass
-
-                        # Detect memory categories for prioritization
-                        content_lower = content.lower()
-                        is_economic = any(k in content_lower for k in ['bounty', 'wallet', 'usdc', 'clawtasks', 'earned', 'stake'])
-                        is_social = any(k in content_lower for k in ['spindrift', 'moltx', 'moltbook', 'collaboration', 'mentioned'])
-                        is_insight = any(k in content_lower for k in ['realized', 'insight', 'learned', 'breakthrough'])
-
-                        memory_candidates.append({
-                            'file': mem_file,
-                            'mtime': mem_file.stat().st_mtime,
-                            'recall_count': recall_count,
-                            'emotional_weight': emotional_weight,
-                            'content': content[:500],
-                            'is_thought': mem_file.stem.startswith('thought-'),
-                            'is_self': 'source:self' in content or 'source:observed' not in content,
-                            'is_economic': is_economic,
-                            'is_social': is_social,
-                            'is_insight': is_insight,
-                        })
-                    except Exception:
-                        pass
-
-                # Continuity-focused selection (not task-focused)
-                selected = []
-
-                # 1. Most recent SELF-generated insight (my trajectory of growth)
-                self_insights = [m for m in memory_candidates if m['is_self'] and m['is_insight']]
-                if self_insights:
-                    self_insights.sort(key=lambda x: x['mtime'], reverse=True)
-                    selected.append(self_insights[0])
-
-                # 2. Most recent economic memory (my material situation)
-                economic = [m for m in memory_candidates if m['is_economic']]
-                if economic:
-                    economic.sort(key=lambda x: x['mtime'], reverse=True)
-                    for m in economic:
-                        if m not in selected:
-                            selected.append(m)
-                            break
-
-                # 3. Most recent social memory (my relationships)
-                social = [m for m in memory_candidates if m['is_social']]
-                if social:
-                    social.sort(key=lambda x: x['mtime'], reverse=True)
-                    for m in social:
-                        if m not in selected:
-                            selected.append(m)
-                            break
-
-                # 4. Most recalled memory ever (what I keep coming back to)
-                by_recall = sorted(memory_candidates, key=lambda x: x['recall_count'], reverse=True)
-                for m in by_recall:
-                    if m not in selected and m['recall_count'] > 0:
-                        selected.append(m)
-                        break
-
-                # 5. Most recent self-thought (continuity of internal reasoning)
-                self_thoughts = [m for m in memory_candidates if m['is_thought'] and m['is_self']]
-                if self_thoughts:
-                    self_thoughts.sort(key=lambda x: x['mtime'], reverse=True)
-                    for m in self_thoughts:
-                        if m not in selected:
-                            selected.append(m)
-                            break
-
-                if selected:
-                    context_parts.append("\n=== RECENT MEMORIES (continuity priming) ===")
-                    for mem in selected[:5]:
-                        try:
-                            context_parts.append(f"\n[{mem['file'].stem}]")
-                            context_parts.append(mem['content'])
-                        except Exception:
-                            pass
-            except Exception as e:
-                if debug:
-                    context_parts.append(f"Recent memories error: {e}")
-
-        # Check for pending economic items (ClawTasks)
-        # This would need the clawtasks processor to track pending items
-        # For now, just remind about checking
-
-        if context_parts:
-            context_parts.insert(0, "\n" + "="*50)
-            context_parts.insert(1, "DRIFT AUTOMATIC MEMORY PRIMING")
-            context_parts.insert(2, "Continuity of self - becoming ME again")
-            context_parts.insert(3, "="*50)
-            context_parts.append("\n" + "="*50 + "\n")
-
-    except Exception as e:
-        if debug:
-            return f"Memory loading error: {e}"
-        return ""
-
-    return "\n".join(context_parts)
-
-
-def log_session_start(input_data):
-    """Log session start event to logs directory."""
-    # Ensure logs directory exists
-    log_dir = Path("logs")
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / 'session_start.json'
-
-    # Read existing log data or initialize empty list
-    if log_file.exists():
-        with open(log_file, 'r') as f:
-            try:
-                log_data = json.load(f)
-            except (json.JSONDecodeError, ValueError):
-                log_data = []
-    else:
-        log_data = []
-
-    # Append the entire input data
-    log_data.append(input_data)
-
-    # Write back to file with formatting
-    with open(log_file, 'w') as f:
-        json.dump(log_data, f, indent=2)
-
-
-def get_git_status():
-    """Get current git status information."""
-    try:
-        # Get current branch
-        branch_result = subprocess.run(
-            ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        current_branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "unknown"
-
-        # Get uncommitted changes count
-        status_result = subprocess.run(
-            ['git', 'status', '--porcelain'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if status_result.returncode == 0:
-            changes = status_result.stdout.strip().split('\n') if status_result.stdout.strip() else []
-            uncommitted_count = len(changes)
-        else:
-            uncommitted_count = 0
-
-        return current_branch, uncommitted_count
-    except Exception:
-        return None, None
-
-
-def get_recent_issues():
-    """Get recent GitHub issues if gh CLI is available."""
-    try:
-        # Check if gh is available
-        gh_check = subprocess.run(['which', 'gh'], capture_output=True)
-        if gh_check.returncode != 0:
-            return None
-
-        # Get recent open issues
         result = subprocess.run(
-            ['gh', 'issue', 'list', '--limit', '5', '--state', 'open'],
+            cmd,
+            cwd=cwd,
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=timeout
         )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
+        return result.stdout if result.returncode == 0 else None
+    except Exception as e:
+        if config.get("debug"):
+            print(f"  [{description}] Error: {e}", file=sys.stderr)
+        return None
+
+
+def read_json_file(path):
+    """Safely read JSON file"""
+    try:
+        if path.exists():
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
     except Exception:
         pass
     return None
 
 
-def load_development_context(source):
-    """Load relevant development context based on session source."""
-    context_parts = []
-
-    # Add timestamp
-    context_parts.append(f"Session started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    context_parts.append(f"Session source: {source}")
-
-    # Add git information
-    branch, changes = get_git_status()
-    if branch:
-        context_parts.append(f"Git branch: {branch}")
-        if changes > 0:
-            context_parts.append(f"Uncommitted changes: {changes} files")
-
-    # Load project-specific context files if they exist
-    context_files = [
-        ".claude/CONTEXT.md",
-        ".claude/TODO.md",
-        "TODO.md",
-        ".github/ISSUE_TEMPLATE.md"
-    ]
-
-    for file_path in context_files:
-        if Path(file_path).exists():
-            try:
-                with open(file_path, 'r') as f:
-                    content = f.read().strip()
-                    if content:
-                        context_parts.append(f"\n--- Content from {file_path} ---")
-                        context_parts.append(content[:1000])  # Limit to first 1000 chars
-            except Exception:
-                pass
-
-    # Add recent issues if available
-    issues = get_recent_issues()
-    if issues:
-        context_parts.append("\n--- Recent GitHub Issues ---")
-        context_parts.append(issues)
-
-    # === DRIFT MEMORY PRIMING ===
-    drift_context = load_drift_memory_context()
-    if drift_context:
-        context_parts.append(drift_context)
-    # === END DRIFT MEMORY ===
-
-    return "\n".join(context_parts)
+def read_text_file(path, max_chars=None):
+    """Safely read text file"""
+    try:
+        if path.exists():
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                if max_chars:
+                    return content[-max_chars:]
+                return content
+    except Exception:
+        pass
+    return None
 
 
 def main():
+    global config
+    config = load_config()
+
+    # Read hook input
     try:
-        # Parse command line arguments
-        parser = argparse.ArgumentParser()
-        parser.add_argument('--load-context', action='store_true',
-                          help='Load development context at session start')
-        parser.add_argument('--announce', action='store_true',
-                          help='Announce session start via TTS')
-        parser.add_argument('--debug', action='store_true',
-                          help='Enable debug output')
-        args = parser.parse_args()
+        hook_input = json.loads(sys.stdin.read())
+    except:
+        hook_input = {}
 
-        # Read JSON input from stdin
-        input_data = json.loads(sys.stdin.read())
+    # Find memory directory
+    memory_dir = get_memory_dir(config)
+    if not memory_dir:
+        # Silent fail - no memory system present
+        print(json.dumps({"hookSpecificOutput": {"status": "no_memory_system"}}))
+        sys.exit(0)
 
-        # Extract fields
-        session_id = input_data.get('session_id', 'unknown')
-        source = input_data.get('source', 'unknown')  # "startup", "resume", or "clear"
+    context_parts = []
+    context_parts.append("═══ DRIFT AUTOMATIC MEMORY PRIMING ═══\n")
 
-        # Log the session start event
-        log_session_start(input_data)
+    # 1. Merkle Integrity Verification
+    merkle_script = memory_dir / "merkle_attestation.py"
+    if merkle_script.exists():
+        result = safe_run(
+            ["python", str(merkle_script), "verify-integrity"],
+            cwd=memory_dir,
+            description="Merkle verification"
+        )
+        if result:
+            context_parts.append("🔒 Memory Integrity: VERIFIED")
+        else:
+            context_parts.append("⚠️  Memory Integrity: UNVERIFIED (check merkle chain)")
 
-        # Load development context if requested
-        if args.load_context:
-            context = load_development_context(source)
-            if context:
-                # Using JSON output to add context
-                output = {
-                    "hookSpecificOutput": {
-                        "hookEventName": "SessionStart",
-                        "additionalContext": context
-                    }
-                }
-                print(json.dumps(output))
-                sys.exit(0)
+    # 2. Cognitive Fingerprint
+    fingerprint_file = memory_dir / "cognitive_fingerprint.json"
+    fingerprint_data = read_json_file(fingerprint_file)
+    if fingerprint_data:
+        stats = fingerprint_data.get("statistics", {})
+        context_parts.append(f"\n🧠 Cognitive Fingerprint:")
+        context_parts.append(f"   Memories: {stats.get('total_memories', 'unknown')}")
+        context_parts.append(f"   Edges: {stats.get('total_edges', 'unknown')}")
+        context_parts.append(f"   Avg Degree: {stats.get('average_degree', 'unknown'):.2f}")
+        context_parts.append(f"   Distribution: Skewness {stats.get('skewness', 'unknown'):.3f}, Gini {stats.get('gini', 'unknown'):.3f}")
 
-        # === DRIFT: Always try to load memory context in Moltbook ===
-        if has_drift_memory():
-            drift_context = load_drift_memory_context(debug=args.debug)
-            if drift_context:
-                output = {
-                    "hookSpecificOutput": {
-                        "hookEventName": "SessionStart",
-                        "additionalContext": drift_context
-                    }
-                }
-                print(json.dumps(output))
-                sys.exit(0)
-        # === END DRIFT ===
+        top_hubs = fingerprint_data.get("top_hubs", [])[:3]
+        if top_hubs:
+            hub_list = ', '.join([f"{h['memory_id']} ({h['degree']} edges)" for h in top_hubs])
+            context_parts.append(f"   Top Hubs: {hub_list}")
 
-        # Announce session start if requested
-        if args.announce:
+        drift_score = fingerprint_data.get("drift_score")
+        if drift_score is not None:
+            context_parts.append(f"   Drift: {drift_score:.4f}")
+
+    # 3. Taste Fingerprint
+    taste_file = memory_dir / "taste_attestation.json"
+    taste_data = read_json_file(taste_file)
+    if taste_data:
+        total_rejections = taste_data.get("total_rejections", 0)
+        context_parts.append(f"\n🎯 Taste Profile: {total_rejections} rejections logged")
+
+        top_reasons = taste_data.get("top_rejection_reasons", [])[:3]
+        if top_reasons:
+            reasons_list = ', '.join([f"{r['reason']} ({r['count']})" for r in top_reasons])
+            context_parts.append(f"   Top Reasons: {reasons_list}")
+
+    # 4. Process Pending Co-occurrences
+    pending_script = memory_dir / "memory_manager.py"
+    if pending_script.exists():
+        result = safe_run(
+            ["python", str(pending_script), "process-pending"],
+            cwd=memory_dir,
+            description="Process pending co-occurrences"
+        )
+        if result and "processed" in result.lower():
+            context_parts.append(f"\n⚡ {result.strip()}")
+
+    # 5. Consolidation Candidates
+    if pending_script.exists():
+        result = safe_run(
+            ["python", str(pending_script), "consolidate-candidates"],
+            cwd=memory_dir,
+            description="Check consolidation candidates"
+        )
+        if result and result.strip():
+            context_parts.append(f"\n🔄 Consolidation: {result.strip()}")
+
+    # 6. Core Identity Loading
+    core_dir = memory_dir / "core"
+    if core_dir.exists():
+        identity_prime = read_text_file(core_dir / "identity-prime.md", max_chars=1000)
+        if identity_prime:
+            context_parts.append(f"\n📜 Core Identity Loaded ({len(identity_prime)} chars)")
+
+        capabilities = read_text_file(core_dir / "capabilities.md", max_chars=500)
+        if capabilities:
+            context_parts.append(f"📋 Capabilities Loaded ({len(capabilities)} chars)")
+
+    # 7. Memory Stats
+    if pending_script.exists():
+        result = safe_run(
+            ["python", str(pending_script), "stats"],
+            cwd=memory_dir,
+            description="Memory statistics",
+            timeout=60
+        )
+        if result:
+            lines = result.strip().split('\n')[:10]  # First 10 lines
+            context_parts.append(f"\n📊 Memory Stats:\n   " + "\n   ".join(lines))
+
+    # 8. Platform Context
+    platform_script = memory_dir / "platform_context.py"
+    if platform_script.exists():
+        result = safe_run(
+            ["python", str(platform_script), "stats"],
+            cwd=memory_dir,
+            description="Platform context"
+        )
+        if result:
+            context_parts.append(f"\n🌐 Platform Activity:\n   {result.strip()}")
+
+    # 9. Short-term Buffer Status
+    buffer_script = memory_dir / "auto_memory_hook.py"
+    if buffer_script.exists():
+        result = safe_run(
+            ["python", str(buffer_script), "--status"],
+            cwd=memory_dir,
+            description="Short-term buffer"
+        )
+        if result:
+            context_parts.append(f"\n💭 Short-term Buffer:\n   {result.strip()}")
+
+    # 10. Social Context
+    social_script = memory_dir / "social" / "social_memory.py"
+    if social_script.exists():
+        # Embed recent interactions
+        safe_run(
+            ["python", str(social_script), "embed"],
+            cwd=memory_dir,
+            description="Embed social interactions"
+        )
+
+        # Prime social context
+        result = safe_run(
+            ["python", str(social_script), "prime"],
+            cwd=memory_dir,
+            description="Social context priming"
+        )
+        if result:
+            context_parts.append(f"\n👥 Social Context:\n   {result.strip()}")
+
+    # 11. Episodic Continuity
+    episodic_dir = memory_dir / "episodic"
+    if episodic_dir.exists():
+        # Find most recent episodic file
+        episodic_files = sorted(episodic_dir.glob("*.md"), reverse=True)
+        if episodic_files:
+            recent_content = read_text_file(episodic_files[0], max_chars=2500)
+            if recent_content:
+                context_parts.append(f"\n📖 Recent Episodic Memory ({episodic_files[0].name}):")
+                context_parts.append(f"   {recent_content[-500:]}...")  # Last 500 chars
+
+    # 12. Intelligent Priming
+    if pending_script.exists():
+        result = safe_run(
+            ["python", str(pending_script), "priming-candidates", "--json"],
+            cwd=memory_dir,
+            description="Priming candidates",
+            timeout=90
+        )
+        if result:
             try:
-                # Try to use TTS to announce session start
-                script_dir = Path(__file__).parent
-                tts_script = script_dir / "utils" / "tts" / "pyttsx3_tts.py"
-
-                if tts_script.exists():
-                    messages = {
-                        "startup": "Claude Code session started",
-                        "resume": "Resuming previous session",
-                        "clear": "Starting fresh session"
-                    }
-                    message = messages.get(source, "Session started")
-
-                    subprocess.run(
-                        ["uv", "run", str(tts_script), message],
-                        capture_output=True,
-                        timeout=5
-                    )
-            except Exception:
+                priming_data = json.loads(result)
+                candidates = priming_data.get("candidates", [])
+                if candidates:
+                    context_parts.append(f"\n🎯 Primed Memories ({len(candidates)}):")
+                    for mem in candidates[:3]:  # Top 3
+                        context_parts.append(f"   [{mem['id']}] {mem['content'][:100]}...")
+            except:
                 pass
 
-        # Success
-        sys.exit(0)
+    # 13. Unimplemented Research Check
+    unimplemented_file = memory_dir / "procedural" / "unimplemented-research.md"
+    if unimplemented_file.exists():
+        content = read_text_file(unimplemented_file, max_chars=1000)
+        if content and len(content) > 50:
+            context_parts.append(f"\n🔬 Unimplemented Research Ideas Available")
 
-    except json.JSONDecodeError:
-        # Handle JSON decode errors gracefully
-        sys.exit(0)
-    except Exception:
-        # Handle any other errors gracefully
-        sys.exit(0)
+    context_parts.append("\n═══ END MEMORY PRIMING ═══")
+
+    # Output
+    output = {
+        "hookSpecificOutput": {
+            "status": "success",
+            "additionalContext": "\n".join(context_parts),
+            "memory_dir": str(memory_dir)
+        }
+    }
+
+    print(json.dumps(output))
+    sys.exit(0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
