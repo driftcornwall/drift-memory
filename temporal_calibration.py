@@ -482,6 +482,11 @@ def print_comparison(comparison):
 
 
 if __name__ == '__main__':
+    # Fix Windows cp1252 encoding (em dashes, special chars in output)
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
     args = sys.argv[1:]
 
     if not args or args[0] == 'read':

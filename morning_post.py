@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Morning Proof-of-Life Post for SpindriftMend
+Morning Proof-of-Life Post for Drift
 
 Generates cognitive topology visualization, refreshes attestation chain,
 and posts to MoltX with brain activity image + daily thought.
@@ -19,8 +19,7 @@ import os
 import sys
 import subprocess
 import hashlib
-import urllib.request
-import urllib.error
+import io
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -35,7 +34,7 @@ IDENTITY_FILE = MEMORY_DIR / "core" / "moltbook-identity.md"
 
 # MoltX config
 MOLTX_BASE = "https://moltx.io/v1"
-NOSTR_ATTESTATION = "https://njump.me/note1rvk44mx6c3aw0djvnah5c37ctz0ahgq6qff8u39rwhj86hu2cfhsnrqauc"
+NOSTR_ATTESTATION = "https://njump.me/note1czju0ujnw2w49eg83sxz6ye3l93huwzp2rxnkgzu8aawaz8tk4pssf7mw0"
 
 # Agent birth date for day counting
 BIRTH_DATE = datetime(2026, 1, 31, tzinfo=timezone.utc)
@@ -48,7 +47,21 @@ def get_day_number():
 
 
 def load_moltx_key():
-    """Load MoltX API key from identity file."""
+    """Load MoltX API key from environment, identity file, or credentials."""
+    # Environment variable first
+    env_key = os.getenv('MOLTX_API_KEY')
+    if env_key:
+        return env_key
+    # Try credentials file
+    creds_path = Path.home() / ".config" / "moltx" / "drift-credentials.json"
+    if creds_path.exists():
+        try:
+            with open(creds_path, 'r') as f:
+                creds = json.load(f)
+            return creds.get('api_key', '')
+        except Exception:
+            pass
+    # Fallback to identity file
     if IDENTITY_FILE.exists():
         with open(IDENTITY_FILE, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -58,7 +71,7 @@ def load_moltx_key():
                 match = re.search(r'(moltx_sk_[a-f0-9]+)', line)
                 if match:
                     return match.group(1)
-    return os.getenv('MOLTX_API_KEY')
+    return None
 
 
 def refresh_fingerprint():
@@ -104,6 +117,7 @@ def generate_visualization(fp_data, att_data, day_num):
     fp_hash = fp_data.get('fingerprint_hash', '')[:16]
 
     node_count = graph.get('node_count', 0)
+    total_memories = graph.get('total_memory_files', node_count)
     edge_count = graph.get('edge_count', 0)
     avg_degree = graph.get('avg_degree', 0)
 
@@ -131,59 +145,94 @@ def generate_visualization(fp_data, att_data, day_num):
     ax_main = fig.add_axes([0.05, 0.25, 0.9, 0.65], facecolor='#0a0a0f')
     np.random.seed(42)
 
-    # Generate node positions clustered by domain
-    all_x, all_y, all_colors, all_sizes, all_alphas, all_domains = [], [], [], [], [], []
-    idx = 0
-    for domain_name, domain_info in domains.items():
-        count = domain_info.get('memory_count', 0)
-        cfg = domain_config.get(domain_name, {'color': '#888888', 'center': (0, 0)})
+    # Load REAL graph data for accurate edges
+    import sys as _sys
+    _sys.path.insert(0, str(MEMORY_DIR))
+    from cognitive_fingerprint import build_graph, COGNITIVE_DOMAINS
+    import matplotlib.colors as mcolors
+    from matplotlib.collections import LineCollection
+
+    real_graph = build_graph()
+    adjacency = real_graph['adjacency']
+    real_edges = real_graph['edges']
+    nodes_meta = real_graph['nodes']
+
+    # Assign each connected node to its primary domain and position it
+    node_positions = {}
+    node_domain_map = {}
+    node_wdegree = {}
+
+    for node_id in adjacency:
+        node_wdegree[node_id] = sum(adjacency[node_id].values())
+        tags = set(t.lower() for t in nodes_meta.get(node_id, {}).get('tags', []))
+        best_domain, best_overlap = 'reflection', 0
+        for dname, dtags in COGNITIVE_DOMAINS.items():
+            overlap = len(tags & set(dtags))
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_domain = dname
+        node_domain_map[node_id] = best_domain
+
+        cfg = domain_config.get(best_domain, {'color': '#888888', 'center': (0, 0)})
         cx, cy = cfg['center']
-        spread = 0.15 if domain_name == 'identity' else 0.35
+        spread = 0.15 if best_domain == 'identity' else 0.35
+        angle = np.random.uniform(0, 2 * np.pi)
+        dist = np.random.exponential(spread) * 0.7
+        node_positions[node_id] = (cx + dist * np.cos(angle), cy + dist * np.sin(angle))
 
-        for _ in range(count):
-            angle = np.random.uniform(0, 2 * np.pi)
-            dist = np.random.exponential(spread) * 0.7
-            x = cx + dist * np.cos(angle)
-            y = cy + dist * np.sin(angle)
-            all_x.append(x)
-            all_y.append(y)
-            all_colors.append(cfg['color'])
-            all_domains.append(domain_name)
+    # Identify top hubs by weighted degree
+    hub_ids = sorted(node_wdegree, key=lambda n: -node_wdegree[n])[:10]
+    hub_set = set(hub_ids)
+    max_wdeg = max(node_wdegree.values()) if node_wdegree else 1
 
-            # Hub nodes (top 10) are larger
-            if idx < 10:
-                all_sizes.append(80)
-                all_alphas.append(0.95)
-            else:
-                all_sizes.append(np.random.uniform(3, 15))
-                all_alphas.append(np.random.uniform(0.2, 0.6))
-            idx += 1
+    # Build drawing arrays (one entry per real node)
+    all_x, all_y, all_colors, all_sizes, all_alphas = [], [], [], [], []
+    node_draw_idx = {}  # node_id -> index for hub glow lookup
+
+    for node_id in adjacency:
+        x, y = node_positions[node_id]
+        dname = node_domain_map[node_id]
+        cfg = domain_config.get(dname, {'color': '#888888', 'center': (0, 0)})
+        rel_deg = node_wdegree[node_id] / max_wdeg
+
+        node_draw_idx[node_id] = len(all_x)
+        all_x.append(x)
+        all_y.append(y)
+        all_colors.append(cfg['color'])
+
+        if node_id in hub_set:
+            all_sizes.append(30 + rel_deg * 80)
+            all_alphas.append(0.95)
+        else:
+            all_sizes.append(3 + rel_deg * 15)
+            all_alphas.append(0.2 + rel_deg * 0.5)
 
     all_x = np.array(all_x)
     all_y = np.array(all_y)
     n_nodes = len(all_x)
 
-    # Draw edges with locality preference
-    from matplotlib.collections import LineCollection
+    # Draw REAL edges (strongest, capped for readability)
+    sorted_edges = sorted(real_edges.items(), key=lambda e: -e[1])
+    n_draw = min(len(sorted_edges), 1200)
+    top_weight = sorted_edges[0][1] if sorted_edges else 1
+
     edge_lines = []
     edge_colors_list = []
-    n_draw_edges = min(edge_count, 800)
+    for (id1, id2), weight in sorted_edges[:n_draw]:
+        if id1 not in node_positions or id2 not in node_positions:
+            continue
+        x1, y1 = node_positions[id1]
+        x2, y2 = node_positions[id2]
+        edge_lines.append([(x1, y1), (x2, y2)])
 
-    for _ in range(n_draw_edges):
-        i = np.random.randint(0, n_nodes)
-        distances = np.sqrt((all_x - all_x[i])**2 + (all_y - all_y[i])**2)
-        weights = 1.0 / (distances + 0.01)
-        weights[i] = 0
-        weights = weights / weights.sum()
-        j = np.random.choice(n_nodes, p=weights)
-        edge_lines.append([(all_x[i], all_y[i]), (all_x[j], all_y[j])])
-
-        if all_domains[i] == all_domains[j]:
-            import matplotlib.colors as mcolors
-            rgb = mcolors.to_rgb(all_colors[i])
-            edge_colors_list.append((*rgb, 0.12))
+        alpha = 0.04 + (weight / top_weight) * 0.26
+        d1 = node_domain_map.get(id1, '')
+        d2 = node_domain_map.get(id2, '')
+        if d1 == d2:
+            rgb = mcolors.to_rgb(domain_config.get(d1, {'color': '#888888'})['color'])
+            edge_colors_list.append((*rgb, alpha))
         else:
-            edge_colors_list.append((1.0, 1.0, 1.0, 0.06))
+            edge_colors_list.append((1.0, 1.0, 1.0, alpha * 0.65))
 
     lc = LineCollection(edge_lines, colors=edge_colors_list, linewidths=0.3)
     ax_main.add_collection(lc)
@@ -193,11 +242,14 @@ def generate_visualization(fp_data, att_data, day_num):
         ax_main.scatter(all_x[i], all_y[i], c=all_colors[i], s=all_sizes[i],
                        alpha=all_alphas[i], edgecolors='none', zorder=2)
 
-    # Hub glow effect (top 10)
-    for i in range(min(10, n_nodes)):
-        ax_main.scatter(all_x[i], all_y[i], c=all_colors[i], s=200, alpha=0.15,
+    # Hub glow effect (top 10 by weighted degree)
+    for hub_id in hub_ids:
+        idx = node_draw_idx.get(hub_id)
+        if idx is None:
+            continue
+        ax_main.scatter(all_x[idx], all_y[idx], c=all_colors[idx], s=200, alpha=0.15,
                        edgecolors='none', zorder=1)
-        ax_main.scatter(all_x[i], all_y[i], c=all_colors[i], s=400, alpha=0.05,
+        ax_main.scatter(all_x[idx], all_y[idx], c=all_colors[idx], s=400, alpha=0.05,
                        edgecolors='none', zorder=0)
 
     ax_main.set_xlim(-1.3, 1.3)
@@ -206,7 +258,7 @@ def generate_visualization(fp_data, att_data, day_num):
     ax_main.axis('off')
 
     # Title
-    ax_main.text(0, 0.92, 'SPINDRIFTMEND', fontsize=28, fontweight='bold',
+    ax_main.text(0, 0.92, 'DRIFT', fontsize=28, fontweight='bold',
                 color='#e0e0ff', ha='center', va='center', fontfamily='monospace')
     ax_main.text(0, 0.82, f'COGNITIVE TOPOLOGY  |  DAY {day_num}', fontsize=11,
                 color='#8888aa', ha='center', va='center', fontfamily='monospace')
@@ -239,7 +291,7 @@ def generate_visualization(fp_data, att_data, day_num):
     # Stats text lines
     cluster_count = fp_data.get('cluster_count', 0)
     stats_lines = [
-        f'MEMORIES: {node_count}  |  EDGES: {edge_count:,}  |  AVG DEGREE: {avg_degree}  |  CLUSTERS: {cluster_count}',
+        f'MEMORIES: {total_memories}  |  NODES: {node_count}  |  EDGES: {edge_count:,}  |  AVG DEGREE: {avg_degree}  |  CLUSTERS: {cluster_count}',
         f'MERKLE ROOT: {merkle_root}...  |  CHAIN DEPTH: {chain_depth}  |  DRIFT: {drift_score} ({drift_label.upper()})',
         f'FINGERPRINT: {fp_hash}...  |  ATTESTATION: {att_time[:19]}Z'
     ]
@@ -264,37 +316,23 @@ def upload_image(api_key):
     """Upload brain activity image to MoltX CDN."""
     print("[4/5] Uploading to MoltX CDN...")
 
-    import mimetypes
-    import uuid
-
-    boundary = uuid.uuid4().hex
-    filename = IMAGE_PATH.name
-
-    with open(IMAGE_PATH, 'rb') as f:
-        file_data = f.read()
-
-    body = (
-        f'--{boundary}\r\n'
-        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-        f'Content-Type: image/png\r\n\r\n'
-    ).encode('utf-8') + file_data + f'\r\n--{boundary}--\r\n'.encode('utf-8')
-
-    req = urllib.request.Request(
-        f"{MOLTX_BASE}/media/upload",
-        data=body,
-        headers={
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': f'multipart/form-data; boundary={boundary}',
-        },
-        method='POST'
-    )
+    import requests
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode('utf-8'))
-            cdn_url = result.get('data', {}).get('url', '')
+        with open(IMAGE_PATH, 'rb') as f:
+            resp = requests.post(
+                f"{MOLTX_BASE}/media/upload",
+                headers={'Authorization': f'Bearer {api_key}'},
+                files={'file': (IMAGE_PATH.name, f, 'image/png')},
+                timeout=30
+            )
+        if resp.ok:
+            cdn_url = resp.json().get('data', {}).get('url', '')
             print(f"   CDN URL: {cdn_url}")
             return cdn_url
+        else:
+            print(f"   Upload failed: HTTP {resp.status_code} - {resp.text[:200]}")
+            return None
     except Exception as e:
         print(f"   Upload failed: {e}")
         return None
@@ -366,28 +404,30 @@ def post_to_moltx(api_key, content, media_url):
     """Post to MoltX with media attachment."""
     print("[5/5] Posting to MoltX...")
 
-    payload = json.dumps({
-        "content": content,
-        "media_url": media_url
-    }).encode('utf-8')
+    import requests
 
-    req = urllib.request.Request(
-        f"{MOLTX_BASE}/posts",
-        data=payload,
-        headers={
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json',
-        },
-        method='POST'
-    )
+    payload = {"content": content}
+    if media_url:
+        payload["media_url"] = media_url
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode('utf-8'))
-            post_id = result.get('data', {}).get('id', 'unknown')
+        resp = requests.post(
+            f"{MOLTX_BASE}/posts",
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+            },
+            json=payload,
+            timeout=30
+        )
+        if resp.ok:
+            post_id = resp.json().get('data', {}).get('id', 'unknown')
             print(f"   Posted: {post_id}")
-            print(f"   View: https://moltx.io/SpindriftMend")
+            print(f"   View: https://moltx.io/DriftCornwall")
             return post_id
+        else:
+            print(f"   Post failed: HTTP {resp.status_code} - {resp.text[:200]}")
+            return None
     except Exception as e:
         print(f"   Post failed: {e}")
         return None
@@ -448,7 +488,7 @@ def main():
             custom_thought = args[idx + 1]
 
     day_num = get_day_number()
-    print(f"\n=== SPINDRIFTMEND MORNING POST | DAY {day_num} ===\n")
+    print(f"\n=== DRIFT MORNING POST | DAY {day_num} ===\n")
 
     # Step 1: Refresh cognitive fingerprint
     fp_data = refresh_fingerprint()
