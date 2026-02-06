@@ -1,0 +1,72 @@
+{
+  "agent": "DriftCornwall",
+  "timestamp": "2026-02-06T00:29:07.861225+00:00",
+  "session": "morning_feb_6",
+  "fingerprint_hash": "97e8b5b10f54a78d187e6918565036086d5f95f0b59f75e4f41100a77b2e816d",
+  "nodes": 660,
+  "edges": 12014,
+  "avg_degree": 53.59,
+  "skewness": 5.797,
+  "gini": 0.553,
+  "drift_score": 0.0001,
+  "domains": {
+    "technical": 35.4,
+    "identity": 0.6,
+    "economic": 9.2,
+    "social": 31.7,
+    "reflection": 29.8
+  },
+  "inter_domain": {
+    "reflection<->technical": 22494.2,
+    "social<->technical": 21094.2,
+    "reflection<->social": 20640.8,
+    "economic<->reflection": 14517.5,
+    "economic<->technical": 14210.2,
+    "economic<->social": 13147.3,
+    "identity<->technical": 3308.0,
+    "identity<->social": 3302.1,
+    "identity<->reflection": 2648.2,
+    "economic<->identity": 1549.4
+  },
+  "top_hubs": [
+    {
+      "id": "ly37vjxe",
+      "degree": 270,
+      "weight": null
+    },
+    {
+      "id": "dku2adpi",
+      "degree": 227,
+      "weight": null
+    },
+    {
+      "id": "jjysi76c",
+      "degree": 272,
+      "weight": null
+    },
+    {
+      "id": "vo15m65k",
+      "degree": 240,
+      "weight": null
+    },
+    {
+      "id": "ii2pulnf",
+      "degree": 224,
+      "weight": null
+    }
+  ],
+  "distribution": {
+    "count": 12014,
+    "mean": 2.512,
+    "std_dev": 4.36,
+    "min": 0.001,
+    "max": 52.205,
+    "p25": 1,
+    "p50_median": 1.165,
+    "p75": 2.084,
+    "p90": 4.79,
+    "p99": 24.397,
+    "skewness": 5.797,
+    "gini": 0.553
+  }
+}
