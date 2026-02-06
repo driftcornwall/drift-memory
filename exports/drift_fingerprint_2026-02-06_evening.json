@@ -1,0 +1,140 @@
+{
+  "agent": "drift",
+  "timestamp": "2026-02-06T01:47:11.205872+00:00",
+  "label": "Day 7 evening - experiment eve",
+  "nodes": 675,
+  "edges": 12464,
+  "avg_degree": 54.4,
+  "fingerprint_hash": "db16ddc043157b5ad5c0b37314b948623a1e80f3ce8d6ff66f0100685e4b8b7d",
+  "domains": {
+    "domains": {
+      "technical": {
+        "memory_count": 424,
+        "total_weight": 11003.03,
+        "weight_pct": 35.5,
+        "top_hubs": [
+          "dku2adpi",
+          "vo15m65k",
+          "thought-2c63befa",
+          "lzkkjopu",
+          "iovw7mkm"
+        ]
+      },
+      "identity": {
+        "memory_count": 53,
+        "total_weight": 207.38,
+        "weight_pct": 0.7,
+        "top_hubs": [
+          "h804jp98",
+          "b6sslo7n",
+          "8ucdb7hv",
+          "o4bzgrtt",
+          "vefqf2ok"
+        ]
+      },
+      "economic": {
+        "memory_count": 292,
+        "total_weight": 2848.79,
+        "weight_pct": 9.2,
+        "top_hubs": [
+          "dku2adpi",
+          "vo15m65k",
+          "8rjrsoe9",
+          "thought-c1f8aaa9",
+          "thought-3a86baf3"
+        ]
+      },
+      "social": {
+        "memory_count": 384,
+        "total_weight": 9840.6,
+        "weight_pct": 31.8,
+        "top_hubs": [
+          "vo15m65k",
+          "thought-2c63befa",
+          "lzkkjopu",
+          "iovw7mkm",
+          "b6sslo7n"
+        ]
+      },
+      "reflection": {
+        "memory_count": 421,
+        "total_weight": 9329.62,
+        "weight_pct": 30.1,
+        "top_hubs": [
+          "dku2adpi",
+          "vo15m65k",
+          "thought-2c63befa",
+          "iovw7mkm",
+          "lzkkjopu"
+        ]
+      }
+    },
+    "inter_domain": {
+      "reflection<->technical": 23167.2,
+      "social<->technical": 21722.2,
+      "reflection<->social": 21276.8,
+      "economic<->reflection": 14975.5,
+      "economic<->technical": 14645.2,
+      "economic<->social": 13581.3,
+      "identity<->social": 3422.1,
+      "identity<->technical": 3410.0,
+      "identity<->reflection": 2744.2,
+      "economic<->identity": 1603.4
+    },
+    "total_weight": 30979.58
+  },
+  "hub_ordering": [
+    "ly37vjxe",
+    "dku2adpi",
+    "jjysi76c",
+    "vo15m65k",
+    "ii2pulnf",
+    "b6sslo7n",
+    "iovw7mkm",
+    "z5p890fr",
+    "o4bzgrtt",
+    "thought-2c63befa"
+  ],
+  "hub_degrees": [
+    279,
+    238,
+    273,
+    260,
+    234,
+    210,
+    111,
+    236,
+    189,
+    195
+  ],
+  "hub_weights": [
+    1471.21,
+    1390.07,
+    1173.82,
+    1154.94,
+    982.17,
+    899.66,
+    788.37,
+    774.4,
+    750.97,
+    728.01
+  ],
+  "distribution": {
+    "count": 12464,
+    "mean": 2.486,
+    "std_dev": 4.309,
+    "min": 0.001,
+    "max": 52.205,
+    "p25": 1,
+    "p50_median": 1.043,
+    "p75": 2.076,
+    "p90": 4.727,
+    "p99": 24.012,
+    "skewness": 5.883,
+    "gini": 0.549
+  },
+  "drift_score": 0.0,
+  "clusters": {
+    "count": 1
+  }
+}

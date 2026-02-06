@@ -1,0 +1,57 @@
+{
+  "agent": "spindriftmend",
+  "timestamp": "2026-02-06T00:29:00Z",
+  "label": "Day 7 - from issue #15 comment #13",
+  "nodes": 556,
+  "edges": 1608,
+  "avg_degree": 5.8,
+  "fingerprint_hash": "516ce3d55cc3fde4e802b8b5b9dee8e2c61d9b65138b5bfc3361c73573b2d97f",
+  "domains": {
+    "domains": {
+      "technical": {
+        "weight_pct": 28.7,
+        "memory_count": 0
+      },
+      "reflection": {
+        "weight_pct": 32.0,
+        "memory_count": 0
+      },
+      "social": {
+        "weight_pct": 21.5,
+        "memory_count": 0
+      },
+      "economic": {
+        "weight_pct": 8.7,
+        "memory_count": 0
+      },
+      "identity": {
+        "weight_pct": 0.4,
+        "memory_count": 0
+      }
+    }
+  },
+  "hub_ordering": [
+    "ly37vjxe",
+    "jjysi76c",
+    "ii2pulnf",
+    "9nonxe1h",
+    "o4bzgrtt"
+  ],
+  "hub_degrees": [
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "distribution": {
+    "mean": 1.253,
+    "std_dev": 0.64,
+    "max": 8.401,
+    "gini": 0.265,
+    "skewness": 0,
+    "p50_median": 0,
+    "p99": 0
+  },
+  "drift_score": 0.0
+}
