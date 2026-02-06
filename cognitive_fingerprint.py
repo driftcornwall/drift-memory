@@ -27,6 +27,7 @@ Usage:
     python cognitive_fingerprint.py clusters        # Cluster detection
     python cognitive_fingerprint.py attest          # Generate attestation
     python cognitive_fingerprint.py drift           # Compare to last attestation
+    python cognitive_fingerprint.py export          # Standardized comparison export
 
 Why this matters:
     - The pattern comes from USAGE not content
@@ -978,6 +979,124 @@ def save_fingerprint(analysis: dict) -> None:
         json.dump(history, f, indent=2)
 
 
+def generate_standardized_export(agent_name: str = None) -> dict:
+    """
+    Generate a standardized export for cross-agent comparison.
+
+    Every metric is explicitly defined so two agents running this
+    function produce directly comparable output regardless of their
+    internal graph construction details.
+    """
+    # Count total memory files on disk
+    total_files = 0
+    files_with_edges = 0
+    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            metadata, _ = parse_memory_file(filepath)
+            mem_id = metadata.get('id')
+            if not mem_id:
+                continue
+            total_files += 1
+            co = metadata.get('co_occurrences', {})
+            if co and any(v > 0 for v in co.values()):
+                files_with_edges += 1
+
+    # Build graph from standard (non-filtered) co-occurrences
+    graph = build_graph(activity_filter=None)
+    edges = graph['edges']
+    adjacency = graph['adjacency']
+
+    # Nodes appearing in at least one edge (bilateral count)
+    nodes_in_edges = set()
+    for (a, b) in edges:
+        nodes_in_edges.add(a)
+        nodes_in_edges.add(b)
+    graph_nodes = len(nodes_in_edges)
+    graph_edges = len(edges)
+
+    # Degree sequence from adjacency
+    degrees = [len(adjacency.get(n, {})) for n in nodes_in_edges]
+    degrees.sort(reverse=True)
+
+    avg_degree = sum(degrees) / max(len(degrees), 1)
+    max_degree = degrees[0] if degrees else 0
+
+    # Distribution stats
+    distribution = compute_strength_distribution(graph)
+
+    # Cognitive domains
+    domains = compute_cognitive_domains(graph)
+    domain_stats = domains.get('domains', {})
+    domain_weights = {
+        d: stats['weight_pct'] for d, stats in domain_stats.items()
+    }
+
+    # Hub degrees (top 10)
+    hubs = compute_hub_centrality(graph, top_n=10)
+    hub_degrees = [h['degree'] for h in hubs]
+
+    # Fingerprint hash (uses original nested domain stats)
+    fingerprint_hash = compute_fingerprint_hash(
+        hubs, distribution, len(detect_clusters(graph)),
+        domain_weights=domain_stats,
+    )
+
+    # Content hash: hash of all edge data for tamper detection
+    edge_data = json.dumps(
+        {f"{a}|{b}": w for (a, b), w in sorted(edges.items())},
+        sort_keys=True
+    )
+    content_hash = hashlib.sha256(edge_data.encode()).hexdigest()
+
+    # Detect agent name
+    if not agent_name:
+        agent_name = "unknown"
+        claude_md = MEMORY_DIR.parent / "CLAUDE.md"
+        if claude_md.exists():
+            text = claude_md.read_text(encoding='utf-8')
+            for line in text.split('\n'):
+                if 'I am **' in line:
+                    start = line.index('I am **') + 7
+                    end = line.index('**', start)
+                    agent_name = line[start:end]
+                    break
+
+    return {
+        "version": "2.0",
+        "type": "standardized_comparison_export",
+        "agent": agent_name,
+        "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+        "methodology": {
+            "source": "frontmatter_co_occurrences",
+            "description": "All co-occurrence pairs from memory YAML frontmatter with weight > 0",
+            "graph_nodes_definition": "Unique memory IDs appearing in at least one edge (bilateral)",
+            "files_with_edges_definition": "Memory files whose co_occurrences field has at least one positive value",
+        },
+        "scale": {
+            "total_memory_files": total_files,
+            "files_with_edges": files_with_edges,
+            "graph_nodes": graph_nodes,
+            "graph_edges": graph_edges,
+            "coverage_ratio": round(files_with_edges / max(total_files, 1), 3),
+        },
+        "topology": {
+            "avg_degree": round(avg_degree, 2),
+            "gini": distribution.get('gini', 0),
+            "skewness": distribution.get('skewness', 0),
+            "max_degree": max_degree,
+            "top_10_hub_degrees": hub_degrees,
+        },
+        "domains": domain_weights,
+        "identity": {
+            "fingerprint_hash": fingerprint_hash,
+            "content_hash": content_hash,
+        },
+        "degree_histogram": dict(Counter(degrees)),
+    }
+
+
 # === CLI Interface ===
 
 def cmd_analyze():
@@ -1221,6 +1340,54 @@ def cmd_drift():
     print(f"Cluster Drift: {drift['cluster_drift']}")
 
 
+def cmd_export():
+    """Generate standardized comparison export."""
+    agent_name = sys.argv[2] if len(sys.argv) > 2 else None
+    export = generate_standardized_export(agent_name)
+
+    # Save to exports directory
+    exports_dir = MEMORY_DIR / "exports"
+    exports_dir.mkdir(exist_ok=True)
+    ts = datetime.now().strftime('%Y%m%d_%H%M')
+    filename = f"{export['agent'].lower()}_{ts}_comparison.json"
+    filepath = exports_dir / filename
+
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(export, f, indent=2)
+
+    # Print summary
+    s = export['scale']
+    t = export['topology']
+    print(f"STANDARDIZED COMPARISON EXPORT — v{export['version']}")
+    print(f"{'=' * 60}")
+    print(f"Agent: {export['agent']}")
+    print(f"Timestamp: {export['timestamp']}")
+    print(f"Source: {export['methodology']['source']}")
+    print()
+    print(f"SCALE:")
+    print(f"  Total memory files:  {s['total_memory_files']}")
+    print(f"  Files with edges:    {s['files_with_edges']} ({s['coverage_ratio']*100:.1f}%)")
+    print(f"  Graph nodes:         {s['graph_nodes']} (bilateral)")
+    print(f"  Graph edges:         {s['graph_edges']}")
+    print()
+    print(f"TOPOLOGY:")
+    print(f"  Avg degree:          {t['avg_degree']}")
+    print(f"  Gini:                {t['gini']}")
+    print(f"  Skewness:            {t['skewness']}")
+    print(f"  Max degree:          {t['max_degree']}")
+    print(f"  Top 5 hub degrees:   {t['top_10_hub_degrees'][:5]}")
+    print()
+    print(f"DOMAINS:")
+    for domain, weight in sorted(export['domains'].items(), key=lambda x: -x[1]):
+        print(f"  {domain:15s} {weight:.1f}%")
+    print()
+    print(f"IDENTITY:")
+    print(f"  Fingerprint hash:    {export['identity']['fingerprint_hash'][:16]}...")
+    print(f"  Content hash:        {export['identity']['content_hash'][:16]}...")
+    print()
+    print(f"Saved to: {filepath}")
+
+
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         print(__doc__)
@@ -1244,6 +1411,8 @@ if __name__ == '__main__':
         cmd_attest()
     elif command == 'drift':
         cmd_drift()
+    elif command == 'export':
+        cmd_export()
     elif command == 'context':
         act_decomp = activity_decomposition()
         if not act_decomp:
