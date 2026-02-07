@@ -73,21 +73,14 @@ ACTIVATION_DECAY_ENABLED = True
 ACTIVATION_HALF_LIFE_HOURS = 24 * 7  # 7 days for activation to halve without recall
 ACTIVATION_MIN_FLOOR = 0.01  # Minimum activation (prevents complete forgetting)
 
-# v2.15: Entity-Centric Tagging - Typed entity links (ENTITY edges from Kaleaon schema)
-# Credit: Kaleaon (Landseek-Amphibian) Tri-Agent Interop proposal (Issue #6)
-# Entity types map to relationship kinds for graph queries
-ENTITY_TYPES = ['agent', 'project', 'concept', 'location', 'event']
-KNOWN_AGENTS = {
-    'spindriftmend', 'spindriftmind', 'spin', 'spindrift',
-    'kaleaon', 'cosmo', 'amphibian',
-    'drift', 'driftcornwall',
-    'lex', 'flycompoundeye', 'buzz',
-    'mikaopenclaw', 'mika'
-}
-KNOWN_PROJECTS = {
-    'drift-memory', 'amphibian', 'landseek-amphibian', 'moltbook',
-    'moltx', 'clawtasks', 'gitmolt', 'moltswarm'
-}
+# Phase 1 extraction: entity detection (pure NLP functions)
+from entity_detection import (
+    detect_entities, detect_event_time,
+    ENTITY_TYPES, KNOWN_AGENTS, KNOWN_PROJECTS
+)
+
+# Phase 1 extraction: session state management
+import session_state
 
 # v3.0: Edge Provenance System - Observations vs Beliefs (credit: SpindriftMend PR #5)
 OBSERVATION_MAX_AGE_DAYS = 30  # Observations older than this get reduced weight
@@ -98,85 +91,8 @@ TRUST_TIERS = {
     'unknown': 0.3          # Observations from unknown sources
 }
 
-# Session state - now file-backed for persistence across Python invocations
-_session_retrieved: set[str] = set()
-_session_loaded: bool = False
 
-
-def _load_session_state() -> None:
-    """Load session state from file. Called automatically on first access."""
-    global _session_retrieved, _session_loaded
-
-    if _session_loaded:
-        return
-
-    _session_loaded = True
-
-    # v2.16: Process pending co-occurrences from previous session (deferred processing)
-    if PENDING_COOCCURRENCE_FILE.exists():
-        try:
-            process_pending_cooccurrence()
-        except Exception as e:
-            print(f"Warning: Could not process pending co-occurrences: {e}")
-
-    # v2.16: Process pending semantic indexing from previous session
-    pending_index_file = MEMORY_ROOT / ".pending_index"
-    if pending_index_file.exists():
-        try:
-            semantic_search = MEMORY_ROOT / "semantic_search.py"
-            if semantic_search.exists():
-                import subprocess
-                print("Indexing new memories from previous session...")
-                result = subprocess.run(
-                    ["python", str(semantic_search), "index"],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                    cwd=str(MEMORY_ROOT)
-                )
-                if result.returncode == 0:
-                    print("Semantic index updated.")
-            pending_index_file.unlink(missing_ok=True)
-        except Exception as e:
-            print(f"Warning: Could not process pending index: {e}")
-
-    if not SESSION_FILE.exists():
-        _session_retrieved = set()
-        return
-
-    try:
-        data = json.loads(SESSION_FILE.read_text(encoding='utf-8'))
-        session_start = datetime.fromisoformat(data.get('started', '2000-01-01'))
-
-        # Check if session is stale
-        hours_old = (datetime.now(timezone.utc) - session_start).total_seconds() / 3600
-        if hours_old > SESSION_TIMEOUT_HOURS:
-            # Session is stale - start fresh
-            _session_retrieved = set()
-            SESSION_FILE.unlink(missing_ok=True)
-        else:
-            _session_retrieved = set(data.get('retrieved', []))
-    except (json.JSONDecodeError, KeyError, ValueError):
-        _session_retrieved = set()
-
-
-def _save_session_state() -> None:
-    """Save session state to file."""
-    # Load existing to preserve start time
-    started = datetime.now(timezone.utc).isoformat()
-    if SESSION_FILE.exists():
-        try:
-            data = json.loads(SESSION_FILE.read_text(encoding='utf-8'))
-            started = data.get('started', started)
-        except (json.JSONDecodeError, KeyError):
-            pass
-
-    data = {
-        'started': started,
-        'retrieved': list(_session_retrieved),
-        'last_updated': datetime.now(timezone.utc).isoformat()
-    }
-    SESSION_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
+# _load_session_state and _save_session_state -> session_state module (Phase 1)
 
 
 def generate_id() -> str:
@@ -284,10 +200,7 @@ def recall_memory(memory_id: str) -> Optional[tuple[dict, str]]:
     Searches all directories. Tracks co-occurrence with other memories retrieved this session.
     Session state persists to disk so it survives Python process restarts.
     """
-    global _session_retrieved
-
-    # Load session state from file (handles fresh Python processes)
-    _load_session_state()
+    session_state.load()
 
     for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
         if not directory.exists():
@@ -305,8 +218,8 @@ def recall_memory(memory_id: str) -> Optional[tuple[dict, str]]:
             metadata['emotional_weight'] = min(1.0, current_weight + 0.05)
 
             # Track co-occurrence with other memories retrieved this session
-            _session_retrieved.add(memory_id)
-            _save_session_state()  # Persist to disk
+            session_state.add_retrieved(memory_id)
+            session_state.save()
 
             write_memory_file(filepath, metadata, content)
             return metadata, content
@@ -316,16 +229,12 @@ def recall_memory(memory_id: str) -> Optional[tuple[dict, str]]:
 
 def get_session_retrieved() -> set[str]:
     """Get the set of memory IDs retrieved this session. Loads from disk if needed."""
-    _load_session_state()
-    return _session_retrieved.copy()
+    return session_state.get_retrieved()
 
 
 def clear_session() -> None:
     """Clear session tracking (call at session end after logging co-occurrences)."""
-    global _session_retrieved, _session_loaded
-    _session_retrieved = set()
-    _session_loaded = False
-    SESSION_FILE.unlink(missing_ok=True)  # Delete session file
+    session_state.clear()
 
 
 def log_co_occurrences() -> int:
@@ -334,8 +243,7 @@ def log_co_occurrences() -> int:
     Call at session end to strengthen links between co-retrieved memories.
     Returns number of pairs updated.
     """
-    _load_session_state()  # Load from disk in case this is a fresh Python process
-    retrieved = list(_session_retrieved)
+    retrieved = session_state.get_retrieved_list()
     if len(retrieved) < 2:
         return 0
 
@@ -372,8 +280,7 @@ def log_co_occurrences_v3() -> tuple[int, str]:
 
     Returns: (pairs_updated, session_activity)
     """
-    _load_session_state()
-    retrieved = list(_session_retrieved)
+    retrieved = session_state.get_retrieved_list()
     if len(retrieved) < 2:
         return 0, None
 
@@ -415,18 +322,21 @@ def log_co_occurrences_v3() -> tuple[int, str]:
             )
 
             # Create or update edge
+            now = datetime.now(timezone.utc).isoformat()
             if pair not in edges:
                 edges[pair] = {
                     'observations': [],
                     'belief': 0.0,
-                    'last_updated': datetime.now(timezone.utc).isoformat(),
+                    'first_formed': now,  # v2.17: Track when edge was first created
+                    'last_updated': now,
                     'platform_context': {},
                     'activity_context': {},
+                    'thinking_about': [],  # v2.17: Other memories active when this edge formed
                 }
 
             edges[pair]['observations'].append(obs)
             edges[pair]['belief'] = aggregate_belief(edges[pair]['observations'])
-            edges[pair]['last_updated'] = datetime.now(timezone.utc).isoformat()
+            edges[pair]['last_updated'] = now
 
             # Update platform context
             if 'platform_context' not in edges[pair]:
@@ -441,6 +351,15 @@ def log_co_occurrences_v3() -> tuple[int, str]:
                 edges[pair]['activity_context'][session_activity] = (
                     edges[pair]['activity_context'].get(session_activity, 0) + 1
                 )
+
+            # v2.17: Track what ELSE was being thought about when this edge formed
+            # This captures cognitive context beyond just the pair
+            if 'thinking_about' not in edges[pair]:
+                edges[pair]['thinking_about'] = []
+            other_memories = [m for m in retrieved if m not in pair]
+            for mem_id in other_memories:
+                if mem_id not in edges[pair]['thinking_about']:
+                    edges[pair]['thinking_about'].append(mem_id)
 
             pairs_updated += 1
 
@@ -457,11 +376,7 @@ def save_pending_cooccurrence() -> int:
 
     Returns: Number of memories saved to pending
     """
-    global _session_retrieved, _session_loaded
-
-    _load_session_state()  # Load from disk
-
-    retrieved = list(_session_retrieved)
+    retrieved = session_state.get_retrieved_list()
     if not retrieved:
         print("No memories to save to pending.")
         return 0
@@ -473,12 +388,12 @@ def save_pending_cooccurrence() -> int:
         'agent': 'DriftCornwall',
         'saved_at': datetime.now(timezone.utc).isoformat()
     }
-    PENDING_COOCCURRENCE_FILE.write_text(json.dumps(pending_data, indent=2), encoding='utf-8')
+    PENDING_COOCCURRENCE_FILE.write_text(
+        json.dumps(pending_data, indent=2), encoding='utf-8'
+    )
 
     # Clear session state
-    _session_retrieved = set()
-    _session_loaded = False
-    SESSION_FILE.unlink(missing_ok=True)
+    session_state.clear()
 
     print(f"Saved {len(retrieved)} memories to pending co-occurrence file.")
     return len(retrieved)
@@ -890,10 +805,8 @@ def decay_pair_cooccurrences() -> tuple[int, int]:
 
     Credit: SpindriftMend (PR #2), FadeMem (v2.8 access weighting)
     """
-    _load_session_state()
-
     # Build set of pairs that were reinforced this session
-    retrieved = list(_session_retrieved)
+    retrieved = session_state.get_retrieved_list()
     reinforced_pairs = set()
     for i, id1 in enumerate(retrieved):
         for id2 in retrieved[i+1:]:
@@ -1033,10 +946,8 @@ def decay_pair_cooccurrences_v3() -> tuple[int, int]:
 
     Credit: Optimization to fix O(n²) hang with 600+ memories (2026-02-05)
     """
-    _load_session_state()
-
     # Build set of pairs reinforced this session (same logic as old function)
-    retrieved = list(_session_retrieved)
+    retrieved = session_state.get_retrieved_list()
     reinforced_pairs = set()
     for i, id1 in enumerate(retrieved):
         for id2 in retrieved[i+1:]:
@@ -1523,8 +1434,7 @@ def get_comprehensive_stats() -> dict:
     avg_count = total_count / total_pairs if total_pairs > 0 else 0
 
     # Session stats
-    _load_session_state()
-    session_recalls = len(_session_retrieved)
+    session_recalls = len(session_state.get_retrieved())
 
     # Decay history (if tracked)
     decay_file = MEMORY_ROOT / ".decay_history.json"
@@ -1582,150 +1492,7 @@ def log_decay_event(decayed: int, pruned: int):
     decay_file.write_text(json.dumps(history, indent=2), encoding='utf-8')
 
 
-def detect_event_time(content: str) -> Optional[str]:
-    """
-    Auto-detect event_time from content by parsing date references.
-    Returns ISO date string (YYYY-MM-DD) or None if no date found.
-
-    Detects:
-    - Explicit dates: "2026-01-31", "January 31, 2026", "Jan 31"
-    - Relative dates: "yesterday", "last week", "2 days ago"
-    - Session references: "this session", "today" (returns today)
-
-    v2.11: Intelligent bi-temporal - memories auto-tagged with event time.
-    """
-    today = datetime.now(timezone.utc).date()
-    content_lower = content.lower()
-
-    # Explicit ISO date (YYYY-MM-DD)
-    iso_match = re.search(r'(\d{4}-\d{2}-\d{2})', content)
-    if iso_match:
-        return iso_match.group(1)
-
-    # Month DD, YYYY or Month DD YYYY
-    month_names = {
-        'january': 1, 'february': 2, 'march': 3, 'april': 4,
-        'may': 5, 'june': 6, 'july': 7, 'august': 8,
-        'september': 9, 'october': 10, 'november': 11, 'december': 12,
-        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'jun': 6,
-        'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
-    }
-    month_pattern = r'(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{4})?'
-    month_match = re.search(month_pattern, content_lower)
-    if month_match:
-        month = month_names[month_match.group(1)]
-        day = int(month_match.group(2))
-        year = int(month_match.group(3)) if month_match.group(3) else today.year
-        try:
-            return f"{year:04d}-{month:02d}-{day:02d}"
-        except ValueError:
-            pass
-
-    # Relative dates
-    if 'yesterday' in content_lower:
-        return (today - timedelta(days=1)).isoformat()
-    if 'day before yesterday' in content_lower:
-        return (today - timedelta(days=2)).isoformat()
-    if 'last week' in content_lower:
-        return (today - timedelta(weeks=1)).isoformat()
-    if 'last month' in content_lower:
-        return (today - timedelta(days=30)).isoformat()
-
-    # N days/weeks ago
-    ago_match = re.search(r'(\d+)\s+(day|week|month)s?\s+ago', content_lower)
-    if ago_match:
-        num = int(ago_match.group(1))
-        unit = ago_match.group(2)
-        if unit == 'day':
-            return (today - timedelta(days=num)).isoformat()
-        elif unit == 'week':
-            return (today - timedelta(weeks=num)).isoformat()
-        elif unit == 'month':
-            return (today - timedelta(days=num * 30)).isoformat()
-
-    # Today/this session - return today
-    if 'today' in content_lower or 'this session' in content_lower:
-        return today.isoformat()
-
-    # No date detected - return None (will use created time)
-    return None
-
-
-# ============================================================================
-# v2.15: ENTITY-CENTRIC TAGGING - Typed entity links (Kaleaon ENTITY edges)
-# Credit: Kaleaon (Landseek-Amphibian) Tri-Agent Interop proposal
-# ============================================================================
-
-def detect_entities(content: str, tags: list[str] = None) -> dict[str, list[str]]:
-    """
-    Auto-detect entities from content and tags.
-
-    Detection patterns:
-    - @mentions → agents
-    - Known agent names → agents
-    - Known project names → projects
-    - #hashtags → concepts
-    - Capitalized multi-word phrases → potential entities
-
-    Returns:
-        Dict with entity types as keys: {'agents': [...], 'projects': [...], 'concepts': [...]}
-    """
-    tags = tags or []
-    content_lower = content.lower()
-    entities = {
-        'agents': set(),
-        'projects': set(),
-        'concepts': set()
-    }
-
-    # @mentions → agents
-    mentions = re.findall(r'@(\w+)', content)
-    for mention in mentions:
-        mention_lower = mention.lower()
-        if mention_lower in KNOWN_AGENTS:
-            entities['agents'].add(mention_lower)
-        else:
-            entities['agents'].add(mention_lower)
-
-    # Known agents in content
-    for agent in KNOWN_AGENTS:
-        if agent in content_lower:
-            # Normalize to canonical name
-            if agent in ('spindriftmend', 'spindriftmind', 'spin', 'spindrift'):
-                entities['agents'].add('spindriftmend')
-            elif agent in ('kaleaon', 'cosmo', 'amphibian'):
-                entities['agents'].add('kaleaon')
-            elif agent in ('drift', 'driftcornwall'):
-                entities['agents'].add('drift')
-            elif agent in ('flycompoundeye', 'buzz'):
-                entities['agents'].add('flycompoundeye')
-            elif agent in ('mikaopenclaw', 'mika'):
-                entities['agents'].add('mikaopenclaw')
-            else:
-                entities['agents'].add(agent)
-
-    # Known projects in content
-    for project in KNOWN_PROJECTS:
-        if project in content_lower:
-            entities['projects'].add(project)
-
-    # #hashtags → concepts
-    hashtags = re.findall(r'#(\w+)', content)
-    for tag in hashtags:
-        entities['concepts'].add(tag.lower())
-
-    # Tags that look like entity names
-    for tag in tags:
-        tag_lower = tag.lower()
-        if tag_lower in KNOWN_AGENTS:
-            entities['agents'].add(tag_lower)
-        elif tag_lower in KNOWN_PROJECTS:
-            entities['projects'].add(tag_lower)
-        elif tag_lower in ('collaboration', 'milestone', 'memory-system', 'causal-edges'):
-            entities['concepts'].add(tag_lower)
-
-    # Convert sets to sorted lists
-    return {k: sorted(list(v)) for k, v in entities.items() if v}
+# detect_event_time and detect_entities -> entity_detection module (Phase 1)
 
 
 def find_memories_by_entity(entity_type: str, entity_name: str, limit: int = 20) -> list[tuple]:
@@ -2163,8 +1930,7 @@ def auto_log_retrieval_outcomes() -> dict:
     Returns:
         Dict with counts of each outcome type logged
     """
-    _load_session_state()
-    retrieved = list(_session_retrieved)
+    retrieved = session_state.get_retrieved_list()
 
     if not retrieved:
         return {"productive": 0, "generative": 0, "dead_end": 0}
@@ -2431,8 +2197,7 @@ def store_memory(content: str, tags: list[str] = None, emotion: float = 0.5, tit
 
     # Auto-detect causal links: if memories were recalled this session before storing,
     # they may have caused this memory (the "recall → store" pattern)
-    _load_session_state()
-    auto_causal = list(_session_retrieved) if _session_retrieved else []
+    auto_causal = session_state.get_retrieved_list()
 
     # Merge explicit and auto-detected causal links (explicit takes precedence)
     all_causal = list(set(caused_by + auto_causal))
@@ -2665,8 +2430,7 @@ if __name__ == "__main__":
         if content:
             memory_id, filename = store_memory(content, tags, emotion, caused_by=caused_by, event_time=event_time)
             # Show causal links if any were created
-            _load_session_state()
-            auto_causal = list(_session_retrieved) if _session_retrieved else []
+            auto_causal = session_state.get_retrieved_list()
             all_causal = list(set(caused_by + auto_causal))
             if all_causal:
                 print(f"Stored memory [{memory_id}] -> {filename}")
@@ -2838,16 +2602,14 @@ if __name__ == "__main__":
                 print("No matching memories found. (Is the index built? Run: memory_manager.py index)")
             else:
                 print(f"Memories matching '{query}':\n")
-                # Load existing session state first (v2.8 fix: accumulate, don't replace)
-                _load_session_state()
                 for r in results:
                     # Track retrieval for co-occurrence (biological: retrieval strengthens memory)
-                    _session_retrieved.add(r['id'])
+                    session_state.add_retrieved(r['id'])
                     print(f"[{r['score']:.3f}] {r['id']}")
                     print(f"  {r['preview'][:100]}...")
                     print()
                 # Save session state so co-occurrences persist
-                _save_session_state()
+                session_state.save()
         except ImportError:
             print("Semantic search not available (missing semantic_search.py)")
         except Exception as e:
