@@ -23,6 +23,7 @@ Configuration:
 Author: Drift
 """
 
+import hashlib
 import json
 import os
 import re
@@ -40,6 +41,10 @@ ENABLED = os.environ.get('THOUGHT_PRIMING_ENABLED', 'false').lower() == 'true'
 
 # Also check config file for persistence
 CONFIG_FILE = Path(__file__).parent / "thought_priming_config.json"
+STATE_FILE = Path(__file__).parent / ".thought_priming_state.json"
+
+# Cooldown: only fire every Nth tool call (reduces 200 searches to ~40)
+CALL_COOLDOWN = 5
 
 def is_enabled() -> bool:
     """Check if thought priming is enabled."""
@@ -82,6 +87,32 @@ def status():
 
 
 # =============================================================================
+# STATE MANAGEMENT (cross-call persistence via file)
+# =============================================================================
+
+def _load_state(transcript_path: str) -> dict:
+    """Load state, reset on new session (different transcript path)."""
+    default = {"last_hash": "", "returned_ids": [], "call_count": 0, "transcript": ""}
+    if STATE_FILE.exists():
+        try:
+            state = json.loads(STATE_FILE.read_text())
+            if state.get("transcript") == transcript_path:
+                return state
+        except Exception:
+            pass
+    default["transcript"] = transcript_path
+    return default
+
+
+def _save_state(state: dict):
+    """Persist state between calls."""
+    try:
+        STATE_FILE.write_text(json.dumps(state))
+    except Exception:
+        pass
+
+
+# =============================================================================
 # TRANSCRIPT PARSING
 # =============================================================================
 
@@ -96,38 +127,38 @@ def extract_last_thinking_block(transcript_path: str) -> Optional[str]:
         return None
 
     try:
-        last_thinking = None
+        # Read lines in reverse — the last thinking block is near the end,
+        # no need to scan the entire transcript every time
+        lines = Path(transcript_path).read_text(encoding='utf-8').splitlines()
 
-        with open(transcript_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
 
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
-                # Look for assistant messages
-                msg = entry.get('message', {})
-                if msg.get('role') != 'assistant':
-                    continue
+            msg = entry.get('message', {})
+            if msg.get('role') != 'assistant':
+                continue
 
-                # Check content blocks for thinking
-                content = msg.get('content', [])
-                if not isinstance(content, list):
-                    continue
+            content = msg.get('content', [])
+            if not isinstance(content, list):
+                continue
 
-                for block in content:
-                    if isinstance(block, dict) and block.get('type') == 'thinking':
-                        thinking_text = block.get('thinking', '')
-                        if thinking_text and len(thinking_text) > 50:
-                            last_thinking = thinking_text
+            # Walk content blocks in reverse to find the last thinking block
+            for block in reversed(content):
+                if isinstance(block, dict) and block.get('type') == 'thinking':
+                    thinking_text = block.get('thinking', '')
+                    if thinking_text and len(thinking_text) > 50:
+                        return thinking_text
 
-        return last_thinking
+        return None
 
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -142,8 +173,9 @@ def search_memories(query: str, memory_dir: Path, limit: int = 2) -> list[dict]:
     Returns list of {id, score, preview} dicts.
     """
     try:
-        # Truncate query to first ~200 chars for efficiency
-        query = query[:500].strip()
+        # Take LAST 500 chars — the tail has specific reasoning,
+        # the head is always generic session context ("Let me check...")
+        query = query[-500:].strip()
         if not query:
             return []
 
@@ -205,37 +237,66 @@ def prime_from_thought(transcript_path: str, memory_dir: Path = None) -> str:
     """
     Main entry point. Extract last thinking block, search memories, format output.
 
-    Args:
-        transcript_path: Path to the session transcript JSONL
-        memory_dir: Path to memory directory (auto-detected if None)
-
-    Returns:
-        Formatted memory context string, or empty string if disabled/no matches
+    Optimizations (Phase 0 — 2026-02-07):
+    - Cooldown: only fires every CALL_COOLDOWN-th tool call
+    - Hash cache: skips search if thinking block unchanged
+    - Dedup: won't return the same memory ID twice in a session
+    - Reverse scan: reads transcript from end, not beginning
+    - Tail query: uses last 500 chars of thinking (specific reasoning, not session boilerplate)
     """
-    # Check if enabled
     if not is_enabled():
         return ""
 
-    # Auto-detect memory directory
     if memory_dir is None:
         memory_dir = Path(__file__).parent
 
     if not memory_dir.exists():
         return ""
 
+    # Load cross-call state (resets on new session)
+    state = _load_state(transcript_path)
+
+    # Cooldown — skip most calls (fire on 0th, 5th, 10th...)
+    if state["call_count"] % CALL_COOLDOWN != 0:
+        state["call_count"] += 1
+        _save_state(state)
+        return ""
+    state["call_count"] += 1
+
     # Extract last thinking block
     thinking = extract_last_thinking_block(transcript_path)
     if not thinking:
+        _save_state(state)
         return ""
+
+    # Hash check — skip if thinking block hasn't changed
+    thinking_hash = hashlib.md5(thinking[-500:].encode()).hexdigest()
+    if thinking_hash == state["last_hash"]:
+        _save_state(state)
+        return ""
+    state["last_hash"] = thinking_hash
 
     # Search memories
     memories = search_memories(thinking, memory_dir)
     if not memories:
+        _save_state(state)
         return ""
+
+    # Dedup — filter out memories already returned this session
+    returned_set = set(state["returned_ids"])
+    new_memories = [m for m in memories if m["id"] not in returned_set]
+    if not new_memories:
+        _save_state(state)
+        return ""
+
+    # Track returned IDs
+    for m in new_memories:
+        state["returned_ids"].append(m["id"])
+    _save_state(state)
 
     # Format output
     lines = ["", "=== THOUGHT-TRIGGERED MEMORY ==="]
-    for mem in memories:
+    for mem in new_memories:
         lines.append(f"[{mem['score']:.2f}] {mem['id']}: {mem['preview']}...")
     lines.append("================================")
 
