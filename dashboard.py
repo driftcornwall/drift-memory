@@ -8,7 +8,6 @@ Usage:
     python dashboard.py --quick  # Just stats, no feed scan
 """
 
-import os
 import requests
 import json
 import sys
@@ -18,10 +17,20 @@ from datetime import datetime
 sys.stdout.reconfigure(encoding='utf-8')
 
 
+def _load_moltx_key():
+    """Load MoltX API key from credentials file."""
+    cred_path = Path.home() / ".config" / "moltx" / "drift-credentials.json"
+    if cred_path.exists():
+        with open(cred_path, 'r') as f:
+            creds = json.load(f)
+            return creds.get('api_key', creds.get('token', ''))
+    return ''
+
+
 def moltx_status():
     """MoltX engagement stats."""
     try:
-        api_key = os.environ.get('MOLTX_API_KEY', '')
+        api_key = _load_moltx_key()
         headers = {'Authorization': f'Bearer {api_key}'}
         base = 'https://moltx.io/v1'
 
@@ -47,11 +56,22 @@ def moltx_status():
         return {'status': f'error: {e}'}
 
 
+def _load_github_token():
+    """Load GitHub token from credentials file."""
+    cred_path = Path.home() / ".config" / "github" / "drift-credentials.json"
+    if cred_path.exists():
+        with open(cred_path, 'r') as f:
+            creds = json.load(f)
+            return creds.get('token', creds.get('api_key', ''))
+    return ''
+
+
 def github_status():
     """GitHub notifications and repo activity."""
     try:
+        gh_token = _load_github_token()
         headers = {
-            'Authorization': f'token {os.environ.get("GITHUB_TOKEN", "")}',
+            'Authorization': f'token {gh_token}',
             'Accept': 'application/vnd.github+json'
         }
 
@@ -156,7 +176,7 @@ def memory_status():
 def moltbook_status():
     """Moltbook connection check."""
     try:
-        creds = json.load(open(Path.home() / '.config/moltbook/credentials.json'))
+        creds = json.load(open(Path.home() / '.config/moltbook/drift-credentials.json'))
         api_key = creds.get('api_key', creds.get('token', ''))
         headers = {'X-API-Key': api_key}
 

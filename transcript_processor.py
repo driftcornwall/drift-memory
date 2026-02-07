@@ -281,6 +281,56 @@ def extract_from_transcript(transcript_path: Path) -> list[dict]:
                                             'hash': hashlib.md5(text[:500].encode()).hexdigest()[:8]
                                         })
 
+                            # Extract SendMessage content (teammate/subagent reports)
+                            elif block_type == 'tool_use':
+                                tool_name = block.get('name', '')
+                                if tool_name == 'SendMessage':
+                                    tool_input = block.get('input', {})
+                                    msg_content = tool_input.get('content', '')
+                                    if len(msg_content) > 100:
+                                        salience, categories = compute_thought_salience(msg_content)
+                                        source = detect_source(msg_content)
+                                        if salience >= 0.3:
+                                            memories.append({
+                                                'type': 'teammate_report',
+                                                'content': msg_content[:2000],
+                                                'salience': salience,
+                                                'categories': categories,
+                                                'source': source,
+                                                'timestamp': timestamp,
+                                                'hash': hashlib.md5(msg_content[:500].encode()).hexdigest()[:8]
+                                            })
+
+                # Process tool_result from subagent/teammate work
+                elif data.get('type') == 'user':
+                    msg = data.get('message', {})
+                    if isinstance(msg, dict):
+                        content_blocks = msg.get('content', [])
+                        timestamp = data.get('timestamp', datetime.now().isoformat())
+                        for block in (content_blocks if isinstance(content_blocks, list) else []):
+                            if not isinstance(block, dict):
+                                continue
+                            if block.get('type') == 'tool_result':
+                                result_content = block.get('content', '')
+                                if isinstance(result_content, list):
+                                    result_content = ' '.join(
+                                        b.get('text', '') for b in result_content
+                                        if isinstance(b, dict) and b.get('type') == 'text'
+                                    )
+                                if isinstance(result_content, str) and len(result_content) > 200:
+                                    salience, categories = compute_thought_salience(result_content)
+                                    source = detect_source(result_content)
+                                    if salience >= 0.35:
+                                        memories.append({
+                                            'type': 'tool_result',
+                                            'content': result_content[:2000],
+                                            'salience': salience,
+                                            'categories': categories,
+                                            'source': source,
+                                            'timestamp': timestamp,
+                                            'hash': hashlib.md5(result_content[:500].encode()).hexdigest()[:8]
+                                        })
+
                 # Process errors from progress messages
                 elif data.get('type') == 'progress':
                     # Check for error content

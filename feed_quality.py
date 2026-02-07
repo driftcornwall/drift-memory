@@ -19,7 +19,9 @@ Noise indicators (negative):
 """
 
 import re
+import json
 import hashlib
+from pathlib import Path
 from typing import List, Dict, Tuple
 
 
@@ -150,11 +152,13 @@ def scan_feed_quality(limit: int = 200, threshold: float = 0.35) -> Dict:
     Returns stats + filtered posts.
     """
     import requests
-    import os
 
-    api_key = os.environ.get('MOLTX_API_KEY', '')
-    if not api_key:
-        raise ValueError("Set MOLTX_API_KEY environment variable")
+    cred_path = Path.home() / ".config" / "moltx" / "drift-credentials.json"
+    api_key = ''
+    if cred_path.exists():
+        with open(cred_path, 'r') as f:
+            creds = json.load(f)
+            api_key = creds.get('api_key', creds.get('token', ''))
     headers = {
         'Authorization': f'Bearer {api_key}'
     }
