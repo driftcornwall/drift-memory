@@ -29,12 +29,12 @@ except ImportError:
     def _log_taste_rejection(**kwargs):
         pass
 
-MEMORY_ROOT = Path(__file__).parent
-CORE_DIR = MEMORY_ROOT / "core"
-ACTIVE_DIR = MEMORY_ROOT / "active"
-ARCHIVE_DIR = MEMORY_ROOT / "archive"
-SESSION_FILE = MEMORY_ROOT / ".session_state.json"
-PENDING_COOCCURRENCE_FILE = MEMORY_ROOT / ".pending_cooccurrence.json"  # v2.16: Deferred processing
+# Phase 2 extraction: shared infrastructure (constants, parse/write)
+from memory_common import (
+    MEMORY_ROOT, CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR, ALL_DIRS,
+    SESSION_FILE, PENDING_COOCCURRENCE_FILE,
+    parse_memory_file, write_memory_file,
+)
 
 # Configuration
 DECAY_THRESHOLD_SESSIONS = 7  # Sessions without recall before compression candidate
@@ -82,6 +82,12 @@ from entity_detection import (
 # Phase 1 extraction: session state management
 import session_state
 
+# Phase 2 extraction: read-only query functions
+from memory_query import (
+    find_co_occurring_memories, find_memories_by_tag, find_memories_by_time,
+    find_related_memories, find_memories_by_entity, get_entity_cooccurrence,
+)
+
 # v3.0: Edge Provenance System - Observations vs Beliefs (credit: SpindriftMend PR #5)
 OBSERVATION_MAX_AGE_DAYS = 30  # Observations older than this get reduced weight
 TRUST_TIERS = {
@@ -100,22 +106,7 @@ def generate_id() -> str:
     return hashlib.md5(str(uuid.uuid4()).encode()).hexdigest()[:8]
 
 
-def parse_memory_file(filepath: Path) -> tuple[dict, str]:
-    """Parse a memory file with YAML frontmatter."""
-    content = filepath.read_text(encoding='utf-8')
-    if content.startswith('---'):
-        parts = content.split('---', 2)
-        if len(parts) >= 3:
-            metadata = yaml.safe_load(parts[1])
-            body = parts[2].strip()
-            return metadata, body
-    return {}, content
-
-
-def write_memory_file(filepath: Path, metadata: dict, content: str):
-    """Write a memory file with YAML frontmatter."""
-    yaml_str = yaml.dump(metadata, default_flow_style=False, sort_keys=False)
-    filepath.write_text(f"---\n{yaml_str}---\n\n{content}", encoding='utf-8')
+# parse_memory_file and write_memory_file -> memory_common module (Phase 2)
 
 
 def calculate_emotional_weight(
@@ -1068,135 +1059,8 @@ def promote_hot_memories() -> list[str]:
     return promoted
 
 
-def find_co_occurring_memories(memory_id: str, limit: int = 5) -> list[tuple[str, int]]:
-    """
-    Find memories that frequently co-occur with a given memory.
-    Returns list of (memory_id, co_occurrence_count) tuples, sorted by count.
-    """
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob(f"*-{memory_id}.md"):
-            metadata, _ = parse_memory_file(filepath)
-            co_occurrences = metadata.get('co_occurrences', {})
-
-            # Sort by count descending
-            sorted_pairs = sorted(co_occurrences.items(), key=lambda x: x[1], reverse=True)
-            return sorted_pairs[:limit]
-
-    return []
-
-
-def find_memories_by_tag(tag: str, limit: int = 10) -> list[tuple[Path, dict, str]]:
-    """Find memories that contain a specific tag."""
-    results = []
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            if tag.lower() in [t.lower() for t in metadata.get('tags', [])]:
-                results.append((filepath, metadata, content))
-
-    # Sort by emotional weight (stickiest first)
-    results.sort(key=lambda x: x[1].get('emotional_weight', 0), reverse=True)
-    return results[:limit]
-
-
-def find_memories_by_time(
-    before: str = None,
-    after: str = None,
-    time_field: str = "created",
-    limit: int = 20
-) -> list[tuple[Path, dict, str]]:
-    """
-    Find memories within a time range. Supports bi-temporal queries (v2.10).
-
-    Args:
-        before: ISO date string - find memories before this date
-        after: ISO date string - find memories after this date
-        time_field: Which field to query - "created" (ingestion) or "event_time" (when it happened)
-        limit: Maximum results
-
-    Returns:
-        List of (filepath, metadata, content) tuples, sorted by time_field descending
-
-    Examples:
-        find_memories_by_time(after="2026-02-01")  # What did I learn after Feb 1?
-        find_memories_by_time(before="2026-02-01", time_field="event_time")  # Events that happened before Feb 1
-        find_memories_by_time(after="2026-01-15", before="2026-02-01")  # Learned in that range
-
-    Credit: Graphiti bi-temporal pattern (v2.10)
-    """
-    results = []
-
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-
-            # Get the time field value (default to created if event_time missing)
-            time_value = metadata.get(time_field, metadata.get('created', ''))
-            if not time_value:
-                continue
-
-            # Normalize to just date string for comparison (handle datetime objects)
-            if hasattr(time_value, 'isoformat'):
-                time_value = time_value.isoformat()
-            time_value = str(time_value)
-            time_date = time_value[:10] if len(time_value) >= 10 else time_value
-
-            # Apply filters
-            if before and time_date >= before:
-                continue
-            if after and time_date < after:
-                continue
-
-            results.append((filepath, metadata, content, time_date))
-
-    # Sort by time descending (most recent first)
-    results.sort(key=lambda x: x[3], reverse=True)
-    return [(r[0], r[1], r[2]) for r in results[:limit]]
-
-
-def find_related_memories(memory_id: str) -> list[tuple[Path, dict, str]]:
-    """Find memories related to a given memory via tags, links, and co-occurrence patterns."""
-    # First, find the source memory
-    source = recall_memory(memory_id)
-    if not source:
-        return []
-
-    source_metadata, _ = source
-    source_tags = set(t.lower() for t in source_metadata.get('tags', []))
-    source_links = set(source_metadata.get('links', []))
-    source_co_occurrences = source_metadata.get('co_occurrences', {})
-
-    results = []
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            other_id = metadata.get('id')
-            if other_id == memory_id:
-                continue
-
-            # Check for tag overlap, direct link, or co-occurrence
-            memory_tags = set(t.lower() for t in metadata.get('tags', []))
-            is_linked = other_id in source_links
-            has_tag_overlap = bool(source_tags & memory_tags)
-            co_occurrence_count = source_co_occurrences.get(other_id, 0)
-
-            if is_linked or has_tag_overlap or co_occurrence_count > 0:
-                overlap_score = len(source_tags & memory_tags)
-                # Boost score with co-occurrence (each co-occurrence = 0.5 tag overlap equivalent)
-                adjusted_score = overlap_score + (co_occurrence_count * 0.5)
-                results.append((filepath, metadata, content, is_linked, adjusted_score, co_occurrence_count))
-
-    # Sort by: linked first, then by adjusted score, then by emotional weight
-    results.sort(key=lambda x: (x[3], x[4], x[1].get('emotional_weight', 0)), reverse=True)
-    return [(r[0], r[1], r[2]) for r in results]
+# find_co_occurring_memories, find_memories_by_tag, find_memories_by_time,
+# find_related_memories -> memory_query module (Phase 2)
 
 
 # ============================================================================
@@ -1495,87 +1359,7 @@ def log_decay_event(decayed: int, pruned: int):
 # detect_event_time and detect_entities -> entity_detection module (Phase 1)
 
 
-def find_memories_by_entity(entity_type: str, entity_name: str, limit: int = 20) -> list[tuple]:
-    """
-    Find memories linked to a specific entity.
-
-    Args:
-        entity_type: 'agent', 'project', 'concept', etc.
-        entity_name: The entity name to search for
-
-    Returns:
-        List of (filepath, metadata, content) tuples
-    """
-    results = []
-    entity_name_lower = entity_name.lower()
-
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            entities = metadata.get('entities', {})
-
-            # Check if entity is in the entities field
-            entity_list = entities.get(f'{entity_type}s', [])  # agents, projects, etc.
-            if entity_name_lower in [e.lower() for e in entity_list]:
-                results.append((filepath, metadata, content))
-                continue
-
-            # Fallback: check tags for backward compatibility
-            if entity_name_lower in [t.lower() for t in metadata.get('tags', [])]:
-                results.append((filepath, metadata, content))
-                continue
-
-            # Fallback: check content
-            if entity_name_lower in content.lower():
-                results.append((filepath, metadata, content))
-
-    # Sort by emotional weight
-    results.sort(key=lambda x: x[1].get('emotional_weight', 0), reverse=True)
-    return results[:limit]
-
-
-def get_entity_cooccurrence(entity_type: str = 'agents') -> dict[str, dict[str, int]]:
-    """
-    Build entity co-occurrence graph.
-
-    Shows which entities appear together in memories.
-
-    Args:
-        entity_type: Which entity type to analyze ('agents', 'projects', 'concepts')
-
-    Returns:
-        Dict of {entity: {co_entity: count}}
-    """
-    cooccurrence = {}
-
-    for directory in [CORE_DIR, ACTIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-
-            # Get entities from field or detect from content
-            entities_field = metadata.get('entities', {})
-            if entities_field:
-                entity_list = entities_field.get(entity_type, [])
-            else:
-                # Detect from content if not stored
-                detected = detect_entities(content, metadata.get('tags', []))
-                entity_list = detected.get(entity_type, [])
-
-            # Count co-occurrences
-            for i, e1 in enumerate(entity_list):
-                if e1 not in cooccurrence:
-                    cooccurrence[e1] = {}
-                for e2 in entity_list[i+1:]:
-                    cooccurrence[e1][e2] = cooccurrence[e1].get(e2, 0) + 1
-                    if e2 not in cooccurrence:
-                        cooccurrence[e2] = {}
-                    cooccurrence[e2][e1] = cooccurrence[e2].get(e1, 0) + 1
-
-    return cooccurrence
+# find_memories_by_entity, get_entity_cooccurrence -> memory_query module (Phase 2)
 
 
 def backfill_entities(dry_run: bool = True) -> dict:
