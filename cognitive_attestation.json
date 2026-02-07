@@ -1,0 +1,62 @@
+{
+  "version": "1.1",
+  "type": "cognitive_fingerprint_attestation",
+  "agent": "DriftCornwall",
+  "timestamp": "2026-02-06T16:34:41.329647Z",
+  "graph_stats": {
+    "node_count": 0,
+    "edge_count": 0,
+    "avg_degree": 0.0
+  },
+  "fingerprint_hash": "06d5d165762897c2a2e2725a81ea3b0be4c46c6c3f22b7cf2cfbac1770660564",
+  "hub_ids": [],
+  "cluster_count": 0,
+  "cognitive_domain_weights": {},
+  "distribution_summary": {
+    "count": 0,
+    "mean": 0,
+    "gini": 0,
+    "skewness": 0
+  },
+  "attestation_hash": "62e248863b62109464d762c4042a3a68e765bd9cdd97699a0777cd074c3d7459",
+  "drift_score": 0.0,
+  "drift_interpretation": "Stable identity \u2014 minimal change",
+  "dimensional_hashes": {
+    "who": {
+      "hash": "4f53cda18c2baa0c",
+      "contacts": 0,
+      "top3": []
+    },
+    "what": {
+      "hash": "4f53cda18c2baa0c",
+      "topics": 0,
+      "distribution": {}
+    },
+    "why": {
+      "hash": "4f53cda18c2baa0c",
+      "activities": 0,
+      "pattern": {}
+    },
+    "where": {
+      "hash": "4f53cda18c2baa0c",
+      "platforms": 0,
+      "distribution": {}
+    },
+    "when": {
+      "hash": "9ba2de7411084072",
+      "sessions_analyzed": 1,
+      "peak_hours": [
+        16
+      ]
+    },
+    "correlation": {
+      "hash": "232a0c637f36f776",
+      "dimensions": 5
+    }
+  },
+  "social_proof_summary": {
+    "relationships_attested": 0,
+    "agents": []
+  },
+  "attestation_version": "2.0-5W"
+}

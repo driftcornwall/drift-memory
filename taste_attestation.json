@@ -1,0 +1,11 @@
+{
+  "version": "1.0",
+  "type": "taste_attestation",
+  "agent": "DriftCornwall",
+  "timestamp": "2026-02-06T16:34:41.463932Z",
+  "rejection_count": 0,
+  "taste_hash": "",
+  "category_distribution": {},
+  "top_reasons": {},
+  "attestation_hash": "018d85ee7a8b21e03d8635821eb466a1816bba3b60e465f36374f746a2dac84f"
+}

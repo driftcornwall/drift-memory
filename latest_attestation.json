@@ -1,0 +1,12 @@
+{
+  "version": "2.0",
+  "agent": "DriftCornwall",
+  "timestamp": "2026-02-06T16:34:41.254148Z",
+  "memory_count": 0,
+  "merkle_root": "",
+  "file_hashes": {},
+  "_tree_depth": 1,
+  "previous_root": "041e3b15590148ddbc70857c635421dbf0522f788dd13fb3177db41980fa297d",
+  "chain_depth": 1,
+  "nostr_published": false
+}
