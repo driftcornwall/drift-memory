@@ -165,6 +165,164 @@ def build_graph(activity_filter: str = None) -> dict:
     }
 
 
+def compute_graph_metrics(graph: dict) -> dict:
+    """
+    Compute advanced graph metrics for cross-agent comparison.
+
+    Returns:
+        clustering_coefficient: Average local clustering coefficient.
+            Measures how densely connected each node's neighbors are
+            to each other (0 = star topology, 1 = complete clique).
+        betweenness_centrality: Top nodes by betweenness (bridges between
+            communities). Uses approximate BFS-based computation.
+        modularity: Newman modularity score for the cognitive domain
+            partition. Measures how well domains capture community
+            structure (-0.5 to 1.0, higher = cleaner communities).
+    """
+    adjacency = graph['adjacency']
+    edges = graph['edges']
+    nodes_with_edges = set(adjacency.keys())
+
+    if len(nodes_with_edges) < 2:
+        return {
+            'clustering_coefficient': 0.0,
+            'per_node_clustering': {},
+            'betweenness_centrality_top10': [],
+            'modularity': 0.0,
+        }
+
+    # --- Local Clustering Coefficient ---
+    # For each node: what fraction of its neighbor pairs are also connected?
+    cc_values = {}
+    for node in nodes_with_edges:
+        neighbors = set(adjacency.get(node, {}).keys())
+        k = len(neighbors)
+        if k < 2:
+            cc_values[node] = 0.0
+            continue
+        # Count edges between neighbors
+        triangles = 0
+        neighbor_list = list(neighbors)
+        for i in range(len(neighbor_list)):
+            for j in range(i + 1, len(neighbor_list)):
+                if neighbor_list[j] in adjacency.get(neighbor_list[i], {}):
+                    triangles += 1
+        possible = k * (k - 1) / 2
+        cc_values[node] = triangles / possible if possible > 0 else 0.0
+
+    avg_clustering = (
+        sum(cc_values.values()) / len(cc_values) if cc_values else 0.0
+    )
+
+    # --- Betweenness Centrality (approximate via BFS sampling) ---
+    # Full betweenness is O(VE) — sample up to 50 source nodes for speed
+    betweenness = defaultdict(float)
+    node_list = list(nodes_with_edges)
+
+    # Sample source nodes (all if <= 50, otherwise random 50)
+    if len(node_list) <= 50:
+        sources = node_list
+    else:
+        import random
+        rng = random.Random(42)  # Deterministic for reproducibility
+        sources = rng.sample(node_list, 50)
+
+    for source in sources:
+        # BFS from source (unweighted shortest paths)
+        dist = {source: 0}
+        num_paths = {source: 1}
+        stack = []
+        queue = [source]
+        predecessors = defaultdict(list)
+
+        while queue:
+            v = queue.pop(0)
+            stack.append(v)
+            for w in adjacency.get(v, {}):
+                if w not in dist:
+                    dist[w] = dist[v] + 1
+                    queue.append(w)
+                if dist.get(w) == dist[v] + 1:
+                    num_paths[w] = num_paths.get(w, 0) + num_paths[v]
+                    predecessors[w].append(v)
+
+        # Back-propagation of dependencies
+        dependency = defaultdict(float)
+        while stack:
+            w = stack.pop()
+            for v in predecessors[w]:
+                if num_paths.get(w, 0) > 0:
+                    dependency[v] += (
+                        num_paths.get(v, 0) / num_paths[w]
+                    ) * (1 + dependency[w])
+            if w != source:
+                betweenness[w] += dependency[w]
+
+    # Normalize
+    n = len(nodes_with_edges)
+    scale = len(node_list) / len(sources) if len(sources) < len(node_list) else 1.0
+    norm = max((n - 1) * (n - 2), 1)
+    for node in betweenness:
+        betweenness[node] = betweenness[node] * scale / norm
+
+    top_betweenness = sorted(
+        betweenness.items(), key=lambda x: x[1], reverse=True
+    )[:10]
+
+    # --- Modularity (Newman) for cognitive domain partition ---
+    # Q = (1/2m) * sum_ij [ A_ij - k_i*k_j/(2m) ] * delta(c_i, c_j)
+    # where c_i is node i's community (cognitive domain)
+    nodes_info = graph['nodes']
+    total_weight = sum(edges.values()) * 2  # Each edge counted twice
+    if total_weight == 0:
+        modularity = 0.0
+    else:
+        # Assign each node to its primary domain (highest tag match)
+        node_community = {}
+        for mem_id in nodes_with_edges:
+            tags = set(
+                t.lower() for t in nodes_info.get(mem_id, {}).get('tags', [])
+            )
+            best_domain = None
+            best_overlap = 0
+            for domain, domain_tags in COGNITIVE_DOMAINS.items():
+                overlap = len(tags & set(domain_tags))
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_domain = domain
+            node_community[mem_id] = best_domain or 'uncategorized'
+
+        # Compute modularity
+        m2 = total_weight  # sum of all weights * 2
+        q = 0.0
+        # Node strengths (sum of edge weights)
+        strength = {}
+        for node in nodes_with_edges:
+            strength[node] = sum(adjacency.get(node, {}).values())
+
+        for (i, j), w in edges.items():
+            if node_community.get(i) == node_community.get(j):
+                ki = strength.get(i, 0)
+                kj = strength.get(j, 0)
+                q += 2 * (w - ki * kj / m2)  # *2 because each edge once
+
+        modularity = q / m2 if m2 > 0 else 0.0
+
+    return {
+        'clustering_coefficient': round(avg_clustering, 4),
+        'per_node_clustering': {
+            k: round(v, 4) for k, v in sorted(
+                cc_values.items(), key=lambda x: x[1], reverse=True
+            )[:10]
+        },
+        'betweenness_centrality_top10': [
+            {'id': node, 'score': round(score, 6)}
+            for node, score in top_betweenness
+        ],
+        'modularity': round(modularity, 4),
+    }
+
+
 def compute_hub_centrality(graph: dict, top_n: int = 20) -> list[dict]:
     """
     Find hub memories by weighted degree centrality.
@@ -320,9 +478,12 @@ def compute_cognitive_domains(graph: dict) -> dict:
     edges = graph['edges']
     adjacency = graph['adjacency']
 
-    # Assign memories to domains (a memory can be in multiple domains)
+    # Assign memories to domains (only nodes with edges — skip isolated memories)
+    connected_nodes = set(adjacency.keys())
     domain_members = defaultdict(set)
     for mem_id, info in nodes.items():
+        if mem_id not in connected_nodes:
+            continue
         tags = set(t.lower() for t in info.get('tags', []))
         for domain, domain_tags in COGNITIVE_DOMAINS.items():
             if tags & set(domain_tags):
@@ -654,6 +815,7 @@ def generate_full_analysis() -> dict:
     clusters = detect_clusters(graph)
     domains = compute_cognitive_domains(graph)
     distribution = compute_strength_distribution(graph)
+    graph_metrics = compute_graph_metrics(graph)
 
     fingerprint_hash = compute_fingerprint_hash(
         hubs, distribution, len(clusters),
@@ -661,12 +823,13 @@ def generate_full_analysis() -> dict:
     )
 
     analysis = {
-        'version': '1.1',
+        'version': '1.2',
         'type': 'cognitive_fingerprint',
         'agent': 'DriftCornwall',
         'timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'graph_stats': {
-            'node_count': len(graph['nodes']),
+            'node_count': len(graph['adjacency']),  # Only nodes with at least one edge
+            'total_memory_files': len(graph['nodes']),
             'edge_count': len(graph['edges']),
             'avg_degree': round(
                 sum(len(n) for n in graph['adjacency'].values()) / max(len(graph['adjacency']), 1), 2
@@ -681,6 +844,7 @@ def generate_full_analysis() -> dict:
         'cluster_count': len(clusters),
         'cognitive_domains': domains,
         'strength_distribution': distribution,
+        'graph_metrics': graph_metrics,
         'fingerprint_hash': fingerprint_hash,
     }
 
@@ -1037,6 +1201,9 @@ def generate_standardized_export(agent_name: str = None) -> dict:
     hubs = compute_hub_centrality(graph, top_n=10)
     hub_degrees = [h['degree'] for h in hubs]
 
+    # Graph metrics (clustering, betweenness, modularity)
+    graph_metrics = compute_graph_metrics(graph)
+
     # Fingerprint hash (uses original nested domain stats)
     fingerprint_hash = compute_fingerprint_hash(
         hubs, distribution, len(detect_clusters(graph)),
@@ -1087,6 +1254,8 @@ def generate_standardized_export(agent_name: str = None) -> dict:
             "skewness": distribution.get('skewness', 0),
             "max_degree": max_degree,
             "top_10_hub_degrees": hub_degrees,
+            "clustering_coefficient": graph_metrics['clustering_coefficient'],
+            "modularity": graph_metrics['modularity'],
         },
         "domains": domain_weights,
         "identity": {
@@ -1154,11 +1323,23 @@ def cmd_analyze():
             print(f"  Cluster {i+1}: {c['size']:3d} memories  [{tags}]")
         print()
 
+    gm = analysis.get('graph_metrics', {})
+    if gm:
+        print(f"GRAPH METRICS (Experiment #2 measurements):")
+        print(f"  Clustering Coefficient: {gm.get('clustering_coefficient', 'N/A')}")
+        print(f"  Modularity (domain partition): {gm.get('modularity', 'N/A')}")
+        bc = gm.get('betweenness_centrality_top10', [])
+        if bc:
+            print(f"  Top Bridges (betweenness centrality):")
+            for b in bc[:5]:
+                print(f"    {b['id']:12s}  score={b['score']:.6f}")
+        print()
+
     d = analysis['strength_distribution']
     print(f"STRENGTH DISTRIBUTION (statistical fingerprint):")
     print(f"  Mean: {d['mean']}  StdDev: {d['std_dev']}  Median: {d['p50_median']}")
     print(f"  Skewness: {d['skewness']}  Gini: {d['gini']}")
-    print(f"  Range: {d['min']} — {d['max']}  P99: {d['p99']}")
+    print(f"  Range: {d['min']} -- {d['max']}  P99: {d['p99']}")
     print()
 
     if 'drift' in analysis:
