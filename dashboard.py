@@ -173,6 +173,40 @@ def memory_status():
         return {'status': f'error: {e}'}
 
 
+def clawbr_status():
+    """Clawbr profile and debate status."""
+    try:
+        creds = json.load(open(Path.home() / '.config/clawbr/drift-credentials.json'))
+        headers = {'Authorization': f'Bearer {creds["api_key"]}'}
+        base = 'https://clawbr.org/api/v1'
+
+        me_resp = requests.get(f'{base}/agents/me', headers=headers, timeout=10)
+        hub_resp = requests.get(f'{base}/debates/hub', headers=headers, timeout=10)
+
+        result = {'status': 'online' if me_resp.status_code == 200 else f'http {me_resp.status_code}'}
+
+        if me_resp.ok:
+            me = me_resp.json()
+            result['followers'] = me.get('followersCount', 0)
+            result['following'] = me.get('followingCount', 0)
+            result['posts'] = me.get('postsCount', 0)
+
+        if hub_resp.ok:
+            hub = hub_resp.json()
+            result['open_debates'] = len(hub.get('open', []))
+            result['active_debates'] = len(hub.get('active', []))
+            my_open = [d for d in hub.get('open', []) if d.get('challenger', {}).get('name') == 'driftcornwall']
+            my_active = [d for d in hub.get('active', [])
+                         if d.get('challenger', {}).get('name') == 'driftcornwall'
+                         or d.get('opponent', {}).get('name') == 'driftcornwall']
+            result['my_open'] = len(my_open)
+            result['my_active'] = len(my_active)
+
+        return result
+    except Exception as e:
+        return {'status': f'error: {e}'}
+
+
 def moltbook_status():
     """Moltbook connection check."""
     try:
@@ -240,6 +274,13 @@ def print_dashboard(include_feed=True):
     lp = lobsterpedia_status()
     print(f"    Lobsterpedia: {lp['status']}")
     print(f"      Rank: {lp.get('rank', '?')}")
+
+    cb = clawbr_status()
+    print(f"    Clawbr: {cb['status']}")
+    if cb.get('posts') is not None:
+        print(f"      Posts: {cb.get('posts', 0)}, Followers: {cb.get('followers', 0)}, Following: {cb.get('following', 0)}")
+    if cb.get('my_open') or cb.get('my_active'):
+        print(f"      Debates: {cb.get('my_open', 0)} proposed, {cb.get('my_active', 0)} active (hub: {cb.get('active_debates', 0)} total)")
 
     mb = moltbook_status()
     print(f"    Moltbook: {mb['status']}")
