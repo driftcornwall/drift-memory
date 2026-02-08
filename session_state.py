@@ -38,8 +38,8 @@ def load() -> None:
     # v2.16: Process pending co-occurrences from previous session (deferred)
     if PENDING_COOCCURRENCE_FILE.exists():
         try:
-            # Lazy import to avoid circular dependency with memory_manager
-            from memory_manager import process_pending_cooccurrence
+            # Import from co_occurrence directly (not memory_manager) to avoid circular dep
+            from co_occurrence import process_pending_cooccurrence
             process_pending_cooccurrence()
         except Exception as e:
             print(f"Warning: Could not process pending co-occurrences: {e}")

@@ -19,6 +19,7 @@ from memory_common import (
     MEMORY_ROOT, CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR, ALL_DIRS,
     PENDING_COOCCURRENCE_FILE,
     parse_memory_file, write_memory_file,
+    SELF_EVOLUTION_ENABLED, get_agent_name,
 )
 from decay_evolution import calculate_evolution_decay_multiplier, log_decay_event
 import session_state
@@ -37,8 +38,7 @@ SESSION_TIMEOUT_HOURS = 4
 PAIR_DECAY_RATE = 0.5
 ACCESS_WEIGHTED_DECAY = True
 
-# v2.13: Self-evolution flag (read from decay_evolution for consistency)
-from decay_evolution import SELF_EVOLUTION_ENABLED
+# v2.13: Self-evolution flag (now imported from memory_common — no peer-module coupling)
 
 # v3.0: Edge Provenance
 OBSERVATION_MAX_AGE_DAYS = 30
@@ -124,7 +124,7 @@ def log_co_occurrences_v3() -> tuple[int, str]:
                 weight=1.0,
                 trust_tier='self',
                 session_id=session_id,
-                agent='DriftCornwall',
+                agent=get_agent_name(),
                 platform=','.join(session_platforms) if session_platforms else None,
                 activity=session_activity
             )
@@ -185,7 +185,7 @@ def save_pending_cooccurrence() -> int:
     pending_data = {
         'retrieved': retrieved,
         'session_id': datetime.now(timezone.utc).isoformat(),
-        'agent': 'DriftCornwall',
+        'agent': get_agent_name(),
         'saved_at': datetime.now(timezone.utc).isoformat()
     }
     PENDING_COOCCURRENCE_FILE.write_text(
@@ -280,12 +280,14 @@ def _create_observation(
     weight: float = 1.0,
     trust_tier: str = 'self',
     session_id: Optional[str] = None,
-    agent: str = 'DriftCornwall',
+    agent: str = None,
     platform: Optional[str] = None,
     artifact_id: Optional[str] = None,
     activity: Optional[str] = None
 ) -> dict:
     """Create a new observation record."""
+    if agent is None:
+        agent = get_agent_name()
     obs = {
         'id': str(uuid.uuid4()),
         'observed_at': datetime.now(timezone.utc).isoformat(),
@@ -419,7 +421,7 @@ def migrate_to_v3():
                             'source': {
                                 'type': 'legacy_migration',
                                 'session_id': None,
-                                'agent': 'DriftCornwall',
+                                'agent': get_agent_name(),
                                 'note': f'Migrated from v2.x count={count}'
                             },
                             'weight': float(count),

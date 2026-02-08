@@ -36,8 +36,8 @@ DECAY_MULTIPLIERS = {
     'unknown': 3.0,
 }
 
-# Self-evolution — adaptive decay based on retrieval success (v2.13)
-SELF_EVOLUTION_ENABLED = True
+# Self-evolution — canonical value lives in memory_common.py (shared config)
+from memory_common import SELF_EVOLUTION_ENABLED
 SUCCESS_DECAY_BONUS = 0.7
 FAILURE_DECAY_PENALTY = 1.5
 SUCCESS_THRESHOLD = 0.6

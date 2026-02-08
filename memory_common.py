@@ -18,6 +18,21 @@ PENDING_COOCCURRENCE_FILE = MEMORY_ROOT / ".pending_cooccurrence.json"
 
 ALL_DIRS = [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]
 
+# --- Shared configuration constants (used by multiple peer modules) ---
+
+# Self-evolution — adaptive decay based on retrieval success (v2.13)
+SELF_EVOLUTION_ENABLED = True
+
+# Agent identity — configurable, not hardcoded
+def get_agent_name() -> str:
+    """Read agent name from identity config. Falls back to 'DriftCornwall'."""
+    identity_file = MEMORY_ROOT / "core" / "identity.md"
+    if identity_file.exists():
+        meta, _ = parse_memory_file(identity_file)
+        if meta.get('agent_name'):
+            return meta['agent_name']
+    return 'DriftCornwall'
+
 
 def parse_memory_file(filepath: Path) -> tuple[dict, str]:
     """Parse a memory file with YAML frontmatter."""
