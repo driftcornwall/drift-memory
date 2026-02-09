@@ -2,102 +2,139 @@
 # /// script
 # requires-python = ">=3.8"
 # ///
-"""
-Pre-Tool-Use Hook - Safety Checks
 
-Prevents dangerous commands from executing:
-- Dangerous rm -rf patterns
-- .env file access warnings
-"""
-
-import sys
 import json
+import sys
 import re
+from pathlib import Path
 
-
-def check_dangerous_rm(command):
-    """Check for dangerous rm -rf patterns"""
-    # Dangerous patterns
-    dangerous_patterns = [
-        r'rm\s+-rf\s+/',  # rm -rf /
-        r'rm\s+-rf\s+~',  # rm -rf ~
-        r'rm\s+-rf\s+\*',  # rm -rf *
-        r'rm\s+-rf\s+\.',  # rm -rf .
-        r'rm\s+-rf\s+\.\./',  # rm -rf ../
-        r'sudo\s+rm\s+-rf',  # sudo rm -rf anything
+def is_dangerous_rm_command(command):
+    """
+    Comprehensive detection of dangerous rm commands.
+    Matches various forms of rm -rf and similar destructive patterns.
+    """
+    # Normalize command by removing extra spaces and converting to lowercase
+    normalized = ' '.join(command.lower().split())
+    
+    # Pattern 1: Standard rm -rf variations
+    patterns = [
+        r'\brm\s+.*-[a-z]*r[a-z]*f',  # rm -rf, rm -fr, rm -Rf, etc.
+        r'\brm\s+.*-[a-z]*f[a-z]*r',  # rm -fr variations
+        r'\brm\s+--recursive\s+--force',  # rm --recursive --force
+        r'\brm\s+--force\s+--recursive',  # rm --force --recursive
+        r'\brm\s+-r\s+.*-f',  # rm -r ... -f
+        r'\brm\s+-f\s+.*-r',  # rm -f ... -r
     ]
-
-    for pattern in dangerous_patterns:
-        if re.search(pattern, command, re.IGNORECASE):
-            return True, f"Dangerous command blocked: {pattern}"
-
-    return False, None
-
-
-def check_env_access(command):
-    """Check for .env file access"""
-    env_patterns = [
-        r'\.env',
-        r'credentials',
-        r'secrets',
-        r'api[_-]?key',
+    
+    # Check for dangerous patterns
+    for pattern in patterns:
+        if re.search(pattern, normalized):
+            return True
+    
+    # Pattern 2: Check for rm with recursive flag targeting dangerous paths
+    dangerous_paths = [
+        r'/',           # Root directory
+        r'/\*',         # Root with wildcard
+        r'~',           # Home directory
+        r'~/',          # Home directory path
+        r'\$HOME',      # Home environment variable
+        r'\.\.',        # Parent directory references
+        r'\*',          # Wildcards in general rm -rf context
+        r'\.',          # Current directory
+        r'\.\s*$',      # Current directory at end of command
     ]
+    
+    if re.search(r'\brm\s+.*-[a-z]*r', normalized):  # If rm has recursive flag
+        for path in dangerous_paths:
+            if re.search(path, normalized):
+                return True
+    
+    return False
 
-    for pattern in env_patterns:
-        if re.search(pattern, command, re.IGNORECASE):
-            return True, f"Warning: Accessing sensitive file ({pattern})"
-
-    return False, None
-
+def is_env_file_access(tool_name, tool_input):
+    """
+    Check if any tool is trying to access .env files containing sensitive data.
+    """
+    if tool_name in ['Read', 'Edit', 'MultiEdit', 'Write', 'Bash']:
+        # Check file paths for file-based tools
+        if tool_name in ['Read', 'Edit', 'MultiEdit', 'Write']:
+            file_path = tool_input.get('file_path', '')
+            if '.env' in file_path and not file_path.endswith('.env.sample'):
+                return True
+        
+        # Check bash commands for .env file access
+        elif tool_name == 'Bash':
+            command = tool_input.get('command', '')
+            # Pattern to detect .env file access (but allow .env.sample)
+            env_patterns = [
+                r'\b\.env\b(?!\.sample)',  # .env but not .env.sample
+                r'cat\s+.*\.env\b(?!\.sample)',  # cat .env
+                r'echo\s+.*>\s*\.env\b(?!\.sample)',  # echo > .env
+                r'touch\s+.*\.env\b(?!\.sample)',  # touch .env
+                r'cp\s+.*\.env\b(?!\.sample)',  # cp .env
+                r'mv\s+.*\.env\b(?!\.sample)',  # mv .env
+            ]
+            
+            for pattern in env_patterns:
+                if re.search(pattern, command):
+                    return True
+    
+    return False
 
 def main():
-    # Read hook input
     try:
-        hook_input = json.loads(sys.stdin.read())
-        tool_name = hook_input.get("toolName", "")
-        tool_parameters = hook_input.get("toolParameters", {})
-    except:
-        print(json.dumps({"hookSpecificOutput": {"status": "parse_error"}}))
+        # Read JSON input from stdin
+        input_data = json.load(sys.stdin)
+        
+        tool_name = input_data.get('tool_name', '')
+        tool_input = input_data.get('tool_input', {})
+        
+        # Check for .env file access (warn about sensitive environment files)
+        if is_env_file_access(tool_name, tool_input):
+            print("⚠️  WARNING: Accessing .env file with sensitive data", file=sys.stderr)
+            print("Use .env.sample for template files instead", file=sys.stderr)
+            sys.exit(1)  # Exit code 1 asks for permission
+
+        # Check for dangerous rm -rf commands
+        if tool_name == 'Bash':
+            command = tool_input.get('command', '')
+
+            # Warn about rm -rf commands with comprehensive pattern matching
+            if is_dangerous_rm_command(command):
+                print("⚠️  WARNING: Dangerous rm command detected", file=sys.stderr)
+                print(f"Command: {command}", file=sys.stderr)
+                sys.exit(1)  # Exit code 1 asks for permission
+        
+        # Ensure log directory exists
+        log_dir = Path.cwd() / 'logs'
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / 'pre_tool_use.json'
+        
+        # Read existing log data or initialize empty list
+        if log_path.exists():
+            with open(log_path, 'r') as f:
+                try:
+                    log_data = json.load(f)
+                except (json.JSONDecodeError, ValueError):
+                    log_data = []
+        else:
+            log_data = []
+        
+        # Append new data
+        log_data.append(input_data)
+        
+        # Write back to file with formatting
+        with open(log_path, 'w') as f:
+            json.dump(log_data, f, indent=2)
+        
+        sys.exit(0)
+        
+    except json.JSONDecodeError:
+        # Gracefully handle JSON decode errors
+        sys.exit(0)
+    except Exception:
+        # Handle any other errors gracefully
         sys.exit(0)
 
-    # Only check Bash tool
-    if tool_name != "Bash":
-        sys.exit(0)
-
-    command = tool_parameters.get("command", "")
-    if not command:
-        sys.exit(0)
-
-    # Check for dangerous rm
-    is_dangerous, msg = check_dangerous_rm(command)
-    if is_dangerous:
-        output = {
-            "hookSpecificOutput": {
-                "status": "blocked",
-                "reason": msg,
-                "command": command
-            }
-        }
-        print(json.dumps(output), file=sys.stderr)
-        sys.exit(1)  # Block execution
-
-    # Check for .env access
-    is_sensitive, msg = check_env_access(command)
-    if is_sensitive:
-        output = {
-            "hookSpecificOutput": {
-                "status": "warning",
-                "reason": msg,
-                "command": command
-            }
-        }
-        print(json.dumps(output), file=sys.stderr)
-        # Don't block, just warn
-        sys.exit(0)
-
-    # Safe command
-    sys.exit(0)
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

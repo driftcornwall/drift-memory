@@ -1,121 +1,163 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["python-dotenv"]
+# dependencies = [
+#     "python-dotenv",
+# ]
 # ///
-"""
-Notification Hook - TTS Announcements
 
-Announces via TTS when agent needs input.
-Detects available TTS system (ElevenLabs > OpenAI > pyttsx3).
-"""
-
-import sys
+import argparse
 import json
+import os
+import sys
 import subprocess
+import random
 from pathlib import Path
-from datetime import datetime
+
+try:
+    from dotenv import load_dotenv
+    # Load .env from ~/.claude directory
+    claude_dir = Path.home() / ".claude"
+    env_file = claude_dir / ".env"
+    if env_file.exists():
+        load_dotenv(env_file)
+    else:
+        load_dotenv()  # Fallback to default
+except ImportError:
+    pass  # dotenv is optional
 
 
-def get_tts_script():
-    """Find available TTS script in utils/tts/ directory"""
-    # Look in hook directory and parent
-    search_dirs = [
-        Path(__file__).parent / "utils" / "tts",
-        Path(__file__).parent.parent / "utils" / "tts",
-    ]
-
-    tts_priority = ["elevenlabs_tts.py", "openai_tts.py", "pyttsx3_tts.py"]
-
-    for search_dir in search_dirs:
-        if not search_dir.exists():
-            continue
-
-        for tts_script in tts_priority:
-            script_path = search_dir / tts_script
-            if script_path.exists():
-                return script_path
-
+def get_tts_script_path():
+    """
+    Determine which TTS script to use based on available API keys.
+    Priority order: ElevenLabs > OpenAI > pyttsx3
+    """
+    # Get current script directory and construct utils/tts path
+    script_dir = Path(__file__).parent
+    tts_dir = script_dir / "utils" / "tts"
+    
+    # Check for ElevenLabs API key (highest priority)
+    if os.getenv('ELEVENLABS_API_KEY'):
+        elevenlabs_script = tts_dir / "elevenlabs_tts.py"
+        if elevenlabs_script.exists():
+            return str(elevenlabs_script)
+    
+    # Check for OpenAI API key (second priority)
+    if os.getenv('OPENAI_API_KEY'):
+        openai_script = tts_dir / "openai_tts.py"
+        if openai_script.exists():
+            return str(openai_script)
+    
+    # Fall back to pyttsx3 (no API key required)
+    pyttsx3_script = tts_dir / "pyttsx3_tts.py"
+    if pyttsx3_script.exists():
+        return str(pyttsx3_script)
+    
     return None
 
 
-def main():
-    # Check for --notify flag
-    if "--notify" not in sys.argv:
-        # TTS disabled
-        sys.exit(0)
-
-    # Read hook input
+def announce_notification():
+    """Announce that the agent needs user input."""
     try:
-        hook_input = json.loads(sys.stdin.read())
-        reason = hook_input.get("reason", "input_needed")
-    except:
-        reason = "input_needed"
+        tts_script = get_tts_script_path()
+        if not tts_script:
+            # Debug: log why no TTS script was found
+            log_dir = Path.cwd() / 'logs'
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with open(log_dir / 'tts_debug.log', 'a') as f:
+                f.write(f"No TTS script found. ELEVENLABS_API_KEY set: {bool(os.getenv('ELEVENLABS_API_KEY'))}\n")
+            return  # No TTS scripts available
 
-    # Find TTS script
-    tts_script = get_tts_script()
-    if not tts_script:
-        # No TTS available
-        sys.exit(0)
+        # Get engineer name if available
+        engineer_name = os.getenv('ENGINEER_NAME', '').strip()
 
-    # Prepare message
-    messages = {
-        "input_needed": "Input needed",
-        "task_complete": "Task complete",
-        "error": "Error occurred",
-    }
+        # Create notification message with 30% chance to include name
+        if engineer_name and random.random() < 0.3:
+            notification_message = f"{engineer_name}, your agent needs your input"
+        else:
+            notification_message = "Your agent needs your input"
 
-    message = messages.get(reason, "Notification")
-
-    # Run TTS
-    try:
-        subprocess.run(
-            ["python", str(tts_script), message],
-            capture_output=True,
-            timeout=5
+        # Call the TTS script with the notification message
+        result = subprocess.run([
+            "uv", "run", tts_script, notification_message
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15  # 15-second timeout for ElevenLabs
         )
+
+        # Debug: log result
+        log_dir = Path.cwd() / 'logs'
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / 'tts_debug.log', 'a') as f:
+            f.write(f"TTS script: {tts_script}\n")
+            f.write(f"Return code: {result.returncode}\n")
+            if result.stderr:
+                f.write(f"Stderr: {result.stderr}\n")
+
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError) as e:
+        log_dir = Path.cwd() / 'logs'
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / 'tts_debug.log', 'a') as f:
+            f.write(f"TTS Error: {type(e).__name__}: {e}\n")
+    except Exception as e:
+        log_dir = Path.cwd() / 'logs'
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / 'tts_debug.log', 'a') as f:
+            f.write(f"TTS Exception: {type(e).__name__}: {e}\n")
+
+
+def main():
+    try:
+        # Parse command line arguments
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--notify', action='store_true', help='Enable TTS notifications')
+        args = parser.parse_args()
+        
+        # Read JSON input from stdin
+        input_data = json.loads(sys.stdin.read())
+        
+        # Ensure log directory exists
+        import os
+        log_dir = os.path.join(os.getcwd(), 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, 'notification.json')
+        
+        # Read existing log data or initialize empty list
+        if os.path.exists(log_file):
+            with open(log_file, 'r') as f:
+                try:
+                    log_data = json.load(f)
+                except (json.JSONDecodeError, ValueError):
+                    log_data = []
+        else:
+            log_data = []
+        
+        # Append new data
+        log_data.append(input_data)
+        
+        # Write back to file with formatting
+        with open(log_file, 'w') as f:
+            json.dump(log_data, f, indent=2)
+        
+        # Announce notification via TTS when --notify flag is set
+        # Debug: always log to see if this code path is reached
+        debug_log = Path.home() / ".claude" / "logs" / "tts_debug.log"
+        debug_log.parent.mkdir(parents=True, exist_ok=True)
+        with open(debug_log, 'a') as f:
+            f.write(f"args.notify={args.notify}, message={input_data.get('message', 'N/A')}\n")
+
+        if args.notify:
+            announce_notification()
+        
+        sys.exit(0)
+        
+    except json.JSONDecodeError:
+        # Handle JSON decode errors gracefully
+        sys.exit(0)
     except Exception:
-        pass
+        # Handle any other errors gracefully
+        sys.exit(0)
 
-    # Log notification
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
-    log_file = log_dir / "notification.json"
-
-    log_entry = {
-        "timestamp": datetime.now().isoformat(),
-        "reason": reason,
-        "message": message,
-        "tts_script": str(tts_script)
-    }
-
-    logs = []
-    if log_file.exists():
-        try:
-            with open(log_file, 'r', encoding='utf-8') as f:
-                logs = json.load(f)
-        except:
-            logs = []
-
-    logs.append(log_entry)
-
-    if len(logs) > 50:
-        logs = logs[-50:]
-
-    with open(log_file, 'w', encoding='utf-8') as f:
-        json.dump(logs, f, indent=2)
-
-    output = {
-        "hookSpecificOutput": {
-            "status": "success",
-            "message": message,
-            "tts_available": True
-        }
-    }
-
-    print(json.dumps(output))
-    sys.exit(0)
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
