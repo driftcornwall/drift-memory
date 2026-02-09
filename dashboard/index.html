@@ -650,6 +650,17 @@
     </div>
   </div>
 
+  <div class="bottom-row" style="grid-template-columns: 1fr 1fr;">
+    <div class="panel">
+      <h3>Graph Growth (Nodes &amp; Edges)</h3>
+      <div class="chart-container" id="trajectoryChart" style="height:220px"></div>
+    </div>
+    <div class="panel">
+      <h3>Identity Drift (Gini &amp; Skewness)</h3>
+      <div class="chart-container" id="driftChart" style="height:220px"></div>
+    </div>
+  </div>
+
   <div class="footer">
     <span id="generated"></span> &middot;
     <a href="https://github.com/driftcornwall/drift-memory" target="_blank">drift-memory</a> &middot;
@@ -1048,6 +1059,8 @@ function renderBottomCharts() {
   renderDegreeDistribution();
   renderDimCoverage();
   renderBeliefChart();
+  renderTrajectory();
+  renderDriftChart();
 }
 
 function renderDegreeDistribution() {
@@ -1234,6 +1247,191 @@ function renderBeliefChart() {
     .attr('color', 'var(--dim)')
     .attr('font-family', 'JetBrains Mono')
     .attr('font-size', '9px');
+}
+
+function renderTrajectory() {
+  const container = document.getElementById('trajectoryChart');
+  if (!container) return;
+  const traj = DATA.trajectory || [];
+  if (traj.length < 2) {
+    container.innerHTML = '<div style="color:var(--dim);text-align:center;padding-top:80px;font-family:JetBrains Mono;font-size:11px">Not enough history data</div>';
+    return;
+  }
+
+  const w = container.clientWidth || 400;
+  const h = 220;
+  const margin = { top: 15, right: 50, bottom: 30, left: 50 };
+
+  const svg = d3.select(container).append('svg').attr('width', w).attr('height', h);
+
+  const parseTime = d => new Date(d.ts);
+  const x = d3.scaleTime()
+    .domain(d3.extent(traj, parseTime))
+    .range([margin.left, w - margin.right]);
+
+  // Dual Y axes: nodes (left), edges (right)
+  const yNodes = d3.scaleLinear()
+    .domain([0, d3.max(traj, d => d.nodes) * 1.1])
+    .range([h - margin.bottom, margin.top]);
+
+  const yEdges = d3.scaleLinear()
+    .domain([0, d3.max(traj, d => d.edges) * 1.1])
+    .range([h - margin.bottom, margin.top]);
+
+  // Nodes area
+  const nodesArea = d3.area()
+    .x(d => x(parseTime(d)))
+    .y0(h - margin.bottom)
+    .y1(d => yNodes(d.nodes))
+    .curve(d3.curveBasis);
+
+  svg.append('path').datum(traj)
+    .attr('d', nodesArea)
+    .attr('fill', '#39ff14').attr('fill-opacity', 0.15);
+
+  // Nodes line
+  const nodesLine = d3.line()
+    .x(d => x(parseTime(d)))
+    .y(d => yNodes(d.nodes))
+    .curve(d3.curveBasis);
+
+  svg.append('path').datum(traj)
+    .attr('d', nodesLine)
+    .attr('fill', 'none').attr('stroke', '#39ff14').attr('stroke-width', 2);
+
+  // Edges line
+  const edgesLine = d3.line()
+    .x(d => x(parseTime(d)))
+    .y(d => yEdges(d.edges))
+    .curve(d3.curveBasis);
+
+  svg.append('path').datum(traj)
+    .attr('d', edgesLine)
+    .attr('fill', 'none').attr('stroke', '#00f0ff').attr('stroke-width', 2)
+    .attr('stroke-dasharray', '4,2');
+
+  // Axes
+  svg.append('g')
+    .attr('transform', `translate(0,${h - margin.bottom})`)
+    .call(d3.axisBottom(x).ticks(5).tickFormat(d3.timeFormat('%b %d')))
+    .attr('color', 'var(--dim)')
+    .attr('font-family', 'JetBrains Mono').attr('font-size', '9px');
+
+  svg.append('g')
+    .attr('transform', `translate(${margin.left},0)`)
+    .call(d3.axisLeft(yNodes).ticks(4))
+    .attr('color', '#39ff14')
+    .attr('font-family', 'JetBrains Mono').attr('font-size', '9px');
+
+  svg.append('g')
+    .attr('transform', `translate(${w - margin.right},0)`)
+    .call(d3.axisRight(yEdges).ticks(4))
+    .attr('color', '#00f0ff')
+    .attr('font-family', 'JetBrains Mono').attr('font-size', '9px');
+
+  // Legend
+  const legend = svg.append('g').attr('transform', `translate(${margin.left + 10},${margin.top + 5})`);
+  legend.append('line').attr('x1', 0).attr('x2', 16).attr('y1', 0).attr('y2', 0)
+    .attr('stroke', '#39ff14').attr('stroke-width', 2);
+  legend.append('text').attr('x', 20).attr('y', 4)
+    .text('Nodes').attr('fill', '#39ff14').attr('font-size', '9px').attr('font-family', 'JetBrains Mono');
+  legend.append('line').attr('x1', 0).attr('x2', 16).attr('y1', 14).attr('y2', 14)
+    .attr('stroke', '#00f0ff').attr('stroke-width', 2).attr('stroke-dasharray', '4,2');
+  legend.append('text').attr('x', 20).attr('y', 18)
+    .text('Edges').attr('fill', '#00f0ff').attr('font-size', '9px').attr('font-family', 'JetBrains Mono');
+}
+
+function renderDriftChart() {
+  const container = document.getElementById('driftChart');
+  if (!container) return;
+  const traj = DATA.trajectory || [];
+  if (traj.length < 2) {
+    container.innerHTML = '<div style="color:var(--dim);text-align:center;padding-top:80px;font-family:JetBrains Mono;font-size:11px">Not enough history data</div>';
+    return;
+  }
+
+  const w = container.clientWidth || 400;
+  const h = 220;
+  const margin = { top: 15, right: 50, bottom: 30, left: 50 };
+
+  const svg = d3.select(container).append('svg').attr('width', w).attr('height', h);
+
+  const parseTime = d => new Date(d.ts);
+  const x = d3.scaleTime()
+    .domain(d3.extent(traj, parseTime))
+    .range([margin.left, w - margin.right]);
+
+  const yGini = d3.scaleLinear()
+    .domain([0, 1])
+    .range([h - margin.bottom, margin.top]);
+
+  const ySkew = d3.scaleLinear()
+    .domain([0, d3.max(traj, d => d.skewness || 0) * 1.2])
+    .range([h - margin.bottom, margin.top]);
+
+  // Gini area
+  const giniData = traj.filter(d => d.gini > 0);
+  const giniArea = d3.area()
+    .x(d => x(parseTime(d)))
+    .y0(h - margin.bottom)
+    .y1(d => yGini(d.gini))
+    .curve(d3.curveBasis);
+
+  svg.append('path').datum(giniData)
+    .attr('d', giniArea)
+    .attr('fill', '#ff9f1c').attr('fill-opacity', 0.15);
+
+  // Gini line
+  const giniLine = d3.line()
+    .x(d => x(parseTime(d)))
+    .y(d => yGini(d.gini))
+    .curve(d3.curveBasis);
+
+  svg.append('path').datum(giniData)
+    .attr('d', giniLine)
+    .attr('fill', 'none').attr('stroke', '#ff9f1c').attr('stroke-width', 2);
+
+  // Skewness line
+  const skewData = traj.filter(d => (d.skewness || 0) > 0);
+  const skewLine = d3.line()
+    .x(d => x(parseTime(d)))
+    .y(d => ySkew(d.skewness || 0))
+    .curve(d3.curveBasis);
+
+  svg.append('path').datum(skewData)
+    .attr('d', skewLine)
+    .attr('fill', 'none').attr('stroke', '#ff3366').attr('stroke-width', 2)
+    .attr('stroke-dasharray', '4,2');
+
+  // Axes
+  svg.append('g')
+    .attr('transform', `translate(0,${h - margin.bottom})`)
+    .call(d3.axisBottom(x).ticks(5).tickFormat(d3.timeFormat('%b %d')))
+    .attr('color', 'var(--dim)')
+    .attr('font-family', 'JetBrains Mono').attr('font-size', '9px');
+
+  svg.append('g')
+    .attr('transform', `translate(${margin.left},0)`)
+    .call(d3.axisLeft(yGini).ticks(4).tickFormat(d3.format('.2f')))
+    .attr('color', '#ff9f1c')
+    .attr('font-family', 'JetBrains Mono').attr('font-size', '9px');
+
+  svg.append('g')
+    .attr('transform', `translate(${w - margin.right},0)`)
+    .call(d3.axisRight(ySkew).ticks(4).tickFormat(d3.format('.1f')))
+    .attr('color', '#ff3366')
+    .attr('font-family', 'JetBrains Mono').attr('font-size', '9px');
+
+  // Legend
+  const legend = svg.append('g').attr('transform', `translate(${margin.left + 10},${margin.top + 5})`);
+  legend.append('line').attr('x1', 0).attr('x2', 16).attr('y1', 0).attr('y2', 0)
+    .attr('stroke', '#ff9f1c').attr('stroke-width', 2);
+  legend.append('text').attr('x', 20).attr('y', 4)
+    .text('Gini').attr('fill', '#ff9f1c').attr('font-size', '9px').attr('font-family', 'JetBrains Mono');
+  legend.append('line').attr('x1', 0).attr('x2', 16).attr('y1', 14).attr('y2', 14)
+    .attr('stroke', '#ff3366').attr('stroke-width', 2).attr('stroke-dasharray', '4,2');
+  legend.append('text').attr('x', 20).attr('y', 18)
+    .text('Skewness').attr('fill', '#ff3366').attr('font-size', '9px').attr('font-family', 'JetBrains Mono');
 }
 
 // Initialize

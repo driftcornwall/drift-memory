@@ -226,6 +226,31 @@ def build_export():
         bucket = min(deg, 200)  # cap at 200
         deg_dist[bucket] += 1
 
+    # Temporal trajectory from fingerprint history
+    trajectory = []
+    fp_file = MEMORY_ROOT / '.fingerprint_history.json'
+    if fp_file.exists():
+        try:
+            with open(fp_file, 'r', encoding='utf-8') as f:
+                fp_history = json.load(f)
+            seen_ts = set()
+            for entry in fp_history:
+                ts = entry.get('timestamp', '')[:13]  # hour granularity dedup
+                if ts in seen_ts:
+                    continue
+                seen_ts.add(ts)
+                trajectory.append({
+                    'ts': entry.get('timestamp', ''),
+                    'nodes': entry.get('node_count', 0),
+                    'edges': entry.get('edge_count', 0),
+                    'gini': entry.get('gini', 0),
+                    'skewness': entry.get('skewness', 0),
+                    'drift': entry.get('drift_score', 0)
+                })
+        except Exception:
+            pass
+    print(f'  Trajectory points: {len(trajectory)}')
+
     # Assemble export
     export = {
         'generated': datetime.now(timezone.utc).isoformat(),
@@ -254,7 +279,8 @@ def build_export():
         'hubs': [
             {'id': nid, 'degree': deg, 'title': memories.get(nid, {}).get('title', nid)[:60]}
             for nid, deg in degrees.most_common(25)
-        ]
+        ],
+        'trajectory': trajectory
     }
 
     # Write output
