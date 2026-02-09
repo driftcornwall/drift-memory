@@ -1,0 +1,1243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Drift — Cognitive Dashboard</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+
+  :root {
+    --bg: #0a0a0f;
+    --bg2: #12121a;
+    --bg3: #1a1a28;
+    --cyan: #00f0ff;
+    --magenta: #ff3366;
+    --green: #39ff14;
+    --orange: #ff9f1c;
+    --purple: #bf5fff;
+    --yellow: #ffdd57;
+    --text: #e0e0e8;
+    --dim: #6a6a80;
+    --border: #2a2a3a;
+    --glow-cyan: 0 0 20px rgba(0,240,255,0.3);
+    --glow-magenta: 0 0 20px rgba(255,51,102,0.3);
+    --glow-green: 0 0 20px rgba(57,255,20,0.3);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Grotesk', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  .scanline {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,240,255,0.015) 2px,
+      rgba(0,240,255,0.015) 4px
+    );
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  .grid-bg {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-image:
+      linear-gradient(rgba(0,240,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,240,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  header {
+    padding: 24px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(0,240,255,0.05) 0%, transparent 100%);
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .logo-glyph {
+    width: 48px;
+    height: 48px;
+    border: 2px solid var(--cyan);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--cyan);
+    box-shadow: var(--glow-cyan);
+    animation: pulse 3s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 10px rgba(0,240,255,0.2); }
+    50% { box-shadow: 0 0 25px rgba(0,240,255,0.5); }
+  }
+
+  .logo h1 {
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--cyan);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+
+  .logo .sub {
+    font-size: 12px;
+    color: var(--dim);
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 1px;
+  }
+
+  .header-stats {
+    display: flex;
+    gap: 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+  }
+
+  .header-stat {
+    text-align: right;
+  }
+
+  .header-stat .val {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--cyan);
+  }
+
+  .header-stat .label {
+    color: var(--dim);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  main {
+    padding: 24px 32px;
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    grid-template-rows: auto 1fr auto;
+    gap: 20px;
+    max-width: 1600px;
+    margin: 0 auto;
+  }
+
+  .controls {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .dim-btn {
+    padding: 8px 20px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg2);
+    color: var(--dim);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .dim-btn:hover { border-color: var(--cyan); color: var(--text); }
+
+  .dim-btn.active {
+    border-color: var(--active-color, var(--cyan));
+    color: var(--active-color, var(--cyan));
+    background: rgba(0,240,255,0.08);
+    box-shadow: 0 0 12px var(--active-glow, rgba(0,240,255,0.2));
+  }
+
+  .dim-btn[data-dim="all"] { --active-color: var(--cyan); --active-glow: rgba(0,240,255,0.2); }
+  .dim-btn[data-dim="who"] { --active-color: var(--green); --active-glow: rgba(57,255,20,0.2); }
+  .dim-btn[data-dim="what"] { --active-color: var(--cyan); --active-glow: rgba(0,240,255,0.2); }
+  .dim-btn[data-dim="why"] { --active-color: var(--orange); --active-glow: rgba(255,159,28,0.2); }
+  .dim-btn[data-dim="where"] { --active-color: var(--purple); --active-glow: rgba(191,95,255,0.2); }
+
+  .controls .spacer { flex: 1; }
+
+  .edge-slider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--dim);
+  }
+
+  .edge-slider input[type="range"] {
+    -webkit-appearance: none;
+    width: 120px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    outline: none;
+  }
+
+  .edge-slider input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--cyan);
+    cursor: pointer;
+    box-shadow: 0 0 8px rgba(0,240,255,0.5);
+  }
+
+  .graph-container {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+    min-height: 600px;
+  }
+
+  .graph-container svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .tooltip {
+    position: absolute;
+    padding: 10px 14px;
+    background: rgba(10,10,15,0.95);
+    border: 1px solid var(--cyan);
+    border-radius: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text);
+    pointer-events: none;
+    z-index: 100;
+    max-width: 300px;
+    box-shadow: var(--glow-cyan);
+    display: none;
+  }
+
+  .tooltip .tt-id { color: var(--cyan); font-weight: 700; }
+  .tooltip .tt-title { color: var(--text); margin: 4px 0; }
+  .tooltip .tt-meta { color: var(--dim); font-size: 10px; }
+
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .panel {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+
+  .panel h3 {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 12px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  .stat-card {
+    background: var(--bg3);
+    border-radius: 6px;
+    padding: 12px;
+    text-align: center;
+  }
+
+  .stat-card .val {
+    font-size: 24px;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .stat-card .label {
+    font-size: 9px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 4px;
+  }
+
+  .stat-card.cyan .val { color: var(--cyan); }
+  .stat-card.magenta .val { color: var(--magenta); }
+  .stat-card.green .val { color: var(--green); }
+  .stat-card.orange .val { color: var(--orange); }
+  .stat-card.purple .val { color: var(--purple); }
+
+  .hub-list {
+    list-style: none;
+  }
+
+  .hub-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(42,42,58,0.5);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+  }
+
+  .hub-item:last-child { border-bottom: none; }
+
+  .hub-rank {
+    width: 20px;
+    font-size: 10px;
+    color: var(--dim);
+    text-align: right;
+  }
+
+  .hub-bar {
+    flex: 1;
+    height: 6px;
+    background: var(--bg);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .hub-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--cyan), var(--purple));
+  }
+
+  .hub-degree {
+    width: 30px;
+    text-align: right;
+    color: var(--cyan);
+    font-weight: 600;
+    font-size: 12px;
+  }
+
+  .hub-name {
+    width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+    font-size: 10px;
+  }
+
+  .radar-container {
+    display: flex;
+    justify-content: center;
+    padding: 8px 0;
+  }
+
+  .bottom-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 20px;
+  }
+
+  .chart-container {
+    height: 200px;
+    position: relative;
+  }
+
+  .type-legend {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    margin-top: 8px;
+  }
+
+  .type-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--dim);
+  }
+
+  .type-legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+
+  .dim-gini-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(42,42,58,0.3);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+  }
+
+  .dim-gini-row:last-child { border-bottom: none; }
+
+  .dim-gini-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .dim-gini-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
+  .dim-gini-bar {
+    width: 100px;
+    height: 6px;
+    background: var(--bg);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .dim-gini-fill {
+    height: 100%;
+    border-radius: 3px;
+  }
+
+  .dim-gini-val {
+    width: 50px;
+    text-align: right;
+    color: var(--cyan);
+    font-weight: 600;
+  }
+
+  .search-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .search-box input {
+    padding: 6px 12px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    outline: none;
+    width: 200px;
+  }
+
+  .search-box input:focus {
+    border-color: var(--cyan);
+    box-shadow: 0 0 8px rgba(0,240,255,0.2);
+  }
+
+  .search-box input::placeholder { color: var(--dim); }
+
+  .node-detail {
+    display: none;
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    background: rgba(10,10,15,0.92);
+    border: 1px solid var(--cyan);
+    border-radius: 8px;
+    padding: 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    z-index: 50;
+    max-width: 300px;
+    box-shadow: var(--glow-cyan);
+  }
+
+  .node-detail h4 {
+    color: var(--cyan);
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+
+  .node-detail .nd-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 0;
+    color: var(--dim);
+  }
+
+  .node-detail .nd-val { color: var(--text); }
+
+  .node-detail .nd-tags {
+    margin-top: 8px;
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .nd-tag {
+    padding: 2px 8px;
+    background: rgba(0,240,255,0.1);
+    border: 1px solid rgba(0,240,255,0.3);
+    border-radius: 4px;
+    font-size: 9px;
+    color: var(--cyan);
+  }
+
+  .footer {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--dim);
+    border-top: 1px solid var(--border);
+  }
+
+  .footer a { color: var(--cyan); text-decoration: none; }
+  .footer a:hover { text-decoration: underline; }
+
+  @media (max-width: 1000px) {
+    main {
+      grid-template-columns: 1fr;
+      padding: 16px;
+    }
+    .bottom-row { grid-template-columns: 1fr; }
+    header { flex-direction: column; gap: 12px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="scanline"></div>
+<div class="grid-bg"></div>
+
+<header>
+  <div class="logo">
+    <div class="logo-glyph">D</div>
+    <div>
+      <h1>Drift</h1>
+      <div class="sub">Cognitive Dashboard</div>
+    </div>
+  </div>
+  <div class="header-stats">
+    <div class="header-stat">
+      <div class="val" id="h-memories">-</div>
+      <div class="label">Memories</div>
+    </div>
+    <div class="header-stat">
+      <div class="val" id="h-nodes">-</div>
+      <div class="label">Nodes</div>
+    </div>
+    <div class="header-stat">
+      <div class="val" id="h-edges">-</div>
+      <div class="label">Edges</div>
+    </div>
+    <div class="header-stat">
+      <div class="val" id="h-gini">-</div>
+      <div class="label">Gini</div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="controls">
+    <button class="dim-btn active" data-dim="all">All</button>
+    <button class="dim-btn" data-dim="who">Who</button>
+    <button class="dim-btn" data-dim="what">What</button>
+    <button class="dim-btn" data-dim="why">Why</button>
+    <button class="dim-btn" data-dim="where">Where</button>
+    <div class="spacer"></div>
+    <div class="search-box">
+      <input type="text" id="search" placeholder="Search nodes...">
+    </div>
+    <div class="edge-slider">
+      <span>Edges:</span>
+      <input type="range" id="edgeSlider" min="50" max="800" value="300">
+      <span id="edgeCount">300</span>
+    </div>
+  </div>
+
+  <div class="graph-container" id="graphContainer">
+    <svg id="graph"></svg>
+    <div class="tooltip" id="tooltip"></div>
+    <div class="node-detail" id="nodeDetail"></div>
+  </div>
+
+  <div class="sidebar">
+    <div class="panel">
+      <h3>Graph Metrics</h3>
+      <div class="stat-grid">
+        <div class="stat-card cyan">
+          <div class="val" id="s-nodes">-</div>
+          <div class="label">Nodes</div>
+        </div>
+        <div class="stat-card magenta">
+          <div class="val" id="s-edges">-</div>
+          <div class="label">Edges</div>
+        </div>
+        <div class="stat-card green">
+          <div class="val" id="s-gini">-</div>
+          <div class="label">Gini</div>
+        </div>
+        <div class="stat-card orange">
+          <div class="val" id="s-skew">-</div>
+          <div class="label">Skewness</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>5W Dimensions</h3>
+      <div id="dimGiniList"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Hub Memories</h3>
+      <ul class="hub-list" id="hubList"></ul>
+    </div>
+
+    <div class="panel">
+      <h3>Memory Types</h3>
+      <div class="chart-container" id="typeChart"></div>
+      <div class="type-legend" id="typeLegend"></div>
+    </div>
+  </div>
+
+  <div class="bottom-row">
+    <div class="panel">
+      <h3>Degree Distribution</h3>
+      <div class="chart-container" id="degreeChart"></div>
+    </div>
+    <div class="panel">
+      <h3>Dimension Coverage</h3>
+      <div class="chart-container" id="dimCoverage"></div>
+    </div>
+    <div class="panel">
+      <h3>Belief Strength</h3>
+      <div class="chart-container" id="beliefChart"></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span id="generated"></span> &middot;
+    <a href="https://github.com/driftcornwall/drift-memory" target="_blank">drift-memory</a> &middot;
+    Born Jan 31, 2026 &middot; Cornwall, England
+  </div>
+</main>
+
+<script>
+const DIM_COLORS = {
+  all: '#00f0ff',
+  who: '#39ff14',
+  what: '#00f0ff',
+  why: '#ff9f1c',
+  where: '#bf5fff',
+  when: '#ff3366'
+};
+
+let DATA = null;
+let simulation = null;
+let currentDim = 'all';
+let maxEdges = 300;
+let highlightNode = null;
+
+async function init() {
+  const resp = await fetch('data.json');
+  DATA = await resp.json();
+  renderHeader();
+  renderSidebar();
+  renderGraph();
+  renderBottomCharts();
+  setupControls();
+}
+
+function renderHeader() {
+  const s = DATA.summary;
+  document.getElementById('h-memories').textContent = s.total_memories.toLocaleString();
+  document.getElementById('h-nodes').textContent = s.total_nodes;
+  document.getElementById('h-edges').textContent = s.total_edges.toLocaleString();
+  document.getElementById('h-gini').textContent = s.gini.toFixed(3);
+  document.getElementById('generated').textContent = `Generated: ${new Date(DATA.generated).toLocaleString()}`;
+}
+
+function renderSidebar() {
+  const s = DATA.summary;
+
+  // Stats
+  document.getElementById('s-nodes').textContent = s.total_nodes;
+  document.getElementById('s-edges').textContent = s.total_edges.toLocaleString();
+  document.getElementById('s-gini').textContent = s.gini.toFixed(3);
+  document.getElementById('s-skew').textContent = s.skewness.toFixed(2);
+
+  // 5W Dimension Gini bars
+  const dimList = document.getElementById('dimGiniList');
+  const dims = [
+    { name: 'WHO', key: 'who', color: DIM_COLORS.who },
+    { name: 'WHAT', key: 'what', color: DIM_COLORS.what },
+    { name: 'WHY', key: 'why', color: DIM_COLORS.why },
+    { name: 'WHERE', key: 'where', color: DIM_COLORS.where }
+  ];
+  dims.forEach(d => {
+    const stat = DATA.dimensions[d.key] || {};
+    const gini = stat.gini || 0;
+    const row = document.createElement('div');
+    row.className = 'dim-gini-row';
+    row.innerHTML = `
+      <div class="dim-gini-label">
+        <div class="dim-gini-dot" style="background:${d.color}"></div>
+        <span>${d.name}</span>
+        <span style="color:var(--dim);font-size:10px">${stat.nodes || 0}n/${stat.edges || 0}e</span>
+      </div>
+      <div class="dim-gini-bar">
+        <div class="dim-gini-fill" style="width:${gini*100}%;background:${d.color}"></div>
+      </div>
+      <div class="dim-gini-val">${gini.toFixed(3)}</div>
+    `;
+    dimList.appendChild(row);
+  });
+
+  // Hub list
+  const hubList = document.getElementById('hubList');
+  const maxDeg = DATA.hubs[0]?.degree || 1;
+  DATA.hubs.slice(0, 15).forEach((h, i) => {
+    const li = document.createElement('li');
+    li.className = 'hub-item';
+    li.innerHTML = `
+      <span class="hub-rank">${i+1}</span>
+      <span class="hub-name" title="${h.title}">${h.title || h.id}</span>
+      <div class="hub-bar">
+        <div class="hub-bar-fill" style="width:${(h.degree/maxDeg)*100}%"></div>
+      </div>
+      <span class="hub-degree">${h.degree}</span>
+    `;
+    li.style.cursor = 'pointer';
+    li.addEventListener('click', () => focusNode(h.id));
+    hubList.appendChild(li);
+  });
+
+  // Memory types donut
+  renderTypeChart();
+}
+
+function renderTypeChart() {
+  const types = DATA.summary.memory_types;
+  const container = document.getElementById('typeChart');
+  const legend = document.getElementById('typeLegend');
+  const w = container.clientWidth || 280;
+  const h = 200;
+  const radius = Math.min(w, h) / 2 - 10;
+
+  const colors = { core: '#ff3366', active: '#00f0ff', archive: '#6a6a80' };
+  const entries = Object.entries(types).filter(([,v]) => v > 0);
+  const total = entries.reduce((s, [,v]) => s + v, 0);
+
+  const svg = d3.select(container).append('svg')
+    .attr('width', w).attr('height', h)
+    .append('g')
+    .attr('transform', `translate(${w/2},${h/2})`);
+
+  const pie = d3.pie().value(d => d[1]).sort(null);
+  const arc = d3.arc().innerRadius(radius * 0.55).outerRadius(radius);
+
+  svg.selectAll('path')
+    .data(pie(entries))
+    .join('path')
+    .attr('d', arc)
+    .attr('fill', d => colors[d.data[0]] || '#444')
+    .attr('stroke', 'var(--bg2)')
+    .attr('stroke-width', 2);
+
+  svg.append('text')
+    .attr('text-anchor', 'middle')
+    .attr('dy', '-0.2em')
+    .attr('fill', 'var(--cyan)')
+    .attr('font-family', 'JetBrains Mono')
+    .attr('font-size', '22px')
+    .attr('font-weight', '700')
+    .text(total);
+
+  svg.append('text')
+    .attr('text-anchor', 'middle')
+    .attr('dy', '1.2em')
+    .attr('fill', 'var(--dim)')
+    .attr('font-family', 'JetBrains Mono')
+    .attr('font-size', '9px')
+    .text('TOTAL');
+
+  entries.forEach(([name, count]) => {
+    const item = document.createElement('div');
+    item.className = 'type-legend-item';
+    item.innerHTML = `
+      <div class="type-legend-dot" style="background:${colors[name]||'#444'}"></div>
+      <span>${name}: ${count}</span>
+    `;
+    legend.appendChild(item);
+  });
+}
+
+function getEdgesForDim(dim) {
+  if (dim === 'all') return DATA.edges;
+  const dimEdges = DATA.dimension_edges[dim] || [];
+  return dimEdges.sort((a, b) => b.w - a.w);
+}
+
+function renderGraph() {
+  const container = document.getElementById('graphContainer');
+  const rect = container.getBoundingClientRect();
+  const width = rect.width || 900;
+  const height = rect.height || 600;
+
+  const svg = d3.select('#graph')
+    .attr('viewBox', [0, 0, width, height])
+    .attr('width', width)
+    .attr('height', height);
+
+  svg.selectAll('*').remove();
+
+  // Defs for glow
+  const defs = svg.append('defs');
+  const filter = defs.append('filter').attr('id', 'glow');
+  filter.append('feGaussianBlur').attr('stdDeviation', '3').attr('result', 'blur');
+  filter.append('feMerge').selectAll('feMergeNode')
+    .data(['blur', 'SourceGraphic']).join('feMergeNode')
+    .attr('in', d => d);
+
+  const edges = getEdgesForDim(currentDim).slice(0, maxEdges);
+
+  // Build node set from visible edges
+  const nodeIds = new Set();
+  edges.forEach(e => { nodeIds.add(e.s); nodeIds.add(e.t); });
+
+  const nodeMap = {};
+  DATA.nodes.forEach(n => { nodeMap[n.id] = n; });
+
+  const nodes = Array.from(nodeIds).map(id => ({
+    id,
+    ...nodeMap[id],
+    degree: nodeMap[id]?.degree || 1
+  }));
+
+  const color = DIM_COLORS[currentDim] || DIM_COLORS.all;
+
+  // Links
+  const linkGroup = svg.append('g');
+  const links = linkGroup.selectAll('line')
+    .data(edges)
+    .join('line')
+    .attr('stroke', color)
+    .attr('stroke-opacity', d => Math.min(0.15 + d.w * 0.05, 0.5))
+    .attr('stroke-width', d => Math.min(0.5 + d.w * 0.3, 3));
+
+  // Nodes
+  const maxDeg = Math.max(...nodes.map(n => n.degree), 1);
+  const nodeGroup = svg.append('g');
+
+  const nodeEls = nodeGroup.selectAll('circle')
+    .data(nodes, d => d.id)
+    .join('circle')
+    .attr('r', d => 3 + Math.sqrt(d.degree / maxDeg) * 14)
+    .attr('fill', d => {
+      if (d.type === 'core') return '#ff3366';
+      return color;
+    })
+    .attr('fill-opacity', 0.7)
+    .attr('stroke', d => d.type === 'core' ? '#ff3366' : color)
+    .attr('stroke-width', 1)
+    .attr('stroke-opacity', 0.5)
+    .attr('filter', d => d.degree > maxDeg * 0.3 ? 'url(#glow)' : null)
+    .style('cursor', 'pointer')
+    .on('mouseover', (event, d) => showTooltip(event, d))
+    .on('mouseout', hideTooltip)
+    .on('click', (event, d) => showNodeDetail(d))
+    .call(d3.drag()
+      .on('start', dragstarted)
+      .on('drag', dragged)
+      .on('end', dragended));
+
+  // Build link objects for D3 (D3 resolves source/target to node refs)
+  const simLinks = edges.map(e => ({
+    source: e.s, target: e.t, weight: e.w
+  }));
+
+  // Simulation
+  if (simulation) simulation.stop();
+
+  simulation = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(simLinks).id(d => d.id).distance(80).strength(d => 0.1 + d.weight * 0.02))
+    .force('charge', d3.forceManyBody().strength(-60).distanceMax(300))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('collision', d3.forceCollide().radius(d => 5 + Math.sqrt(d.degree / maxDeg) * 14))
+    .on('tick', () => {
+      // Use D3's resolved node references (O(1) per edge)
+      links
+        .attr('x1', (d, i) => simLinks[i].source.x || 0)
+        .attr('y1', (d, i) => simLinks[i].source.y || 0)
+        .attr('x2', (d, i) => simLinks[i].target.x || 0)
+        .attr('y2', (d, i) => simLinks[i].target.y || 0);
+
+      nodeEls
+        .attr('cx', d => d.x = Math.max(10, Math.min(width - 10, d.x)))
+        .attr('cy', d => d.y = Math.max(10, Math.min(height - 10, d.y)));
+    });
+
+  // Zoom
+  const zoom = d3.zoom()
+    .scaleExtent([0.3, 5])
+    .on('zoom', (event) => {
+      linkGroup.attr('transform', event.transform);
+      nodeGroup.attr('transform', event.transform);
+    });
+
+  svg.call(zoom);
+
+  // Update sidebar stats for current view
+  updateViewStats(nodes.length, edges.length);
+}
+
+function getNode(id, nodes) {
+  return nodes.find(n => n.id === id);
+}
+
+function updateViewStats(nodeCount, edgeCount) {
+  // Update the stat cards for current view
+  const dimStat = currentDim !== 'all' ? DATA.dimensions[currentDim] : DATA.summary;
+  if (dimStat) {
+    document.getElementById('s-nodes').textContent = dimStat.nodes || dimStat.total_nodes || nodeCount;
+    document.getElementById('s-edges').textContent = (dimStat.edges || dimStat.total_edges || edgeCount).toLocaleString();
+    document.getElementById('s-gini').textContent = (dimStat.gini || 0).toFixed(3);
+    document.getElementById('s-skew').textContent = (dimStat.skewness || 0).toFixed(2);
+  }
+}
+
+function showTooltip(event, d) {
+  const tooltip = document.getElementById('tooltip');
+  tooltip.innerHTML = `
+    <div class="tt-id">${d.id}</div>
+    <div class="tt-title">${d.title || 'untitled'}</div>
+    <div class="tt-meta">
+      Type: ${d.type || '?'} | Degree: ${d.degree}
+      ${d.tags?.length ? '<br>Tags: ' + d.tags.join(', ') : ''}
+    </div>
+  `;
+  tooltip.style.display = 'block';
+  tooltip.style.left = (event.offsetX + 15) + 'px';
+  tooltip.style.top = (event.offsetY - 10) + 'px';
+}
+
+function hideTooltip() {
+  document.getElementById('tooltip').style.display = 'none';
+}
+
+function showNodeDetail(d) {
+  const detail = document.getElementById('nodeDetail');
+  detail.innerHTML = `
+    <h4>${d.title || d.id}</h4>
+    <div class="nd-row"><span>ID</span><span class="nd-val">${d.id}</span></div>
+    <div class="nd-row"><span>Type</span><span class="nd-val">${d.type || '?'}</span></div>
+    <div class="nd-row"><span>Degree</span><span class="nd-val">${d.degree}</span></div>
+    <div class="nd-row"><span>Domain</span><span class="nd-val">${d.domain || 'untagged'}</span></div>
+    ${d.tags?.length ? `<div class="nd-tags">${d.tags.map(t => `<span class="nd-tag">${t}</span>`).join('')}</div>` : ''}
+  `;
+  detail.style.display = 'block';
+  detail.addEventListener('click', () => { detail.style.display = 'none'; }, { once: true });
+}
+
+function focusNode(nodeId) {
+  // Highlight a node in the graph
+  d3.selectAll('circle')
+    .attr('stroke-width', d => d.id === nodeId ? 3 : 1)
+    .attr('stroke-opacity', d => d.id === nodeId ? 1 : 0.5)
+    .attr('fill-opacity', d => d.id === nodeId ? 1 : 0.7);
+}
+
+function setupControls() {
+  // Dimension buttons
+  document.querySelectorAll('.dim-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.dim-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentDim = btn.dataset.dim;
+      renderGraph();
+    });
+  });
+
+  // Edge slider
+  const slider = document.getElementById('edgeSlider');
+  const countEl = document.getElementById('edgeCount');
+  slider.addEventListener('input', () => {
+    maxEdges = parseInt(slider.value);
+    countEl.textContent = maxEdges;
+    renderGraph();
+  });
+
+  // Search
+  const searchInput = document.getElementById('search');
+  searchInput.addEventListener('input', () => {
+    const q = searchInput.value.toLowerCase();
+    if (!q) {
+      d3.selectAll('circle')
+        .attr('fill-opacity', 0.7)
+        .attr('stroke-width', 1);
+      return;
+    }
+    d3.selectAll('circle')
+      .attr('fill-opacity', d => {
+        const match = (d.title || '').toLowerCase().includes(q) ||
+                      (d.id || '').toLowerCase().includes(q) ||
+                      (d.tags || []).some(t => t.toLowerCase().includes(q));
+        return match ? 1 : 0.1;
+      })
+      .attr('stroke-width', d => {
+        const match = (d.title || '').toLowerCase().includes(q) ||
+                      (d.id || '').toLowerCase().includes(q);
+        return match ? 3 : 0.5;
+      });
+  });
+}
+
+function dragstarted(event, d) {
+  if (!event.active) simulation.alphaTarget(0.3).restart();
+  d.fx = d.x;
+  d.fy = d.y;
+}
+
+function dragged(event, d) {
+  d.fx = event.x;
+  d.fy = event.y;
+}
+
+function dragended(event, d) {
+  if (!event.active) simulation.alphaTarget(0);
+  d.fx = null;
+  d.fy = null;
+}
+
+function renderBottomCharts() {
+  renderDegreeDistribution();
+  renderDimCoverage();
+  renderBeliefChart();
+}
+
+function renderDegreeDistribution() {
+  const container = document.getElementById('degreeChart');
+  const w = container.clientWidth || 300;
+  const h = 200;
+  const margin = { top: 10, right: 10, bottom: 30, left: 40 };
+
+  const data = DATA.degree_distribution;
+
+  const svg = d3.select(container).append('svg')
+    .attr('width', w).attr('height', h);
+
+  const x = d3.scaleLinear()
+    .domain([0, d3.max(data, d => d.degree)])
+    .range([margin.left, w - margin.right]);
+
+  const y = d3.scaleLinear()
+    .domain([0, d3.max(data, d => d.count)])
+    .range([h - margin.bottom, margin.top]);
+
+  // Bars
+  const binWidth = Math.max(2, (w - margin.left - margin.right) / data.length - 1);
+  svg.selectAll('rect')
+    .data(data)
+    .join('rect')
+    .attr('x', d => x(d.degree))
+    .attr('y', d => y(d.count))
+    .attr('width', binWidth)
+    .attr('height', d => h - margin.bottom - y(d.count))
+    .attr('fill', '#00f0ff')
+    .attr('fill-opacity', 0.6);
+
+  // Axes
+  svg.append('g')
+    .attr('transform', `translate(0,${h - margin.bottom})`)
+    .call(d3.axisBottom(x).ticks(5))
+    .attr('color', 'var(--dim)')
+    .attr('font-family', 'JetBrains Mono')
+    .attr('font-size', '9px');
+
+  svg.append('g')
+    .attr('transform', `translate(${margin.left},0)`)
+    .call(d3.axisLeft(y).ticks(4))
+    .attr('color', 'var(--dim)')
+    .attr('font-family', 'JetBrains Mono')
+    .attr('font-size', '9px');
+}
+
+function renderDimCoverage() {
+  const container = document.getElementById('dimCoverage');
+  const w = container.clientWidth || 300;
+  const h = 200;
+  const margin = { top: 10, right: 10, bottom: 40, left: 40 };
+
+  const dims = ['who', 'what', 'why', 'where'];
+  const data = dims.map(d => ({
+    dim: d.toUpperCase(),
+    edges: DATA.dimensions[d]?.edges || 0,
+    nodes: DATA.dimensions[d]?.nodes || 0,
+    color: DIM_COLORS[d]
+  }));
+
+  const svg = d3.select(container).append('svg')
+    .attr('width', w).attr('height', h);
+
+  const x = d3.scaleBand()
+    .domain(data.map(d => d.dim))
+    .range([margin.left, w - margin.right])
+    .padding(0.3);
+
+  const y = d3.scaleLinear()
+    .domain([0, d3.max(data, d => d.edges)])
+    .range([h - margin.bottom, margin.top]);
+
+  svg.selectAll('rect')
+    .data(data)
+    .join('rect')
+    .attr('x', d => x(d.dim))
+    .attr('y', d => y(d.edges))
+    .attr('width', x.bandwidth())
+    .attr('height', d => h - margin.bottom - y(d.edges))
+    .attr('fill', d => d.color)
+    .attr('fill-opacity', 0.6)
+    .attr('rx', 3);
+
+  // Node count labels
+  svg.selectAll('.node-label')
+    .data(data)
+    .join('text')
+    .attr('x', d => x(d.dim) + x.bandwidth() / 2)
+    .attr('y', d => y(d.edges) - 4)
+    .attr('text-anchor', 'middle')
+    .attr('fill', d => d.color)
+    .attr('font-family', 'JetBrains Mono')
+    .attr('font-size', '10px')
+    .text(d => d.edges);
+
+  svg.append('g')
+    .attr('transform', `translate(0,${h - margin.bottom})`)
+    .call(d3.axisBottom(x))
+    .attr('color', 'var(--dim)')
+    .attr('font-family', 'JetBrains Mono')
+    .attr('font-size', '10px');
+
+  svg.append('g')
+    .attr('transform', `translate(${margin.left},0)`)
+    .call(d3.axisLeft(y).ticks(4))
+    .attr('color', 'var(--dim)')
+    .attr('font-family', 'JetBrains Mono')
+    .attr('font-size', '9px');
+}
+
+function renderBeliefChart() {
+  const container = document.getElementById('beliefChart');
+  const w = container.clientWidth || 300;
+  const h = 200;
+  const margin = { top: 10, right: 10, bottom: 30, left: 40 };
+
+  // Create belief distribution from edges
+  const beliefs = DATA.edges.map(e => e.w);
+  const maxB = Math.max(...beliefs, 1);
+  const bucketCount = 30;
+  const bucketSize = maxB / bucketCount;
+
+  const buckets = Array(bucketCount).fill(0);
+  beliefs.forEach(b => {
+    const idx = Math.min(Math.floor(b / bucketSize), bucketCount - 1);
+    buckets[idx]++;
+  });
+
+  const data = buckets.map((count, i) => ({
+    belief: (i * bucketSize).toFixed(1),
+    count
+  }));
+
+  const svg = d3.select(container).append('svg')
+    .attr('width', w).attr('height', h);
+
+  const x = d3.scaleLinear()
+    .domain([0, maxB])
+    .range([margin.left, w - margin.right]);
+
+  const y = d3.scaleLinear()
+    .domain([0, d3.max(data, d => d.count)])
+    .range([h - margin.bottom, margin.top]);
+
+  // Area
+  const area = d3.area()
+    .x((d, i) => x(i * bucketSize))
+    .y0(h - margin.bottom)
+    .y1(d => y(d.count))
+    .curve(d3.curveBasis);
+
+  svg.append('path')
+    .datum(data)
+    .attr('d', area)
+    .attr('fill', '#ff9f1c')
+    .attr('fill-opacity', 0.3);
+
+  // Line
+  const line = d3.line()
+    .x((d, i) => x(i * bucketSize))
+    .y(d => y(d.count))
+    .curve(d3.curveBasis);
+
+  svg.append('path')
+    .datum(data)
+    .attr('d', line)
+    .attr('fill', 'none')
+    .attr('stroke', '#ff9f1c')
+    .attr('stroke-width', 2);
+
+  svg.append('g')
+    .attr('transform', `translate(0,${h - margin.bottom})`)
+    .call(d3.axisBottom(x).ticks(5))
+    .attr('color', 'var(--dim)')
+    .attr('font-family', 'JetBrains Mono')
+    .attr('font-size', '9px');
+
+  svg.append('g')
+    .attr('transform', `translate(${margin.left},0)`)
+    .call(d3.axisLeft(y).ticks(4))
+    .attr('color', 'var(--dim)')
+    .attr('font-family', 'JetBrains Mono')
+    .attr('font-size', '9px');
+}
+
+// Initialize
+init();
+</script>
+</body>
+</html>
