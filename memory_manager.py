@@ -375,7 +375,7 @@ def get_priming_candidates(
             seen_ids.add(mem_id)
 
     # Phase 5: Domain-aware priming (read-only, 1 slot for under-represented domain)
-    result['domain_balanced'] = []
+    result['domain_primed'] = []
     try:
         COGNITIVE_DOMAINS = {
             'reflection': ['thought', 'thinking', 'output', 'source:self'],
@@ -421,7 +421,7 @@ def get_priming_candidates(
 
         if candidates:
             picked = random.choice(candidates)
-            result['domain_balanced'].append({
+            result['domain_primed'].append({
                 'id': picked[0],
                 'preview': picked[1],
                 'source': 'domain_balance',
@@ -435,7 +435,7 @@ def get_priming_candidates(
     result['all'] = (
         result['activated'] + result['cooccurring']
         + result['unfinished'] + result['excavated']
-        + result['domain_balanced']
+        + result['domain_primed']
     )
 
     return result
@@ -908,6 +908,12 @@ if __name__ == "__main__":
             for mem in candidates['unfinished']:
                 print(f"  [{mem['id']}] match={mem['match']}")
                 print(f"    {mem['preview'][:60]}...")
+
+            if candidates.get('domain_primed'):
+                print(f"\nPHASE 5: Domain-primed ({len(candidates['domain_primed'])} memories)")
+                for mem in candidates['domain_primed']:
+                    print(f"  [{mem['id']}] domain={mem.get('domain', '?')} (read-only)")
+                    print(f"    {mem['preview'][:60]}...")
 
             print(f"\nTOTAL: {len(candidates['all'])} unique memories for priming")
 
