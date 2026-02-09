@@ -38,6 +38,11 @@ SESSION_TIMEOUT_HOURS = 4
 PAIR_DECAY_RATE = 0.3  # Was 0.5. Pairs survive ~20h unreinforced (was ~12h).
 ACCESS_WEIGHTED_DECAY = True
 
+# v5.0: Dimensional decay — only full-decay edges in active W-dimensions
+# Edges outside the session's context get dramatically reduced decay
+# Credit: Multi-graph RFC (Issue #19), joint design with SpindriftMind
+INACTIVE_CONTEXT_FACTOR = 0.1  # Non-overlapping edges decay at 0.03 instead of 0.3
+
 # v2.13: Self-evolution flag (now imported from memory_common — no peer-module coupling)
 
 # v3.0: Edge Provenance
@@ -604,11 +609,68 @@ def _calculate_effective_decay_cached(
     return base_decay
 
 
+def _get_edge_dimensions(
+    pair_key: tuple[str, str],
+    edge_data: dict,
+    metadata_cache: dict[str, dict],
+) -> dict[str, set]:
+    """
+    Extract W-dimensions from an edge for dimensional decay.
+    Returns {dimension: set_of_values} for WHERE/WHY/WHAT/WHO.
+    """
+    dims = {}
+
+    # WHERE: platform_context on the edge
+    pc = edge_data.get('platform_context', {})
+    platforms = {p for p in pc if not p.startswith('_')}
+    if platforms:
+        dims['where'] = platforms
+
+    # WHY: activity_context on the edge
+    ac = edge_data.get('activity_context', {})
+    if ac:
+        dims['why'] = set(ac.keys())
+
+    # WHAT: topic_context on edge + memory-level topic_context
+    tc = edge_data.get('topic_context', {})
+    topics = set()
+    if isinstance(tc, dict):
+        topics.update(tc.get('union', []))
+        topics.update(tc.get('shared', []))
+    for mid in pair_key:
+        topics.update(metadata_cache.get(mid, {}).get('topic_context', []))
+    if topics:
+        dims['what'] = topics
+
+    # WHO: contact_context on edge + memory-level contact_context
+    contacts = set(edge_data.get('contact_context', []))
+    for mid in pair_key:
+        contacts.update(metadata_cache.get(mid, {}).get('contact_context', []))
+    if contacts:
+        dims['who'] = contacts
+
+    return dims
+
+
+def _has_dimension_overlap(
+    edge_dims: dict[str, set],
+    session_dims: dict[str, list],
+) -> bool:
+    """Check if any edge dimension overlaps with active session dimensions."""
+    for dim, active_values in session_dims.items():
+        edge_values = edge_dims.get(dim, set())
+        if edge_values & set(active_values):
+            return True
+    return False
+
+
 def decay_pair_cooccurrences_v3() -> tuple[int, int]:
     """
     Apply soft decay to edges in edges_v3.json.
-    O(n) version with pre-cached metadata.
-    Credit: Optimization for 600+ memories (2026-02-05)
+    v5.0: Dimensional decay — edges outside the session's active context
+    get dramatically reduced decay (INACTIVE_CONTEXT_FACTOR).
+
+    Credit: Multi-graph RFC (Issue #19), SpindriftMind joint design
     """
     retrieved = session_state.get_retrieved_list()
     reinforced_pairs = set()
@@ -623,8 +685,17 @@ def decay_pair_cooccurrences_v3() -> tuple[int, int]:
 
     metadata_cache = _build_metadata_cache()
 
+    # v5.0: Get active session dimensions for dimensional decay
+    session_dims = {}
+    try:
+        from context_manager import get_session_dimensions
+        session_dims = get_session_dimensions()
+    except ImportError:
+        pass
+
     edges_decayed = 0
     edges_pruned = 0
+    edges_protected = 0  # v5.0: edges that got reduced decay
     to_remove = []
     now = datetime.now(timezone.utc).isoformat()
 
@@ -632,12 +703,21 @@ def decay_pair_cooccurrences_v3() -> tuple[int, int]:
         normalized = tuple(sorted(pair_key))
 
         if normalized not in reinforced_pairs:
-            effective_decay = _calculate_effective_decay_cached(
+            base_decay = _calculate_effective_decay_cached(
                 pair_key[0], pair_key[1], metadata_cache
             )
 
+            # v5.0: Dimensional decay
+            # If session has dimension data, check overlap
+            if session_dims:
+                edge_dims = _get_edge_dimensions(pair_key, edge_data, metadata_cache)
+                if edge_dims and not _has_dimension_overlap(edge_dims, session_dims):
+                    # Edge is in a different context — dramatically reduce decay
+                    base_decay *= INACTIVE_CONTEXT_FACTOR
+                    edges_protected += 1
+
             old_belief = edge_data.get('belief', 1.0)
-            new_belief = old_belief - effective_decay
+            new_belief = old_belief - base_decay
 
             if new_belief <= 0:
                 to_remove.append(pair_key)
@@ -666,5 +746,6 @@ def decay_pair_cooccurrences_v3() -> tuple[int, int]:
         except Exception:
             pass
 
-    print(f"Pair decay (v3): {edges_decayed} decayed, {edges_pruned} pruned")
+    protected_msg = f", {edges_protected} protected" if edges_protected else ""
+    print(f"Pair decay (v3): {edges_decayed} decayed, {edges_pruned} pruned{protected_msg}")
     return edges_decayed, edges_pruned
