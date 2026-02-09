@@ -586,6 +586,72 @@ def get_session_dimensions() -> dict:
     return dims
 
 
+# --- Phase 4: Gemma-enhanced WHAT projection ---
+
+def enhance_what(limit: int = 30, verbose: bool = False) -> dict:
+    """
+    Use Gemma to classify memories without topic_context.
+
+    Scans memory files for nodes that appear in L0 edges but have no
+    topic_context in their metadata. Uses gemma_bridge.classify_topics()
+    to assign topics, then writes them back to memory metadata so the
+    next rebuild picks them up naturally.
+
+    Args:
+        limit: Max memories to classify per run (Gemma calls are slow)
+        verbose: Print each classification
+
+    Returns:
+        Dict with {scanned, classified, topics_assigned, skipped}
+    """
+    from memory_common import ALL_DIRS, parse_memory_file, write_memory_file
+
+    try:
+        from gemma_bridge import classify_topics, _ollama_available
+        if not _ollama_available():
+            return {"error": "Ollama not running or model not available"}
+    except ImportError:
+        return {"error": "gemma_bridge.py not available"}
+
+    stats = {"scanned": 0, "classified": 0, "topics_assigned": [], "skipped": 0}
+
+    # Find memories without topic_context
+    candidates = []
+    for d in ALL_DIRS:
+        if not d.exists():
+            continue
+        for fp in d.glob("*.md"):
+            meta, content = parse_memory_file(fp)
+            mid = meta.get('id')
+            if not mid or not content:
+                continue
+            tc = meta.get('topic_context', [])
+            if not tc and len(content) > 50:
+                candidates.append((fp, meta, content))
+
+    if verbose:
+        print(f"Found {len(candidates)} memories without topic_context")
+
+    for fp, meta, content in candidates[:limit]:
+        stats["scanned"] += 1
+        topics = classify_topics(content)
+
+        if topics:
+            stats["classified"] += 1
+            meta['topic_context'] = topics
+            write_memory_file(fp, meta, content)
+            stats["topics_assigned"].append({
+                "id": meta.get('id', fp.stem),
+                "topics": topics,
+            })
+            if verbose:
+                print(f"  {meta.get('id', fp.stem)}: {', '.join(topics)}")
+        else:
+            stats["skipped"] += 1
+
+    return stats
+
+
 # --- CLI ---
 
 def main():
@@ -600,6 +666,7 @@ def main():
         print("  python context_manager.py query <dimension> <node_id> [sub_view]")
         print("  python context_manager.py bridges [dim_a dim_b]")
         print("  python context_manager.py session-dims")
+        print("  python context_manager.py enhance-what [--limit N]")
         return
 
     cmd = sys.argv[1]
@@ -703,6 +770,27 @@ def main():
         print("\nActive session dimensions:")
         for k, v in dims.items():
             print(f"  {k}: {v}")
+
+    elif cmd == 'enhance-what':
+        limit = 30
+        for i, a in enumerate(sys.argv):
+            if a == '--limit' and i + 1 < len(sys.argv):
+                limit = int(sys.argv[i + 1])
+        verbose = '--verbose' in sys.argv or '-v' in sys.argv
+        print(f"Enhancing WHAT projection via Gemma (limit={limit})...")
+        result = enhance_what(limit=limit, verbose=verbose)
+        if 'error' in result:
+            print(f"Error: {result['error']}")
+        else:
+            print(f"\nDone:")
+            print(f"  Scanned:    {result['scanned']}")
+            print(f"  Classified: {result['classified']}")
+            print(f"  Skipped:    {result['skipped']}")
+            if result['topics_assigned']:
+                print(f"\nNewly classified:")
+                for t in result['topics_assigned']:
+                    print(f"  {t['id']}: {', '.join(t['topics'])}")
+                print(f"\nRun 'rebuild' to incorporate into WHAT graph.")
 
     else:
         print(f"Unknown command: {cmd}")

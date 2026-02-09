@@ -1013,6 +1013,244 @@ def generate_5w_hashes() -> dict:
     return hashes
 
 
+# --- Phase 5: Dimensional Fingerprints ---
+
+DIMENSIONAL_FINGERPRINT_FILE = MEMORY_DIR / ".dimensional_fingerprints.json"
+
+
+def build_dimensional_graph(dimension: str, sub_view: str = None) -> dict:
+    """
+    Build a graph from a W-dimension context file for fingerprinting.
+
+    Converts context_manager.py's graph format to the format expected by
+    compute_hub_centrality(), compute_strength_distribution(), etc.
+
+    Returns graph dict compatible with existing fingerprint functions.
+    """
+    try:
+        from context_manager import load_graph
+    except ImportError:
+        return {'nodes': {}, 'edges': {}, 'adjacency': {}}
+
+    cg = load_graph(dimension, sub_view)
+    if not cg or not cg.get('edges'):
+        return {'nodes': {}, 'edges': {}, 'adjacency': {}}
+
+    # Load node metadata
+    nodes = {}
+    for directory in [CORE_DIR, ACTIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            metadata, _ = parse_memory_file(filepath)
+            mem_id = metadata.get('id')
+            if mem_id:
+                nodes[mem_id] = {
+                    'tags': metadata.get('tags', []),
+                    'type': metadata.get('type', 'active'),
+                    'recall_count': metadata.get('recall_count', 0),
+                    'emotional_weight': metadata.get('emotional_weight', 0.5),
+                }
+
+    edges = {}
+    adjacency = defaultdict(dict)
+
+    for edge_key, edge_data in cg['edges'].items():
+        parts = edge_key.split('|')
+        if len(parts) != 2:
+            continue
+        id1, id2 = parts
+        belief = edge_data.get('belief', 0)
+        if belief <= 0:
+            continue
+
+        pair = tuple(sorted([id1, id2]))
+        edges[pair] = belief
+        adjacency[id1][id2] = belief
+        adjacency[id2][id1] = belief
+
+    return {
+        'nodes': nodes,
+        'edges': edges,
+        'adjacency': dict(adjacency),
+    }
+
+
+def generate_dimensional_fingerprint(dimension: str, sub_view: str = None) -> dict:
+    """
+    Generate a fingerprint for a single W-dimension.
+
+    Returns compact fingerprint with hubs, distribution shape, and hash.
+    """
+    graph = build_dimensional_graph(dimension, sub_view)
+
+    if not graph['edges']:
+        return {
+            'dimension': dimension,
+            'sub_view': sub_view,
+            'edge_count': 0,
+            'node_count': 0,
+            'hash': None,
+        }
+
+    hubs = compute_hub_centrality(graph, top_n=10)
+    distribution = compute_strength_distribution(graph)
+
+    # Compute dimension-specific hash
+    hub_sig = '|'.join(h['id'] for h in hubs[:10])
+    dist_sig = (
+        f"mean={distribution.get('mean', 0)},"
+        f"gini={distribution.get('gini', 0)},"
+        f"skew={distribution.get('skewness', 0)}"
+    )
+    combined = f"{dimension}:{sub_view or 'all'}\n{hub_sig}\n{dist_sig}"
+    dim_hash = hashlib.sha256(combined.encode('utf-8')).hexdigest()[:16]
+
+    return {
+        'dimension': dimension,
+        'sub_view': sub_view,
+        'edge_count': len(graph['edges']),
+        'node_count': len(graph['adjacency']),
+        'avg_degree': round(
+            sum(len(n) for n in graph['adjacency'].values()) /
+            max(len(graph['adjacency']), 1), 2
+        ),
+        'hubs': [{'id': h['id'], 'degree': h['degree']} for h in hubs[:5]],
+        'distribution': {
+            'gini': distribution.get('gini', 0),
+            'skewness': distribution.get('skewness', 0),
+            'mean': distribution.get('mean', 0),
+        },
+        'hash': dim_hash,
+    }
+
+
+def generate_all_dimensional_fingerprints() -> dict:
+    """
+    Generate fingerprints for all 5W dimensions.
+
+    Returns dict keyed by dimension name with per-dimension fingerprint data.
+    Also computes per-dimension drift if previous fingerprints exist.
+    """
+    dimensions = {
+        'who': (None,),
+        'what': (None,),
+        'why': (None,),
+        'where': (None,),
+    }
+    # WHEN uses sub-views
+    when_views = ['hot', 'warm', 'cool']
+
+    results = {}
+    for dim, subs in dimensions.items():
+        for sub in subs:
+            fp = generate_dimensional_fingerprint(dim, sub)
+            results[dim] = fp
+
+    # WHEN as aggregate of hot/warm/cool
+    for wv in when_views:
+        fp = generate_dimensional_fingerprint('when', wv)
+        results[f'when_{wv}'] = fp
+
+    # Compute per-dimension drift
+    previous = _load_dimensional_fingerprints()
+    drift_results = {}
+    if previous:
+        for dim_key, current_fp in results.items():
+            prev_fp = previous.get(dim_key, {})
+            if prev_fp and current_fp.get('hash') and prev_fp.get('hash'):
+                drift_results[dim_key] = _compute_dim_drift(prev_fp, current_fp)
+
+    # Composite 5W hash
+    all_hashes = [
+        fp.get('hash', '') for fp in results.values() if fp.get('hash')
+    ]
+    composite_hash = hashlib.sha256(
+        '|'.join(sorted(all_hashes)).encode()
+    ).hexdigest()[:16]
+
+    output = {
+        'version': '1.0',
+        'type': 'dimensional_fingerprint',
+        'timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+        'dimensions': results,
+        'drift': drift_results if drift_results else None,
+        'composite_hash': composite_hash,
+    }
+
+    # Save as latest
+    _save_dimensional_fingerprints(output)
+
+    return output
+
+
+def _compute_dim_drift(prev: dict, curr: dict) -> dict:
+    """Compute drift between two dimensional fingerprints."""
+    # Hub overlap
+    prev_hubs = {h['id'] for h in prev.get('hubs', [])}
+    curr_hubs = {h['id'] for h in curr.get('hubs', [])}
+    if prev_hubs or curr_hubs:
+        hub_overlap = len(prev_hubs & curr_hubs) / len(prev_hubs | curr_hubs)
+    else:
+        hub_overlap = 1.0
+
+    # Distribution shape drift
+    prev_dist = prev.get('distribution', {})
+    curr_dist = curr.get('distribution', {})
+    diffs = []
+    for key in ['gini', 'skewness', 'mean']:
+        pv = prev_dist.get(key, 0)
+        cv = curr_dist.get(key, 0)
+        if pv != 0:
+            diffs.append(min(abs(cv - pv) / abs(pv), 1.0))
+        elif cv != 0:
+            diffs.append(1.0)
+        else:
+            diffs.append(0.0)
+    dist_drift = sum(diffs) / len(diffs) if diffs else 0.0
+
+    # Scale change
+    prev_edges = prev.get('edge_count', 0)
+    curr_edges = curr.get('edge_count', 0)
+    if prev_edges > 0:
+        scale_change = abs(curr_edges - prev_edges) / prev_edges
+    else:
+        scale_change = 0.0
+
+    drift_score = round(
+        0.5 * (1.0 - hub_overlap) +
+        0.3 * dist_drift +
+        0.2 * min(scale_change, 1.0),
+        4
+    )
+
+    return {
+        'drift_score': drift_score,
+        'hub_overlap': round(hub_overlap, 4),
+        'distribution_drift': round(dist_drift, 4),
+        'scale_change': round(scale_change, 4),
+        'interpretation': _interpret_drift(drift_score),
+    }
+
+
+def _load_dimensional_fingerprints() -> dict:
+    """Load previous dimensional fingerprints."""
+    if not DIMENSIONAL_FINGERPRINT_FILE.exists():
+        return {}
+    try:
+        data = json.loads(DIMENSIONAL_FINGERPRINT_FILE.read_text(encoding='utf-8'))
+        return data.get('dimensions', {})
+    except Exception:
+        return {}
+
+
+def _save_dimensional_fingerprints(data: dict):
+    """Save dimensional fingerprints."""
+    DIMENSIONAL_FINGERPRINT_FILE.write_text(
+        json.dumps(data, indent=2), encoding='utf-8'
+    )
+
+
 SOCIAL_PROOF_FILE = MEMORY_DIR / ".social_proofs.json"
 
 
@@ -1088,20 +1326,38 @@ def generate_full_attestation() -> dict:
     Includes:
     - Core cognitive fingerprint
     - 5W dimensional hashes
+    - Dimensional fingerprints (Phase 5)
     - Social proof summary
     """
     base_attestation = generate_attestation()
     dimensional_hashes = generate_5w_hashes()
     social_proofs = load_social_proofs()
 
+    # Phase 5: per-dimension fingerprints
+    dim_fingerprints = generate_all_dimensional_fingerprints()
+
     full = {
         **base_attestation,
         'dimensional_hashes': dimensional_hashes,
+        'dimensional_fingerprints': {
+            'composite_hash': dim_fingerprints.get('composite_hash'),
+            'dimensions': {
+                k: {
+                    'hash': v.get('hash'),
+                    'edges': v.get('edge_count', 0),
+                    'nodes': v.get('node_count', 0),
+                    'gini': v.get('distribution', {}).get('gini', 0),
+                }
+                for k, v in dim_fingerprints.get('dimensions', {}).items()
+                if v.get('hash')
+            },
+            'drift': dim_fingerprints.get('drift'),
+        },
         'social_proof_summary': {
             'relationships_attested': len(social_proofs),
             'agents': list(set(p.get('attested_agent', '') for p in social_proofs))
         },
-        'attestation_version': '2.0-5W'
+        'attestation_version': '3.0-dimensional'
     }
 
     # Recompute attestation hash with all data
@@ -1670,6 +1926,47 @@ if __name__ == '__main__':
         print(f"Attest Hash:  {attestation['attestation_hash'][:32]}...")
         print()
         print(f"Saved to: {SOCIAL_PROOF_FILE}")
+
+    elif command == 'dimensional':
+        # Phase 5: Per-dimension fingerprints
+        print(f"DIMENSIONAL FINGERPRINTS — 5W Identity Decomposition")
+        print(f"{'=' * 60}")
+        print()
+
+        dfp = generate_all_dimensional_fingerprints()
+        dims = dfp.get('dimensions', {})
+
+        for dim_key in ['who', 'what', 'why', 'where', 'when_hot', 'when_warm', 'when_cool']:
+            fp = dims.get(dim_key, {})
+            if not fp or not fp.get('hash'):
+                continue
+            label = dim_key.upper().replace('_', '/')
+            dist = fp.get('distribution', {})
+            print(f"  {label:12}  edges={fp['edge_count']:5}  nodes={fp['node_count']:4}  "
+                  f"gini={dist.get('gini', 0):.3f}  skew={dist.get('skewness', 0):.3f}  "
+                  f"hash={fp['hash']}")
+            hubs = fp.get('hubs', [])
+            if hubs:
+                hub_str = ', '.join(f"{h['id']}({h['degree']})" for h in hubs[:3])
+                print(f"{'':14}hubs: {hub_str}")
+
+        print()
+        print(f"  Composite hash: {dfp.get('composite_hash', 'N/A')}")
+
+        drift = dfp.get('drift')
+        if drift:
+            print()
+            print(f"DIMENSIONAL DRIFT (vs previous):")
+            for dim_key, dd in drift.items():
+                label = dim_key.upper().replace('_', '/')
+                print(f"  {label:12}  drift={dd['drift_score']:.4f}  "
+                      f"hubs={dd['hub_overlap']:.3f}  "
+                      f"dist={dd['distribution_drift']:.3f}  "
+                      f"({dd['interpretation']})")
+        else:
+            print("\n  No previous dimensional fingerprint to compare (first run).")
+
+        print(f"\nSaved to: {DIMENSIONAL_FINGERPRINT_FILE}")
 
     elif command == 'social-proofs':
         # List all social proofs

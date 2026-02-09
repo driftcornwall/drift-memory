@@ -210,6 +210,96 @@ def check_text(text: str) -> list[dict]:
     return _query_gemma(text, list(VOCABULARY_MAP.keys()))
 
 
+# --- Phase 4: Topic classification for WHAT projection enhancement ---
+
+_CLASSIFY_PROMPT = """You are classifying text for an AI agent's memory system.
+
+Given a memory text, assign it to ONE OR MORE of these topics:
+{topics}
+
+Rules:
+- Only assign topics where the content clearly fits
+- Return topic names exactly as listed
+- If nothing fits, return empty array
+
+Text to classify:
+{content}
+
+Return JSON array of matching topic names: ["topic1", "topic2"]
+If no topics match, return: []"""
+
+
+def classify_topics(content: str, topic_definitions: dict = None) -> list[str]:
+    """
+    Use Gemma to classify content into topics when keyword matching fails.
+
+    Phase 4 of Multi-Graph Architecture: enhances WHAT projection by
+    classifying memories that don't match keyword patterns.
+
+    Args:
+        content: Memory content text
+        topic_definitions: Dict of {topic_name: {description: str}}
+                          Defaults to TOPIC_DEFINITIONS from topic_context.py
+
+    Returns:
+        List of matching topic names, empty if Gemma unavailable or no match
+    """
+    if not _ollama_available():
+        return []
+
+    if topic_definitions is None:
+        try:
+            from topic_context import TOPIC_DEFINITIONS
+            topic_definitions = TOPIC_DEFINITIONS
+        except ImportError:
+            return []
+
+    topics_str = "\n".join(
+        f"- {name}: {conf.get('description', name)}"
+        for name, conf in topic_definitions.items()
+    )
+
+    prompt = _CLASSIFY_PROMPT.format(
+        topics=topics_str,
+        content=content[:2000]
+    )
+
+    payload = json.dumps({
+        "model": MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0.1, "num_predict": 200}
+    }).encode('utf-8')
+
+    import urllib.request
+    req = urllib.request.Request(
+        f"{OLLAMA_URL}/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"}
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read())
+            text = result.get('response', '').strip()
+
+            if '```' in text:
+                start = text.index('```') + 3
+                if text[start:start + 4] == 'json':
+                    start += 4
+                end = text.index('```', start)
+                text = text[start:end].strip()
+
+            topics = json.loads(text)
+            if isinstance(topics, list):
+                valid = set(topic_definitions.keys())
+                return [t for t in topics if t in valid]
+    except Exception:
+        pass
+
+    return []
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
@@ -260,6 +350,16 @@ if __name__ == "__main__":
                 print(f"  {t['term']} -> {t['synonyms']}")
         else:
             print("No novel terms found.")
+
+    elif cmd == "classify":
+        text = ' '.join(sys.argv[2:])
+        if Path(text).exists():
+            text = Path(text).read_text(encoding='utf-8')
+        topics = classify_topics(text)
+        if topics:
+            print(f"Topics: {', '.join(topics)}")
+        else:
+            print("No topics matched (or Ollama unavailable).")
 
     else:
         print(f"Unknown command: {cmd}")
