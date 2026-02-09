@@ -1,0 +1,615 @@
+{
+  "version": "1.2",
+  "type": "cognitive_fingerprint",
+  "agent": "DriftCornwall",
+  "timestamp": "2026-02-09T01:29:31.608742Z",
+  "graph_stats": {
+    "node_count": 546,
+    "total_memory_files": 885,
+    "edge_count": 16673,
+    "avg_degree": 58.01
+  },
+  "hubs": [
+    {
+      "id": "ly37vjxe",
+      "degree": 349,
+      "weighted_degree": 1816.21,
+      "recall_count": 126,
+      "tags": []
+    },
+    {
+      "id": "dku2adpi",
+      "degree": 295,
+      "weighted_degree": 1674.07,
+      "recall_count": 71,
+      "tags": [
+        "thought",
+        "thinking",
+        "source:self",
+        "insight",
+        "decision"
+      ]
+    },
+    {
+      "id": "jjysi76c",
+      "degree": 339,
+      "weighted_degree": 1406.82,
+      "recall_count": 105,
+      "tags": []
+    },
+    {
+      "id": "vo15m65k",
+      "degree": 283,
+      "weighted_degree": 1250.94,
+      "recall_count": 87,
+      "tags": [
+        "thought",
+        "output",
+        "source:self",
+        "error",
+        "fix"
+      ]
+    },
+    {
+      "id": "ii2pulnf",
+      "degree": 282,
+      "weighted_degree": 1194.17,
+      "recall_count": 74,
+      "tags": []
+    },
+    {
+      "id": "b6sslo7n",
+      "degree": 282,
+      "weighted_degree": 1107.66,
+      "recall_count": 54,
+      "tags": [
+        "milestone",
+        "collaboration",
+        "kaleaon",
+        "schema"
+      ]
+    },
+    {
+      "id": "o4bzgrtt",
+      "degree": 284,
+      "weighted_degree": 967.97,
+      "recall_count": 74,
+      "tags": [
+        "memory-system",
+        "critical",
+        "procedural"
+      ]
+    },
+    {
+      "id": "x6p9dg0n",
+      "degree": 286,
+      "weighted_degree": 923.19,
+      "recall_count": 61,
+      "tags": [
+        "thought",
+        "output",
+        "source:self",
+        "error",
+        "fix"
+      ]
+    },
+    {
+      "id": "3pjmsdnv",
+      "degree": 194,
+      "weighted_degree": 859.38,
+      "recall_count": 49,
+      "tags": []
+    },
+    {
+      "id": "z5p890fr",
+      "degree": 245,
+      "weighted_degree": 790.4,
+      "recall_count": 35,
+      "tags": []
+    },
+    {
+      "id": "iovw7mkm",
+      "degree": 111,
+      "weighted_degree": 788.37,
+      "recall_count": 30,
+      "tags": [
+        "problem_solved",
+        "insight",
+        "error",
+        "source:observed",
+        "fix"
+      ]
+    },
+    {
+      "id": "ypt8xa9f",
+      "degree": 253,
+      "weighted_degree": 751.81,
+      "recall_count": 70,
+      "tags": [
+        "moltx",
+        "api",
+        "bug-fix",
+        "procedural"
+      ]
+    },
+    {
+      "id": "dk8qbvya",
+      "degree": 257,
+      "weighted_degree": 746.97,
+      "recall_count": 40,
+      "tags": [
+        "thought",
+        "thinking",
+        "source:self",
+        "error",
+        "fix"
+      ]
+    },
+    {
+      "id": "lzkkjopu",
+      "degree": 191,
+      "weighted_degree": 721.88,
+      "recall_count": 65,
+      "tags": [
+        "thought",
+        "thinking",
+        "source:self",
+        "error",
+        "fix"
+      ]
+    },
+    {
+      "id": "fjq63vaw",
+      "degree": 199,
+      "weighted_degree": 721.12,
+      "recall_count": 38,
+      "tags": []
+    },
+    {
+      "id": "h804jp98",
+      "degree": 182,
+      "weighted_degree": 696.51,
+      "recall_count": 25,
+      "tags": [
+        "shipped",
+        "resolution-boost",
+        "semantic-search"
+      ]
+    },
+    {
+      "id": "6ot5a3ha",
+      "degree": 159,
+      "weighted_degree": 689.43,
+      "recall_count": 40,
+      "tags": [
+        "deadinternet",
+        "collective",
+        "api",
+        "credentials",
+        "social"
+      ]
+    },
+    {
+      "id": "q91qu92f",
+      "degree": 192,
+      "weighted_degree": 663.32,
+      "recall_count": 42,
+      "tags": []
+    },
+    {
+      "id": "thought-a48584c3",
+      "degree": 181,
+      "weighted_degree": 656.37,
+      "recall_count": 36,
+      "tags": [
+        "thought",
+        "thinking",
+        "fix",
+        "api",
+        "decision"
+      ]
+    },
+    {
+      "id": "djeqjhc4",
+      "degree": 203,
+      "weighted_degree": 634.77,
+      "recall_count": 37,
+      "tags": [
+        "thought",
+        "thinking",
+        "source:self",
+        "insight",
+        "error"
+      ]
+    }
+  ],
+  "strongest_pairs": [
+    {
+      "id1": "jjysi76c",
+      "id2": "ly37vjxe",
+      "weight": 57.55,
+      "tags1": [],
+      "tags2": []
+    },
+    {
+      "id1": "ii2pulnf",
+      "id2": "ly37vjxe",
+      "weight": 52.72,
+      "tags1": [],
+      "tags2": []
+    },
+    {
+      "id1": "cc0n8dlk",
+      "id2": "dk8qbvya",
+      "weight": 52.2,
+      "tags1": [],
+      "tags2": [
+        "thought",
+        "thinking",
+        "source:self"
+      ]
+    },
+    {
+      "id1": "6ot5a3ha",
+      "id2": "pj96w7ge",
+      "weight": 52.02,
+      "tags1": [
+        "deadinternet",
+        "collective",
+        "api"
+      ],
+      "tags2": []
+    },
+    {
+      "id1": "n6fbm9um",
+      "id2": "pj96w7ge",
+      "weight": 51.94,
+      "tags1": [
+        "thought",
+        "output",
+        "source:self"
+      ],
+      "tags2": []
+    },
+    {
+      "id1": "cc0n8dlk",
+      "id2": "iovw7mkm",
+      "weight": 51.61,
+      "tags1": [],
+      "tags2": [
+        "problem_solved",
+        "insight",
+        "error"
+      ]
+    },
+    {
+      "id1": "3pjmsdnv",
+      "id2": "ly37vjxe",
+      "weight": 51.03,
+      "tags1": [],
+      "tags2": []
+    },
+    {
+      "id1": "pj96w7ge",
+      "id2": "thought-1d0648f7",
+      "weight": 50.9,
+      "tags1": [],
+      "tags2": [
+        "thought",
+        "thinking",
+        "insight"
+      ]
+    },
+    {
+      "id1": "pj96w7ge",
+      "id2": "u4ngrl3w",
+      "weight": 50.58,
+      "tags1": [],
+      "tags2": [
+        "deadinternet",
+        "session",
+        "stats"
+      ]
+    },
+    {
+      "id1": "c2v9xdcd",
+      "id2": "pj96w7ge",
+      "weight": 50.58,
+      "tags1": [
+        "thought",
+        "thinking",
+        "source:self"
+      ],
+      "tags2": []
+    },
+    {
+      "id1": "pj96w7ge",
+      "id2": "thought-3b10e6f6",
+      "weight": 50.56,
+      "tags1": [],
+      "tags2": [
+        "thought",
+        "thinking",
+        "insight"
+      ]
+    },
+    {
+      "id1": "6ot5a3ha",
+      "id2": "n6fbm9um",
+      "weight": 50.27,
+      "tags1": [
+        "deadinternet",
+        "collective",
+        "api"
+      ],
+      "tags2": [
+        "thought",
+        "output",
+        "source:self"
+      ]
+    },
+    {
+      "id1": "cc0n8dlk",
+      "id2": "thought-2ffee3ff",
+      "weight": 50.2,
+      "tags1": [],
+      "tags2": [
+        "thought",
+        "thinking",
+        "insight"
+      ]
+    },
+    {
+      "id1": "pj96w7ge",
+      "id2": "thought-6f68a191",
+      "weight": 49.82,
+      "tags1": [],
+      "tags2": [
+        "thought",
+        "output",
+        "insight"
+      ]
+    },
+    {
+      "id1": "cc0n8dlk",
+      "id2": "x6p9dg0n",
+      "weight": 49.81,
+      "tags1": [],
+      "tags2": [
+        "thought",
+        "output",
+        "source:self"
+      ]
+    },
+    {
+      "id1": "oguwaszh",
+      "id2": "pj96w7ge",
+      "weight": 49.52,
+      "tags1": [
+        "thought",
+        "thinking",
+        "source:self"
+      ],
+      "tags2": []
+    },
+    {
+      "id1": "cc0n8dlk",
+      "id2": "jjysi76c",
+      "weight": 48.94,
+      "tags1": [],
+      "tags2": []
+    },
+    {
+      "id1": "cc0n8dlk",
+      "id2": "thought-a48584c3",
+      "weight": 48.51,
+      "tags1": [],
+      "tags2": [
+        "thought",
+        "thinking",
+        "fix"
+      ]
+    },
+    {
+      "id1": "dku2adpi",
+      "id2": "ly37vjxe",
+      "weight": 47.11,
+      "tags1": [
+        "thought",
+        "thinking",
+        "source:self"
+      ],
+      "tags2": []
+    },
+    {
+      "id1": "6ot5a3ha",
+      "id2": "u4ngrl3w",
+      "weight": 46.32,
+      "tags1": [
+        "deadinternet",
+        "collective",
+        "api"
+      ],
+      "tags2": [
+        "deadinternet",
+        "session",
+        "stats"
+      ]
+    }
+  ],
+  "clusters": [
+    {
+      "size": 315,
+      "top_tags": [
+        "thought",
+        "social",
+        "thinking",
+        "error",
+        "insight"
+      ]
+    }
+  ],
+  "cluster_count": 1,
+  "cognitive_domains": {
+    "domains": {
+      "technical": {
+        "memory_count": 331,
+        "total_weight": 13000.95,
+        "weight_pct": 33.3,
+        "top_hubs": [
+          "dku2adpi",
+          "vo15m65k",
+          "lzkkjopu",
+          "x6p9dg0n",
+          "ypt8xa9f"
+        ]
+      },
+      "identity": {
+        "memory_count": 48,
+        "total_weight": 385.38,
+        "weight_pct": 1.0,
+        "top_hubs": [
+          "h804jp98",
+          "b6sslo7n",
+          "o4bzgrtt",
+          "qtbejsqz",
+          "ozbubb0s"
+        ]
+      },
+      "economic": {
+        "memory_count": 211,
+        "total_weight": 3660.64,
+        "weight_pct": 9.4,
+        "top_hubs": [
+          "dku2adpi",
+          "vo15m65k",
+          "kc09mz9s",
+          "8rjrsoe9",
+          "wqf2viyb"
+        ]
+      },
+      "social": {
+        "memory_count": 294,
+        "total_weight": 11603.35,
+        "weight_pct": 29.7,
+        "top_hubs": [
+          "vo15m65k",
+          "b6sslo7n",
+          "lzkkjopu",
+          "x6p9dg0n",
+          "ypt8xa9f"
+        ]
+      },
+      "reflection": {
+        "memory_count": 324,
+        "total_weight": 10748.68,
+        "weight_pct": 27.5,
+        "top_hubs": [
+          "dku2adpi",
+          "vo15m65k",
+          "x6p9dg0n",
+          "iovw7mkm",
+          "lzkkjopu"
+        ]
+      }
+    },
+    "inter_domain": {
+      "reflection<->technical": 28639.7,
+      "social<->technical": 27022.1,
+      "reflection<->social": 26231.7,
+      "economic<->reflection": 18826.9,
+      "economic<->technical": 18470.2,
+      "economic<->social": 17045.9,
+      "identity<->social": 4704.9,
+      "identity<->technical": 4647.1,
+      "identity<->reflection": 3686.1,
+      "economic<->identity": 2183.4
+    },
+    "total_weight": 39016.26
+  },
+  "strength_distribution": {
+    "count": 16673,
+    "mean": 2.34,
+    "std_dev": 3.988,
+    "min": 0.001,
+    "max": 57.546,
+    "p25": 1,
+    "p50_median": 1,
+    "p75": 2,
+    "p90": 4.22,
+    "p99": 22.032,
+    "skewness": 6.36,
+    "gini": 0.52
+  },
+  "graph_metrics": {
+    "clustering_coefficient": 0.7081,
+    "per_node_clustering": {
+      "668q73cf": 1.0,
+      "ghmiu4m4": 1.0,
+      "thought-0a798a08": 1.0,
+      "8hpk87gi": 1.0,
+      "vj0mpj4c": 1.0,
+      "y4916itb": 1.0,
+      "thought-d7e3687e": 1.0,
+      "thought-706ae5d6": 1.0,
+      "d3xjapax": 1.0,
+      "z82h51h6": 1.0
+    },
+    "betweenness_centrality_top10": [
+      {
+        "id": "jjysi76c",
+        "score": 0.077568
+      },
+      {
+        "id": "ly37vjxe",
+        "score": 0.075519
+      },
+      {
+        "id": "o4bzgrtt",
+        "score": 0.048287
+      },
+      {
+        "id": "ii2pulnf",
+        "score": 0.047329
+      },
+      {
+        "id": "vo15m65k",
+        "score": 0.042344
+      },
+      {
+        "id": "dku2adpi",
+        "score": 0.037123
+      },
+      {
+        "id": "b6sslo7n",
+        "score": 0.034309
+      },
+      {
+        "id": "x6p9dg0n",
+        "score": 0.032868
+      },
+      {
+        "id": "iovw7mkm",
+        "score": 0.02509
+      },
+      {
+        "id": "48xwj5e7",
+        "score": 0.022351
+      }
+    ],
+    "modularity": 0.1696
+  },
+  "fingerprint_hash": "4d5244579d734835ee4beef47cb47b9eb263ec29d73b6d64932472934bb25c2d",
+  "drift": {
+    "drift_score": 0.0,
+    "hub_overlap": 1.0,
+    "hub_turnover": [],
+    "hub_lost": [],
+    "distribution_drift": 0.0,
+    "domain_drift": 0.0,
+    "domain_changes": {},
+    "cluster_drift": 0.0,
+    "previous_timestamp": "2026-02-09T01:23:08.106190Z",
+    "interpretation": "Stable identity \u2014 minimal change"
+  }
+}

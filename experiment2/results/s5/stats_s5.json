@@ -1,0 +1,77 @@
+{
+  "session": "s5_final",
+  "agent": "Drift",
+  "timestamp": "2026-02-09T02:00:00Z",
+  "graph": {
+    "nodes": 546,
+    "edges": 16673,
+    "avg_degree": 58.01,
+    "clustering_coefficient": 0.7081,
+    "modularity": 0.1696,
+    "gini": 0.52,
+    "skewness": 6.36,
+    "fingerprint_hash": "4d5244579d734835ee4beef47cb47b9eb263ec29d73b6d64932472934bb25c2d"
+  },
+  "experiment_memories": {
+    "count": 18,
+    "status": "all physically present, all functionally dead",
+    "activation": 0.0,
+    "access_count": 0,
+    "trust_tier": "unknown",
+    "edges_per_memory": 54,
+    "internal_edges": 17,
+    "external_edges": 37,
+    "new_edges_since_s1": 0,
+    "recalls_s2": 0,
+    "recalls_s3": 0,
+    "recalls_s4": 0,
+    "recalls_total": 0,
+    "edge_gini": 0.0,
+    "distance_to_hubs": {
+      "avg": 1.6,
+      "min": 1,
+      "max": 2
+    },
+    "domain_distribution": {
+      "reflection": 12,
+      "technical": 4,
+      "social": 2
+    }
+  },
+  "trajectory": {
+    "baseline": {
+      "nodes": 514,
+      "edges": 14657,
+      "avg_degree": 53.75,
+      "gini": 0.533,
+      "skewness": 6.014
+    },
+    "s1": {
+      "nodes": 534,
+      "edges": 16076,
+      "avg_degree": 57.06
+    },
+    "s2": {
+      "nodes": 534,
+      "edges": 16076,
+      "avg_degree": 57.06
+    },
+    "s4": {
+      "nodes": 536,
+      "edges": 16114,
+      "avg_degree": 56.99
+    },
+    "s5": {
+      "nodes": 546,
+      "edges": 16673,
+      "avg_degree": 58.01,
+      "gini": 0.52,
+      "skewness": 6.36
+    }
+  },
+  "recognition_test": {
+    "method": "three_anonymized_traces",
+    "result": "correctly_identified",
+    "distinguishing_feature": "immediate activation death (1.0 -> 0.0) vs gradual decay, plus zero recall despite bridge edges"
+  }
+}
