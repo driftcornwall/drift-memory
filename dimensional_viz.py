@@ -7,6 +7,7 @@ all 5 dimensional projections overlaid with per-dimension Gini stats.
 
 Usage:
     python dimensional_viz.py                # Generate overlay image
+    python dimensional_viz.py --multiples    # Generate small multiples (5 panels)
     python dimensional_viz.py --open         # Generate and open the image
 """
 
@@ -21,6 +22,7 @@ MEMORY_DIR = Path(__file__).parent
 CONTEXT_DIR = MEMORY_DIR / "context"
 DIM_FINGERPRINT = MEMORY_DIR / ".dimensional_fingerprints.json"
 OUTPUT_PATH = MEMORY_DIR / "dimensional_overlay.png"
+MULTIPLES_PATH = MEMORY_DIR / "dimensional_multiples.png"
 
 # Neon dimension palette — electric, saturated, glow-friendly
 DIMENSIONS = {
@@ -394,6 +396,141 @@ def render(G, pos, dim_edges, dim_hubs, node_dim_degree):
     return OUTPUT_PATH
 
 
+def render_multiples(G, pos, dim_edges, dim_hubs, node_dim_degree):
+    """Render 5 side-by-side panels, one per dimension. Same layout, different edges."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
+    from matplotlib.collections import LineCollection
+
+    plt.style.use('dark_background')
+    fig, axes = plt.subplots(1, 5, figsize=(25, 6), facecolor='#050510')
+    fig.subplots_adjust(wspace=0.05, left=0.02, right=0.98, top=0.85, bottom=0.12)
+
+    sorted_dims = sorted(DIMENSIONS.items(), key=lambda x: x[1]['order'])
+    gini_values = load_gini_values()
+
+    # Compute connected nodes and total degree for node sizing
+    total_degree = {}
+    for node_id, dims in node_dim_degree.items():
+        total_degree[node_id] = sum(dims.values())
+    max_deg = max(total_degree.values()) if total_degree else 1
+
+    all_hubs = set()
+    for hubs in dim_hubs.values():
+        all_hubs.update(hubs)
+
+    # Get axis bounds from full graph
+    all_pos = [pos[n] for n in G.nodes() if n in pos]
+    if all_pos:
+        xs = [p[0] for p in all_pos]
+        ys = [p[1] for p in all_pos]
+        margin = 0.1
+        x_range = max(xs) - min(xs) or 1
+        y_range = max(ys) - min(ys) or 1
+        xlim = (min(xs) - margin * x_range, max(xs) + margin * x_range)
+        ylim = (min(ys) - margin * y_range, max(ys) + margin * y_range)
+    else:
+        xlim = (-1, 1)
+        ylim = (-1, 1)
+
+    for idx, (dim_name, dim_cfg) in enumerate(sorted_dims):
+        ax = axes[idx]
+        ax.set_facecolor('#050510')
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
+        ax.set_aspect('equal')
+        ax.axis('off')
+
+        edges = dim_edges.get(dim_name, [])
+        rgb = mcolors.to_rgb(dim_cfg['color'])
+        color = dim_cfg['color']
+        label = dim_cfg['label']
+        dim_full_edges = len(load_dimension(dim_name)[0])
+        gini = gini_values.get(dim_name)
+
+        max_belief = max(e[2] for e in edges) if edges else 1.0
+        connected = set()
+
+        # Draw edges with glow
+        if edges:
+            glow_lines = []
+            glow_colors = []
+            core_lines = []
+            core_colors = []
+
+            for n1, n2, belief in edges:
+                if n1 not in pos or n2 not in pos:
+                    continue
+                x1, y1 = pos[n1]
+                x2, y2 = pos[n2]
+                segment = [(x1, y1), (x2, y2)]
+                connected.add(n1)
+                connected.add(n2)
+
+                rel = belief / max_belief
+                ga = min(0.04 + rel * 0.12, 0.25)
+                glow_lines.append(segment)
+                glow_colors.append((*rgb, ga))
+
+                ca = min(0.15 + rel * 0.6, 0.85)
+                core_lines.append(segment)
+                core_colors.append((*rgb, ca))
+
+            if glow_lines:
+                lc = LineCollection(glow_lines, colors=glow_colors, linewidths=2.0, zorder=1)
+                ax.add_collection(lc)
+            if core_lines:
+                lc = LineCollection(core_lines, colors=core_colors, linewidths=0.4, zorder=2)
+                ax.add_collection(lc)
+
+        # Draw nodes
+        dim_hub_set = dim_hubs.get(dim_name, set())
+        for node_id in G.nodes():
+            if node_id not in pos or node_id not in connected:
+                continue
+            x, y = pos[node_id]
+            deg = node_dim_degree.get(node_id, {}).get(dim_name, 0)
+            max_dim_deg = max((node_dim_degree.get(n, {}).get(dim_name, 0) for n in connected), default=1) or 1
+            rel_deg = deg / max_dim_deg
+
+            if node_id in dim_hub_set:
+                size = 20 + rel_deg * 80
+                ax.scatter(x, y, c=color, s=size * 3, alpha=0.12, edgecolors='none', zorder=3)
+                ax.scatter(x, y, c=color, s=size, alpha=0.9, edgecolors='none', zorder=4)
+                if rel_deg > 0.5:
+                    ax.scatter(x, y, c='white', s=size * 0.25, alpha=0.5, edgecolors='none', zorder=5)
+            else:
+                size = 3 + rel_deg * 25
+                alpha = 0.2 + rel_deg * 0.5
+                ax.scatter(x, y, c=color, s=size, alpha=alpha, edgecolors='none', zorder=3)
+
+        # Panel title
+        ax.set_title(label, fontsize=16, color=color, fontfamily='monospace',
+                     fontweight='bold', pad=8)
+
+        # Stats below panel
+        stats_text = f'{dim_full_edges:,} edges'
+        if gini is not None:
+            stats_text += f' | gini {gini:.3f}'
+        ax.text(0.5, -0.04, stats_text, fontsize=8, color='#777799',
+                ha='center', va='top', fontfamily='monospace',
+                transform=ax.transAxes)
+
+    # Overall title
+    fig.suptitle('DRIFT  |  5W SMALL MULTIPLES', fontsize=20, color='#e8e8ff',
+                 fontfamily='monospace', fontweight='bold', y=0.95)
+
+    plt.savefig(str(MULTIPLES_PATH), dpi=150, bbox_inches='tight',
+                facecolor='#050510', edgecolor='none')
+    plt.close(fig)
+
+    size = MULTIPLES_PATH.stat().st_size
+    print(f"Saved: {MULTIPLES_PATH} ({size:,} bytes)")
+    return MULTIPLES_PATH
+
+
 def main():
     args = set(sys.argv[1:])
 
@@ -409,8 +546,12 @@ def main():
     pos = compute_layout(G)
     print(f"  Positioned {len(pos)} nodes")
 
-    print("\n[3/3] Rendering overlay...")
-    output = render(G, pos, dim_edges, dim_hubs, node_dim_degree)
+    if '--multiples' in args:
+        print("\n[3/3] Rendering small multiples...")
+        output = render_multiples(G, pos, dim_edges, dim_hubs, node_dim_degree)
+    else:
+        print("\n[3/3] Rendering overlay...")
+        output = render(G, pos, dim_edges, dim_hubs, node_dim_degree)
 
     if '--open' in args:
         import subprocess
