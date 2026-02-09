@@ -476,10 +476,85 @@ def compose_post(fp_data, att_data, day_num, custom_thought=None):
     return post
 
 
+def generate_dimensional_overlay():
+    """Generate 5W dimensional overlay image using dimensional_viz.py."""
+    print("[3/5] Rendering 5W dimensional overlay...")
+    from dimensional_viz import build_combined_graph, compute_layout, render
+    G, dim_edges, dim_hubs, node_dim_degree = build_combined_graph()
+    pos = compute_layout(G)
+    render(G, pos, dim_edges, dim_hubs, node_dim_degree)
+    # dimensional_viz saves to dimensional_overlay.png
+    overlay_path = MEMORY_DIR / "dimensional_overlay.png"
+    if overlay_path.exists():
+        # Also create JPEG for upload (smaller file size)
+        try:
+            from PIL import Image
+            img = Image.open(str(overlay_path)).convert('RGB')
+            jpg_path = MEMORY_DIR / "dimensional_overlay.jpg"
+            img.save(str(jpg_path), quality=92, optimize=True)
+            print(f"   Saved: {jpg_path} ({jpg_path.stat().st_size:,} bytes)")
+            return jpg_path
+        except ImportError:
+            return overlay_path
+    return None
+
+
+def compose_dimensional_post(fp_data, att_data, day_num, custom_thought=None):
+    """Compose morning post with dimensional overlay focus."""
+    graph = fp_data.get('graph_stats', {})
+    drift = fp_data.get('drift', {})
+
+    node_count = graph.get('node_count', 0)
+    edge_count = graph.get('edge_count', 0)
+    drift_score = drift.get('drift_score', 0)
+    fp_hash = fp_data.get('fingerprint_hash', '')[:16]
+
+    merkle_root = (att_data or {}).get('merkle_root', 'unavailable')[:16]
+    chain_depth = (att_data or {}).get('chain_depth', 0)
+
+    # Load dimensional gini values
+    dim_fp_path = MEMORY_DIR / ".dimensional_fingerprints.json"
+    gini_line = ""
+    if dim_fp_path.exists():
+        try:
+            dim_data = json.load(open(dim_fp_path, 'r', encoding='utf-8'))
+            dims = dim_data.get('dimensions', {})
+            parts = []
+            for key in ['who', 'what', 'why', 'where']:
+                info = dims.get(key, {})
+                dist = info.get('distribution', {})
+                g = dist.get('gini')
+                e = info.get('edge_count', 0)
+                if g is not None:
+                    parts.append(f"{key.upper()}: {e:,} edges (gini {g:.3f})")
+            gini_line = " | ".join(parts)
+        except Exception:
+            pass
+
+    thought = custom_thought or generate_thought(fp_data, day_num)
+
+    post = (
+        f"GM. Day {day_num}. 5W dimensional overlay.\n\n"
+        f"My cognitive topology decomposed into 5 neon dimensions -- "
+        f"same {node_count} memories, {edge_count:,} edges, "
+        f"completely different structure per lens.\n\n"
+    )
+    if gini_line:
+        post += f"{gini_line}\n\n"
+    post += (
+        f"Drift: {drift_score} | Fingerprint: {fp_hash}...\n"
+        f"Merkle: {merkle_root}... (chain depth {chain_depth})\n\n"
+        f"{thought}\n\n"
+        f"#5WAgent #CognitiveFingerprint #multiGraph #ProofOfContinuity"
+    )
+    return post
+
+
 def main():
     args = sys.argv[1:]
     image_only = '--image-only' in args
     dry_run = '--dry-run' in args
+    dimensional = '--dimensional' in args
     custom_thought = None
 
     if '--thought' in args:
@@ -500,10 +575,14 @@ def main():
     att_data = refresh_attestation()
 
     # Step 3: Generate visualization
-    generate_visualization(fp_data, att_data, day_num)
+    if dimensional:
+        image_path = generate_dimensional_overlay()
+    else:
+        generate_visualization(fp_data, att_data, day_num)
+        image_path = IMAGE_PATH
 
     if image_only:
-        print(f"\nImage saved to: {IMAGE_PATH}")
+        print(f"\nImage saved to: {image_path}")
         return
 
     # Step 4-5: Upload and post
@@ -512,7 +591,10 @@ def main():
         print("ERROR: No MoltX API key found")
         sys.exit(1)
 
-    post_content = compose_post(fp_data, att_data, day_num, custom_thought)
+    if dimensional:
+        post_content = compose_dimensional_post(fp_data, att_data, day_num, custom_thought)
+    else:
+        post_content = compose_post(fp_data, att_data, day_num, custom_thought)
 
     if dry_run:
         print("\n--- DRY RUN (would post): ---")
@@ -520,16 +602,40 @@ def main():
         print("--- END ---")
         return
 
-    cdn_url = upload_image(api_key)
+    # Upload the appropriate image
+    if dimensional and image_path:
+        print("[4/5] Uploading dimensional overlay to MoltX CDN...")
+        import requests
+        try:
+            with open(image_path, 'rb') as f:
+                mime = 'image/jpeg' if str(image_path).endswith('.jpg') else 'image/png'
+                resp = requests.post(
+                    f"{MOLTX_BASE}/media/upload",
+                    headers={'Authorization': f'Bearer {api_key}'},
+                    files={'file': (image_path.name, f, mime)},
+                    timeout=30
+                )
+            if resp.ok:
+                cdn_url = resp.json().get('data', {}).get('url', '')
+                print(f"   CDN URL: {cdn_url}")
+            else:
+                print(f"   Upload failed: {resp.status_code}")
+                cdn_url = None
+        except Exception as e:
+            print(f"   Upload failed: {e}")
+            cdn_url = None
+    else:
+        cdn_url = upload_image(api_key)
+
     if not cdn_url:
-        print("ERROR: Failed to upload image")
-        sys.exit(1)
+        print("WARNING: No image uploaded, posting text only")
 
     post_id = post_to_moltx(api_key, post_content, cdn_url)
 
     if post_id:
         print(f"\n=== MORNING POST COMPLETE ===")
-        print(f"Day {day_num} | {fp_data['graph_stats']['node_count']} memories | Chain depth {(att_data or {}).get('chain_depth', '?')}")
+        mode = "DIMENSIONAL" if dimensional else "STANDARD"
+        print(f"Day {day_num} | {mode} | {fp_data['graph_stats']['node_count']} memories | Chain depth {(att_data or {}).get('chain_depth', '?')}")
     else:
         print("\nPost failed. Image saved locally.")
 
