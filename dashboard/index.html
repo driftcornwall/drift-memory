@@ -685,8 +685,22 @@ let maxEdges = 300;
 let highlightNode = null;
 
 async function init() {
-  const resp = await fetch('data.json');
-  DATA = await resp.json();
+  // Try fetch first (works on hosted server), fall back to inline data (works from file://)
+  try {
+    const resp = await fetch('data.json');
+    if (resp.ok) {
+      DATA = await resp.json();
+    } else {
+      throw new Error('fetch failed');
+    }
+  } catch(e) {
+    if (typeof INLINE_DATA !== 'undefined') {
+      DATA = INLINE_DATA;
+    } else {
+      document.body.innerHTML = '<div style="color:#ff3366;font-family:JetBrains Mono;padding:40px;text-align:center"><h2>Data not loaded</h2><p>Open via HTTP server or use the bundled version.</p><p style="color:#6a6a80;font-size:12px">python -m http.server 8080</p></div>';
+      return;
+    }
+  }
   renderHeader();
   renderSidebar();
   renderGraph();
