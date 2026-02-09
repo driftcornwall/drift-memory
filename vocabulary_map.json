@@ -1,1 +1,5 @@
-{}
+{
+  "co-occurrence edges": "association links, relational mapping, connection pairs",
+  "spreading activation": "activation propagation, signal ripple through network",
+  "activation decay": "memory fade, signal weakening over time"
+}

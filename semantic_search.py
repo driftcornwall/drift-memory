@@ -296,14 +296,16 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     if not data["memories"]:
         return []
 
-    # Bridge the query: expand with operational/academic synonyms so both registers match
+    # Bidirectional vocabulary bridge:
+    # - Reverse bridge: operational query -> append academic terms
+    # - Forward bridge: academic query -> append operational terms
     try:
-        from vocabulary_bridge import bridge_content
-        bridged_query = bridge_content(query)
+        from vocabulary_bridge import bridge_query
+        bridged_query = bridge_query(query)
     except ImportError:
         bridged_query = query
 
-    # Get query embedding (using bridged query for cross-register matching)
+    # Get query embedding (bridged for cross-register matching)
     query_embedding = get_embedding(bridged_query)
     if not query_embedding:
         print("Failed to get query embedding", file=sys.stderr)

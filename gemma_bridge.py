@@ -29,24 +29,28 @@ MODEL = "gemma3:4b"
 
 PROMPT_TEMPLATE = """You are a vocabulary bridge for an AI agent's memory system.
 
-The agent stores memories in academic/theoretical language but queries in operational language.
-Your job: identify foreign-register terms in the text below and provide operational synonyms
-that the agent would actually use in conversation.
+The agent stores memories using academic/theoretical terms but searches using plain operational language.
+Find specialized terms that would block retrieval because a search wouldn't use those words.
 
-Rules:
-- Only identify terms that are genuinely academic/theoretical (Latin/Greek roots, discipline-specific jargon)
-- Skip common English words even if they sound fancy
-- Provide 2-4 operational synonyms per term, comma-separated
-- Operational synonyms should be plain language the agent would use: "memory update" not "mnemonic modification"
-- Return ONLY valid JSON, no explanation
+INCLUDE (these are the kind of terms we want):
+- Single-word discipline-specific jargon: "reconsolidation", "autopoiesis", "semiosis", "eigenvalue"
+- Two-word technical compounds: "synaptic plasticity", "predictive processing", "scale-free network"
+
+EXCLUDE (do NOT return these):
+- Common English words or phrases: "trust", "decay", "merge conflicts", "philosophical reflections"
+- Anything a developer would naturally type in a search query
+- Terms already in the known list below
+- Multi-word phrases that are just normal descriptions (e.g. "trust-based decay", "memory system")
+
+Synonyms should be the PLAIN words someone would actually search for.
 
 Already known terms (skip these): {known_terms}
 
 Text to analyze:
 {content}
 
-Return JSON array of objects: [{{"term": "academic_term", "synonyms": "plain synonym 1, plain synonym 2"}}]
-If no novel terms found, return: []"""
+Return JSON array: [{{"term": "academic_term", "synonyms": "plain synonym 1, plain synonym 2"}}]
+If no novel academic terms found, return: []"""
 
 
 def _ollama_available() -> bool:
@@ -110,6 +114,32 @@ def _query_gemma(content: str, known_terms: list[str]) -> list[dict]:
     return []
 
 
+# Common words that Gemma often incorrectly identifies as academic jargon
+_REJECT_TERMS = {
+    'implementation', 'sync', 'synchronization', 'integration', 'optimization',
+    'configuration', 'deployment', 'debugging', 'refactoring', 'testing',
+    'validation', 'monitoring', 'logging', 'caching', 'authentication',
+    'authorization', 'encryption', 'serialization', 'deserialization',
+    'initialization', 'migration', 'pagination', 'aggregation',
+    'merge conflicts', 'pull request', 'code review', 'bug fix',
+    'behavioral patterns', 'trust-based decay', 'weight penalties',
+    'self-evolution', 'trust tiers', 'schema interop',
+}
+
+
+def _is_quality_term(term: str) -> bool:
+    """Filter out low-quality Gemma discoveries."""
+    if term in _REJECT_TERMS:
+        return False
+    if len(term) < 4:
+        return False
+    # Reject if all words are common English (no Latin/Greek roots)
+    words = term.split()
+    if len(words) > 3:
+        return False
+    return True
+
+
 def scan_dead_memories(limit: int = 20) -> dict:
     """
     Scan memories with low recall for novel bridge terms.
@@ -153,6 +183,10 @@ def scan_dead_memories(limit: int = 20) -> dict:
 
             # Skip if already known
             if term in VOCABULARY_MAP:
+                continue
+
+            # Quality filter: reject common English, too-short, or descriptive phrases
+            if not _is_quality_term(term):
                 continue
 
             stats["terms_found"] += 1

@@ -110,16 +110,43 @@ def _compile_patterns(vocab_map: dict) -> dict:
     }
 
 
+def _build_reverse_map(vocab_map: dict) -> dict:
+    """
+    Build reverse map: operational synonym -> academic term.
+
+    Forward: reconsolidation -> memory update, recall modification, memory rewrite
+    Reverse: memory update -> reconsolidation
+             recall modification -> reconsolidation
+             memory rewrite -> reconsolidation
+
+    Returns dict of {pattern: (compiled_regex, academic_term)}.
+    """
+    reverse = {}
+    for academic_term, synonyms_str in vocab_map.items():
+        for synonym in synonyms_str.split(","):
+            synonym = synonym.strip().lower()
+            if len(synonym) >= 3:  # Skip tiny fragments
+                reverse[synonym] = academic_term
+    # Compile patterns — sort by length descending so longer phrases match first
+    compiled = {}
+    for synonym in sorted(reverse.keys(), key=len, reverse=True):
+        pat = re.compile(r'\b' + re.escape(synonym) + r's?\b', re.IGNORECASE)
+        compiled[synonym] = (pat, reverse[synonym])
+    return compiled
+
+
 # Load on import — re-call load() to pick up sidecar changes
 VOCABULARY_MAP = _load_vocabulary_map()
 _PATTERNS = _compile_patterns(VOCABULARY_MAP)
+_REVERSE_PATTERNS = _build_reverse_map(VOCABULARY_MAP)
 
 
 def reload():
     """Reload vocabulary map from disk (picks up new sidecar entries)."""
-    global VOCABULARY_MAP, _PATTERNS
+    global VOCABULARY_MAP, _PATTERNS, _REVERSE_PATTERNS
     VOCABULARY_MAP = _load_vocabulary_map()
     _PATTERNS = _compile_patterns(VOCABULARY_MAP)
+    _REVERSE_PATTERNS = _build_reverse_map(VOCABULARY_MAP)
 
 
 def add_term(term: str, synonyms: str):
@@ -171,6 +198,35 @@ def bridge_content(content: str) -> str:
 
     bridge_section = "\n\n[vocabulary bridge]\n" + "\n".join(matched_bridges)
     return content + bridge_section
+
+
+def bridge_query(query: str) -> str:
+    """
+    Reverse bridge: expand operational queries with academic terms.
+
+    When a query contains operational terms like "memory update",
+    append the academic term "reconsolidation" so the query embedding
+    is closer to content that naturally uses academic vocabulary.
+
+    Args:
+        query: Operational search query
+
+    Returns:
+        Query with appended academic terms (for embedding only)
+    """
+    matched_terms = []
+
+    for synonym, (pattern, academic_term) in _REVERSE_PATTERNS.items():
+        if pattern.search(query):
+            if academic_term not in matched_terms:
+                matched_terms.append(academic_term)
+
+    if not matched_terms:
+        # Fall back to forward bridge (in case query uses academic terms)
+        return bridge_content(query)
+
+    bridge_section = " " + " ".join(matched_terms)
+    return query + bridge_section
 
 
 def get_bridge_terms(content: str) -> list[dict]:
