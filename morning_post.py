@@ -554,7 +554,7 @@ def main():
     args = sys.argv[1:]
     image_only = '--image-only' in args
     dry_run = '--dry-run' in args
-    dimensional = '--dimensional' in args
+    dimensional = '--no-dimensional' not in args  # dimensional by default now
     custom_thought = None
 
     if '--thought' in args:
