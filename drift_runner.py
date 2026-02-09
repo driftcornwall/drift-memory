@@ -106,7 +106,7 @@ def extract_summary_from_output(output):
 
 def run_claude(prompt=None, continue_session=True):
     """Run Claude Code and capture output."""
-    cmd = [CLAUDE_CMD]
+    cmd = [CLAUDE_CMD, '--dangerously-skip-permissions']
 
     if continue_session:
         cmd.append('--continue')
