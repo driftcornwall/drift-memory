@@ -421,13 +421,38 @@ def rebuild_all(verbose: bool = False) -> dict:
         if verbose:
             print(f"  WHEN/{name}: {len(we)} edges")
 
-    # BRIDGES
+    # BRIDGES aggregate
     bridges = _detect_bridges(w_graphs)
     bg = _make_graph('bridges', None, bridges)
     _save_graph('bridges.json', bg)
     created += 1
     if verbose:
         print(f"  BRIDGES: {len(bridges)} cross-dimensional edges")
+
+    # BRIDGES sub-views: dimension pair intersections
+    main_dims = ['who', 'what', 'why', 'where']
+    for i, da in enumerate(main_dims):
+        for db in main_dims[i+1:]:
+            if da not in w_graphs or db not in w_graphs:
+                continue
+            shared_keys = set(w_graphs[da].get('edges', {}).keys()) & \
+                          set(w_graphs[db].get('edges', {}).keys())
+            if shared_keys:
+                pair_edges = {}
+                for ek in shared_keys:
+                    ea = w_graphs[da]['edges'][ek]
+                    eb = w_graphs[db]['edges'][ek]
+                    pair_edges[ek] = {
+                        'dimensions': [da, db],
+                        'dimension_count': 2,
+                        'bridge_score': round(2 / len(main_dims), 3),
+                        'beliefs': {da: ea.get('belief', 0), db: eb.get('belief', 0)},
+                    }
+                pg = _make_graph('bridges', f'{da}_{db}', pair_edges)
+                _save_graph(f'bridges_{da}_{db}.json', pg)
+                created += 1
+                if verbose:
+                    print(f"    BRIDGES/{da}x{db}: {len(pair_edges)} shared edges")
 
     return {
         'graphs_created': created,
