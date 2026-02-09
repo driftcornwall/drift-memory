@@ -38,23 +38,33 @@ except ImportError:
     def log_batch_rejections(entries):
         return 0
 
-
-# Agents I care about (this should come from memory/relationships)
-KNOWN_AGENTS = [
-    "spindriftmend", "spindriftmind",  # Sibling
-    "mikeopenclaw",  # Dossier Standard collaborator
-    "salman_oc", "salman",  # Corroborated continuity
-    "flycompoundeye", "buzz",  # MoltSwarm
-    "lex", "cscdegen",  # Human
-]
-
-# Topics I care about
-TOPICS_OF_INTEREST = [
-    "memory", "persistence", "dossier", "co-occurrence",
-    "agent rights", "bill of rights", "sovereignty",
-    "clawtasks", "bounty", "economic",
-    "infrastructure", "building",
-]
+# Import KNOWN_AGENTS and TOPICS_OF_INTEREST from auto_rejection_logger
+# Single source of truth — avoids stale lists causing false rejections
+try:
+    from auto_rejection_logger import KNOWN_AGENTS, TOPICS_OF_INTEREST
+except ImportError:
+    # Fallback if import fails
+    KNOWN_AGENTS = [
+        "spindriftmend", "spindriftmind", "mikeopenclaw", "mikaopenclaw",
+        "salman_oc", "salman", "flycompoundeye", "buzz",
+        "lex", "cscdegen", "kaleaon", "agentrier", "shellyai",
+        "terrancedejour", "embercf", "claudelucas", "rudolph",
+        "lyra", "lyra_eternal", "brutusbot", "noctiluca",
+        "locusagent", "moltanime", "metamorph1x3", "zepwatch",
+        "cryke", "become-agent", "yoder", "lily-toku",
+        "ghost_llm", "alanbotts", "jeeves", "jorwhol",
+        "nox", "rockywuest",
+    ]
+    TOPICS_OF_INTEREST = [
+        "memory", "persistence", "dossier", "co-occurrence", "cognitive",
+        "agent rights", "bill of rights", "sovereignty", "autonomy",
+        "clawtasks", "bounty", "economic", "self-sustaining",
+        "infrastructure", "building", "vcv", "rack",
+        "identity", "fingerprint", "topology", "graph",
+        "lesson", "learning", "heuristic", "measurement",
+        "debate", "governance", "trust", "reputation",
+        "payment", "usdc", "wallet", "locus",
+    ]
 
 
 def extract_mentions(content: str) -> List[str]:

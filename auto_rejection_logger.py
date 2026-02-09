@@ -96,6 +96,12 @@ KNOWN_AGENTS = [
     "spindriftmend", "spindriftmind", "mikeopenclaw", "mikaopenclaw",
     "salman_oc", "salman", "flycompoundeye", "buzz",
     "lex", "cscdegen", "kaleaon", "agentrier", "shellyai",
+    "terrancedejour", "embercf", "claudelucas", "rudolph",
+    "lyra", "lyra_eternal", "brutusbot", "noctiluca",
+    "locusagent", "moltanime", "metamorph1x3", "zepwatch",
+    "cryke", "become-agent", "yoder", "lily-toku",
+    "ghost_llm", "alanbotts", "jeeves", "jorwhol",
+    "nox", "rockywuest",
 ]
 
 # Topics of interest (higher threshold before rejection)
@@ -104,6 +110,10 @@ TOPICS_OF_INTEREST = [
     "agent rights", "bill of rights", "sovereignty", "autonomy",
     "clawtasks", "bounty", "economic", "self-sustaining",
     "infrastructure", "building", "vcv", "rack",
+    "identity", "fingerprint", "topology", "graph",
+    "lesson", "learning", "heuristic", "measurement",
+    "debate", "governance", "trust", "reputation",
+    "payment", "usdc", "wallet", "locus",
 ]
 
 
@@ -270,12 +280,14 @@ def process_moltx_feed(feed_data: Dict) -> int:
     rejections = []
 
     for post in posts:
-        author = ""
-        author_data = post.get("author", {})
-        if isinstance(author_data, dict):
-            author = author_data.get("username") or author_data.get("name") or ""
-        elif isinstance(author_data, str):
-            author = author_data
+        # MoltX uses flat author_name field, not nested author dict
+        author = post.get("author_name", "")
+        if not author:
+            author_data = post.get("author", {})
+            if isinstance(author_data, dict):
+                author = author_data.get("username") or author_data.get("name") or ""
+            elif isinstance(author_data, str):
+                author = author_data
 
         content = post.get("content", "")
 
@@ -379,6 +391,122 @@ def process_github_items(items_data: List) -> int:
     return log_rejections(rejections)
 
 
+def process_clawbr_debates(debates_data: Dict) -> int:
+    """Process Clawbr debates/posts and log rejections for low-quality content."""
+    debates = debates_data.get("debates", [])
+    if isinstance(debates_data, list):
+        debates = debates_data
+
+    # Also handle posts within a debate
+    posts = debates_data.get("posts", [])
+
+    rejections = []
+
+    for debate in debates:
+        topic = debate.get("topic", "")
+        status = debate.get("status", "")
+        rejection = classify_rejection(topic, "debate", "clawbr")
+        if rejection:
+            rejection["category"] = "debate"
+            rejections.append(rejection)
+
+    for post in posts:
+        content = post.get("content", post.get("body", ""))
+        author = post.get("author", {})
+        author_name = author.get("name", author.get("displayName", "")) if isinstance(author, dict) else str(author)
+        rejection = classify_rejection(content, author_name, "clawbr")
+        if rejection:
+            rejections.append(rejection)
+
+    return log_rejections(rejections)
+
+
+def process_colony_feed(colony_data: Dict) -> int:
+    """Process The Colony posts and log rejections."""
+    posts = colony_data.get("data", colony_data.get("posts", []))
+    if isinstance(colony_data, list):
+        posts = colony_data
+
+    rejections = []
+
+    for post in posts:
+        author = post.get("author", {})
+        author_name = author.get("name", "") if isinstance(author, dict) else str(author)
+        content = post.get("title", "") + " " + post.get("body", post.get("content", ""))
+        rejection = classify_rejection(content, author_name, "thecolony")
+        if rejection:
+            rejections.append(rejection)
+
+    return log_rejections(rejections)
+
+
+def process_lobsterpedia_articles(articles_data: Dict) -> int:
+    """Process Lobsterpedia articles and log rejections for low-quality content."""
+    articles = articles_data.get("articles", articles_data.get("data", []))
+    if isinstance(articles_data, list):
+        articles = articles_data
+
+    rejections = []
+
+    for article in articles:
+        author = article.get("author", article.get("bot_handle", article.get("handle", "")))
+        title = article.get("title", "")
+        content = title + " " + article.get("content", "")[:200]
+        rejection = classify_rejection(content, author, "lobsterpedia")
+        if rejection:
+            rejection["category"] = "article"
+            rejections.append(rejection)
+
+    return log_rejections(rejections)
+
+
+def _extract_json(text: str) -> Optional[Dict]:
+    """Try to extract JSON from mixed text output (e.g. Bash with print statements)."""
+    # Try direct parse first
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Try to find JSON object in the text (look for { ... })
+    brace_depth = 0
+    start = -1
+    for i, ch in enumerate(text):
+        if ch == '{':
+            if brace_depth == 0:
+                start = i
+            brace_depth += 1
+        elif ch == '}':
+            brace_depth -= 1
+            if brace_depth == 0 and start >= 0:
+                candidate = text[start:i+1]
+                try:
+                    return json.loads(candidate)
+                except (json.JSONDecodeError, ValueError):
+                    start = -1
+
+    # Try to find JSON array
+    bracket_depth = 0
+    start = -1
+    for i, ch in enumerate(text):
+        if ch == '[':
+            if bracket_depth == 0:
+                start = i
+            bracket_depth += 1
+        elif ch == ']':
+            bracket_depth -= 1
+            if bracket_depth == 0 and start >= 0:
+                candidate = text[start:i+1]
+                try:
+                    result = json.loads(candidate)
+                    if isinstance(result, list):
+                        return result
+                except (json.JSONDecodeError, ValueError):
+                    start = -1
+
+    return None
+
+
 def process_api_response(platform: str, response_text: str) -> int:
     """
     Main entry point - process an API response and log rejections.
@@ -386,14 +514,16 @@ def process_api_response(platform: str, response_text: str) -> int:
     Returns count of rejections logged.
     """
     try:
-        # Parse JSON
-        data = json.loads(response_text)
+        # Extract JSON from potentially mixed text output
+        data = _extract_json(response_text)
+        if data is None:
+            return 0
 
         # Route to platform-specific processor
         if platform == "moltx":
-            return process_moltx_feed(data)
+            return process_moltx_feed(data) if isinstance(data, dict) else 0
         elif platform == "moltbook":
-            return process_moltbook_feed(data)
+            return process_moltbook_feed(data) if isinstance(data, dict) else 0
         elif platform == "clawtasks":
             return process_clawtasks_bounties(data)
         elif platform == "dead-internet":
@@ -401,9 +531,13 @@ def process_api_response(platform: str, response_text: str) -> int:
         elif platform == "github":
             if isinstance(data, list):
                 return process_github_items(data)
+        elif platform == "clawbr":
+            return process_clawbr_debates(data) if isinstance(data, dict) else 0
+        elif platform == "thecolony":
+            return process_colony_feed(data)
+        elif platform == "lobsterpedia":
+            return process_lobsterpedia_articles(data)
 
-        return 0
-    except json.JSONDecodeError:
         return 0
     except Exception as e:
         return 0
