@@ -35,7 +35,7 @@ except ImportError:
 
 CO_OCCURRENCE_BOOST = 0.1
 SESSION_TIMEOUT_HOURS = 4
-PAIR_DECAY_RATE = 0.5
+PAIR_DECAY_RATE = 0.3  # Was 0.5. Pairs survive ~20h unreinforced (was ~12h).
 ACCESS_WEIGHTED_DECAY = True
 
 # v2.13: Self-evolution flag (now imported from memory_common — no peer-module coupling)

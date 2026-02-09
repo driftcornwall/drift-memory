@@ -180,8 +180,10 @@ def store_memory(
         _add_leads_to_link(cause_id, memory_id)
 
     try:
+        from vocabulary_bridge import bridge_content
         from semantic_search import embed_single
-        embed_single(memory_id, content)
+        bridged = bridge_content(content)
+        embed_single(memory_id, bridged)
     except Exception:
         pass
 

@@ -11,6 +11,8 @@ Design principles:
 """
 
 import json
+import math
+import random
 import yaml
 from datetime import datetime, timezone
 from pathlib import Path
@@ -256,13 +258,25 @@ def get_priming_candidates(
         'activated': [],
         'cooccurring': [],
         'unfinished': [],
+        'excavated': [],
         'all': []
     }
     seen_ids = set()
 
-    # Phase 1: Top activated memories
-    activated = get_most_activated_memories(limit=activation_count)
+    # Phase 1: Top activated memories (with hub dampening)
+    activated = get_most_activated_memories(limit=activation_count * 2)  # Fetch extra for dampening
+    dampened = []
     for mem_id, activation, metadata, preview in activated:
+        degree = len(metadata.get('co_occurrences', {}))
+        if degree > 5:
+            dampening = math.log(1 + degree) / max(degree, 1)
+            dampened_score = activation * dampening
+        else:
+            dampened_score = activation
+        dampened.append((mem_id, dampened_score, activation, metadata, preview))
+    dampened.sort(key=lambda x: x[1], reverse=True)
+
+    for mem_id, dampened_score, activation, metadata, preview in dampened[:activation_count]:
         result['activated'].append({
             'id': mem_id,
             'activation': activation,
@@ -333,8 +347,38 @@ def get_priming_candidates(
             if len(result['unfinished']) >= 3:
                 break
 
+    # Phase 4: Dead memory excavation (read-only, NOT counted as recall)
+    from decay_evolution import GRACE_PERIOD_SESSIONS
+    dead_pool = []
+    for directory in [ACTIVE_DIR]:
+        if not directory.exists():
+            continue
+        for filepath in directory.glob("*.md"):
+            metadata, content = parse_memory_file(filepath)
+            mem_id = metadata.get('id', filepath.stem)
+            if mem_id in seen_ids:
+                continue
+            recall_count = metadata.get('recall_count', 0)
+            sessions_since = metadata.get('sessions_since_recall', 0)
+            if recall_count == 0 and sessions_since > GRACE_PERIOD_SESSIONS:
+                dead_pool.append((mem_id, content[:100], metadata))
+
+    if dead_pool:
+        excavated = random.sample(dead_pool, min(2, len(dead_pool)))
+        for mem_id, preview, metadata in excavated:
+            result['excavated'].append({
+                'id': mem_id,
+                'preview': preview,
+                'source': 'excavation',
+                'sessions_dead': metadata.get('sessions_since_recall', 0)
+            })
+            seen_ids.add(mem_id)
+
     # Build deduplicated 'all' list with source tracking
-    result['all'] = result['activated'] + result['cooccurring'] + result['unfinished']
+    result['all'] = (
+        result['activated'] + result['cooccurring']
+        + result['unfinished'] + result['excavated']
+    )
 
     return result
 
@@ -614,11 +658,27 @@ if __name__ == "__main__":
             if not results:
                 print("No matching memories found. (Is the index built? Run: memory_manager.py index)")
             else:
+                # Epsilon-greedy: 10% chance to inject one low-recall memory (exploratory)
+                if random.random() < 0.10:
+                    result_ids = {r['id'] for r in results}
+                    low_recall = []
+                    for fp in (ACTIVE_DIR.glob("*.md") if ACTIVE_DIR.exists() else []):
+                        meta, content = parse_memory_file(fp)
+                        mid = meta.get('id', fp.stem)
+                        if mid not in result_ids and meta.get('recall_count', 0) <= 1:
+                            low_recall.append({'id': mid, 'score': 0.0, 'preview': content[:150],
+                                               'exploratory': True})
+                    if low_recall:
+                        pick = random.choice(low_recall)
+                        results.append(pick)
+
                 print(f"Memories matching '{query}':\n")
                 for r in results:
-                    # Track retrieval for co-occurrence (biological: retrieval strengthens memory)
-                    session_state.add_retrieved(r['id'])
-                    print(f"[{r['score']:.3f}] {r['id']}")
+                    marker = " [exploratory]" if r.get('exploratory') else ""
+                    # Track retrieval for co-occurrence (skip exploratory — read-only exposure)
+                    if not r.get('exploratory'):
+                        session_state.add_retrieved(r['id'])
+                    print(f"[{r['score']:.3f}] {r['id']}{marker}")
                     print(f"  {r['preview'][:100]}...")
                     print()
                 # Save session state so co-occurrences persist

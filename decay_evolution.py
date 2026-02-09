@@ -27,6 +27,7 @@ RECALL_COUNT_THRESHOLD = 5
 HEAT_PROMOTION_THRESHOLD = 10
 HEAT_PROMOTION_ENABLED = True
 IMPORTED_PRUNE_SESSIONS = 14
+GRACE_PERIOD_SESSIONS = 7  # New memories immune from decay for 7 sessions (~2.3 days)
 
 # Trust-based decay for imported memories (v2.11, credit: SpindriftMend)
 DECAY_MULTIPLIERS = {
@@ -46,7 +47,7 @@ MIN_RETRIEVALS_FOR_EVOLUTION = 3
 
 # Activation decay — Hebbian time-based (v2.14, credit: SpindriftMend v3.1)
 ACTIVATION_DECAY_ENABLED = True
-ACTIVATION_HALF_LIFE_HOURS = 24 * 7
+ACTIVATION_HALF_LIFE_HOURS = 24 * 10  # 10 days (was 7). Memories stay primed longer.
 ACTIVATION_MIN_FLOOR = 0.01
 
 
@@ -150,10 +151,13 @@ def session_maintenance():
             recall_count >= RECALL_COUNT_THRESHOLD
         )
 
+        # Grace period: skip decay for young memories
+        in_grace_period = sessions < GRACE_PERIOD_SESSIONS
+
         is_import = is_imported_memory(metadata)
         if is_import and recall_count == 0 and sessions >= IMPORTED_PRUNE_SESSIONS:
             prune_candidates.append((filepath, metadata, content))
-        elif effective_sessions >= DECAY_THRESHOLD_SESSIONS and not should_resist_decay:
+        elif not in_grace_period and effective_sessions >= DECAY_THRESHOLD_SESSIONS and not should_resist_decay:
             decay_candidates.append((filepath, metadata, content, decay_multiplier))
         elif should_resist_decay:
             reinforced.append((filepath, metadata))
@@ -334,6 +338,11 @@ def calculate_activation(metadata: dict) -> float:
     recall_bonus = math.log(recall_count + 1) / 5
 
     base_activation = emotional_weight + recall_bonus
+
+    # Grace period: new memories immune from decay for first N sessions
+    sessions_since = metadata.get('sessions_since_recall', 0)
+    if sessions_since < GRACE_PERIOD_SESSIONS:
+        return max(base_activation, 0.5)  # Keep at least 0.5 during grace period
 
     last_recalled_str = metadata.get('last_recalled')
     if last_recalled_str:
