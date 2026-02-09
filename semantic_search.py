@@ -269,12 +269,14 @@ def load_memory_tags(memory_id: str) -> list[str]:
 # Resolution/procedural tags that indicate actionable knowledge
 RESOLUTION_TAGS = {'resolution', 'procedural', 'fix', 'solution', 'howto', 'api', 'endpoint'}
 RESOLUTION_BOOST = 1.25  # 25% score boost for resolution memories
+DIMENSION_BOOST_SCALE = 0.1  # Dimensional connectivity boost: score *= (1 + 0.1 * log(1+degree))
 
 
 def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
-                    register_recall: bool = True) -> list[dict]:
+                    register_recall: bool = True,
+                    dimension: str = None, sub_view: str = None) -> list[dict]:
     """
-    Search memories by semantic similarity with resolution boosting.
+    Search memories by semantic similarity with resolution + dimensional boosting.
 
     When register_recall=True (default), retrieved memories are registered
     with the decay/co-occurrence system, strengthening accessed memories
@@ -283,11 +285,16 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     Resolution memories (tagged with 'resolution', 'procedural', 'fix', etc.)
     get a score boost so solutions surface before problem descriptions.
 
+    When dimension is specified, memories well-connected in that W-graph
+    get an additional score boost proportional to their degree.
+
     Args:
         query: Natural language query
         limit: Maximum results to return
         threshold: Minimum similarity score (0-1)
         register_recall: If True, register results as "recalled" for decay system
+        dimension: Optional W-dimension to boost by (who/what/why/where)
+        sub_view: Optional sub-view within dimension (e.g. topic name)
 
     Returns:
         List of matching memories with scores.
@@ -330,6 +337,31 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
         if tags and RESOLUTION_TAGS.intersection(set(t.lower() for t in tags)):
             result["score"] *= RESOLUTION_BOOST
             result["boosted"] = True
+
+    # === DIMENSIONAL BOOSTING (Phase 3: 5W-aware search) ===
+    # When a dimension is specified, boost memories with high connectivity
+    # in that W-graph. Well-connected = contextually important.
+    if dimension and results:
+        try:
+            from context_manager import load_graph
+            graph = load_graph(dimension, sub_view)
+            if graph and graph.get('edges'):
+                # Build degree map for all nodes in this dimension
+                dim_degree = {}
+                for edge_key in graph['edges']:
+                    parts = edge_key.split('|')
+                    if len(parts) == 2:
+                        dim_degree[parts[0]] = dim_degree.get(parts[0], 0) + 1
+                        dim_degree[parts[1]] = dim_degree.get(parts[1], 0) + 1
+
+                for result in results:
+                    degree = dim_degree.get(result['id'], 0)
+                    if degree > 0:
+                        result['score'] *= (1 + DIMENSION_BOOST_SCALE * math.log(1 + degree))
+                        result['dim_boosted'] = True
+                        result['dim_degree'] = degree
+        except ImportError:
+            pass
 
     # Sort by (boosted) score descending
     results.sort(key=lambda x: x["score"], reverse=True)
@@ -468,6 +500,10 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, default=5, help="Max results")
     parser.add_argument("--force", action="store_true", help="Force re-index all")
     parser.add_argument("--threshold", type=float, default=0.3, help="Min similarity")
+    parser.add_argument("--dimension", type=str, default=None,
+                       help="W-dimension to boost by (who/what/why/where)")
+    parser.add_argument("--sub-view", type=str, default=None,
+                       help="Sub-view within dimension")
 
     args = parser.parse_args()
 
@@ -491,13 +527,23 @@ if __name__ == "__main__":
             print("Error: search requires a query")
             sys.exit(1)
 
-        results = search_memories(args.query, limit=args.limit, threshold=args.threshold)
+        results = search_memories(
+            args.query, limit=args.limit, threshold=args.threshold,
+            dimension=args.dimension, sub_view=getattr(args, 'sub_view', None),
+        )
 
         if not results:
             print("No matching memories found.")
         else:
-            print(f"Found {len(results)} matching memories:\n")
+            dim_label = f" (dimension: {args.dimension}" + (f"/{args.sub_view}" if getattr(args, 'sub_view', None) else "") + ")" if args.dimension else ""
+            print(f"Found {len(results)} matching memories{dim_label}:\n")
             for r in results:
-                print(f"[{r['score']:.3f}] {r['id']}")
+                flags = []
+                if r.get('boosted'):
+                    flags.append('resolution')
+                if r.get('dim_boosted'):
+                    flags.append(f'dim:{r.get("dim_degree", 0)}')
+                flag_str = f" [{', '.join(flags)}]" if flags else ""
+                print(f"[{r['score']:.3f}] {r['id']}{flag_str}")
                 print(f"  {r['preview']}...")
                 print()

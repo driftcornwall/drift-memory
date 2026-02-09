@@ -234,15 +234,23 @@ def get_comprehensive_stats() -> dict:
 def get_priming_candidates(
     activation_count: int = 5,
     cooccur_per_memory: int = 2,
-    include_unfinished: bool = True
+    include_unfinished: bool = True,
+    dimension: str = None,
+    sub_view: str = None,
 ) -> dict:
     """
-    v2.17: Intelligent priming for session start.
+    v2.18: Intelligent priming with 5W-dimensional awareness.
 
     Returns memories optimized for reducing amnesia:
     1. Top activated memories (proven valuable through frequent recall)
     2. Co-occurring memories (concepts that belong together)
     3. Unfinished work (pending commitments)
+    4. Dead memory excavation (read-only exposure)
+    5. Domain-aware priming (under-represented domains)
+    6. Dimensional hubs (Phase 3: memories central to a W-dimension)
+
+    When dimension is specified, hub memories from that W-graph
+    are added to priming (high-connectivity = contextually important).
 
     Collaboration: Drift + SpindriftMend via swarm_memory (2026-02-03)
 
@@ -250,15 +258,18 @@ def get_priming_candidates(
         activation_count: Number of top activated memories to include
         cooccur_per_memory: Co-occurring memories to expand per activated memory
         include_unfinished: Whether to scan for unfinished work
+        dimension: Optional W-dimension to prime from (who/what/why/where)
+        sub_view: Optional sub-view within dimension
 
     Returns:
-        Dict with 'activated', 'cooccurring', 'unfinished' lists and 'all' deduplicated
+        Dict with 'activated', 'cooccurring', 'unfinished', 'dimensional' lists and 'all' deduplicated
     """
     result = {
         'activated': [],
         'cooccurring': [],
         'unfinished': [],
         'excavated': [],
+        'dimensional': [],
         'all': []
     }
     seen_ids = set()
@@ -431,11 +442,41 @@ def get_priming_candidates(
     except Exception:
         pass
 
+    # Phase 6: Dimensional hub priming (Phase 3 of Multi-Graph Architecture)
+    if dimension:
+        try:
+            from context_manager import load_graph
+            graph = load_graph(dimension, sub_view)
+            if graph and graph.get('hubs'):
+                for hub_id in graph['hubs'][:3]:
+                    if hub_id in seen_ids:
+                        continue
+                    preview = ""
+                    for directory in [CORE_DIR, ACTIVE_DIR]:
+                        if not directory.exists():
+                            continue
+                        for filepath in directory.glob(f"*{hub_id}*"):
+                            _, content = parse_memory_file(filepath)
+                            preview = content[:100]
+                            break
+                        if preview:
+                            break
+                    result['dimensional'].append({
+                        'id': hub_id,
+                        'preview': preview,
+                        'source': 'dimensional_hub',
+                        'dimension': dimension,
+                        'sub_view': sub_view,
+                    })
+                    seen_ids.add(hub_id)
+        except ImportError:
+            pass
+
     # Build deduplicated 'all' list with source tracking
     result['all'] = (
         result['activated'] + result['cooccurring']
         + result['unfinished'] + result['excavated']
-        + result['domain_primed']
+        + result['domain_primed'] + result['dimensional']
     )
 
     return result
