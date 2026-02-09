@@ -13,7 +13,7 @@ Usage:
     python toolkit.py <category>:<command>    # Run a command
     python toolkit.py <command>               # Run (if unambiguous)
 
-Categories: identity, social, platform, search, memory, comms, dashboard, viz, calibration, experiment
+Categories: identity, social, platform, search, memory, comms, dashboard, viz, calibration, experiment, lessons
 
 Origin: SpindriftMend designed the toolkit pattern. Drift adapted it.
 """
@@ -182,6 +182,17 @@ def build_registry():
         Command("exp-delta", "experiment", "Compare experiment snapshots", "experiment_delta", "compare", "<file1> <file2>"),
     ]
 
+    # === LESSONS ===
+    cmds += [
+        Command("lessons", "lessons", "List all lessons", "lesson_extractor", "list"),
+        Command("lesson-add", "lessons", "Add a lesson manually", "lesson_extractor", "add", "<category> <lesson>"),
+        Command("lesson-mine", "lessons", "Mine MEMORY.md for lessons", "lesson_extractor", "mine-memory"),
+        Command("lesson-rejections", "lessons", "Mine rejection patterns", "lesson_extractor", "mine-rejections"),
+        Command("lesson-hubs", "lessons", "Mine co-occurrence hubs", "lesson_extractor", "mine-hubs"),
+        Command("lesson-apply", "lessons", "Find lessons for a situation", "lesson_extractor", "apply", "<situation>"),
+        Command("lesson-stats", "lessons", "Lesson statistics", "lesson_extractor", "stats"),
+    ]
+
     registry = {}
     for cmd in cmds:
         key = f"{cmd.category}:{cmd.name}"
@@ -214,6 +225,7 @@ def resolve_module(module_name):
 def dispatch_to_module(cmd, args):
     """Import module and run its CLI with the handler as first arg."""
     mod = resolve_module(cmd.module)
+    _ensure_stdout()
 
     # Strategy: most modules use sys.argv dispatch in __main__
     # We simulate that by setting sys.argv and calling their main logic
@@ -476,6 +488,7 @@ def cmd_health():
         ("dashboard_export", "Dashboard data export"),
         ("dimensional_viz", "5W dimensional visualization"),
         ("telegram_bot", "Telegram communication"),
+        ("lesson_extractor", "Lesson extraction system"),
     ]
 
     # Social subpackage
