@@ -218,8 +218,15 @@ def index_memories(force: bool = False) -> dict:
             stats["skipped"] += 1
             continue
 
+        # Apply vocabulary bridge before embedding (cross-register matching)
+        try:
+            from vocabulary_bridge import bridge_content
+            bridged = bridge_content(content)
+        except ImportError:
+            bridged = content
+
         # Generate embedding
-        embedding = get_embedding(content)
+        embedding = get_embedding(bridged)
         if embedding:
             data["memories"][memory_id] = {
                 "embedding": embedding,

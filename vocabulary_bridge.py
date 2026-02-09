@@ -10,17 +10,21 @@ Solution: At store time, detect foreign-register terms and append operational sy
 The embedding then contains both registers, making academic content findable by
 operational queries.
 
-Phase A: Curated synonym mapping (this file).
-Phase B (future): Gemma 3 4B local model generates first-person paraphrases.
+Phase A: Curated synonym mapping (JSON sidecar + hardcoded seed).
+Phase B: Gemma 3 4B local model generates new mappings for unknown terms.
 
 Author: Drift + SpindriftMend (joint design, issue #18)
 """
 
+import json
 import re
+from pathlib import Path
 
-# Academic/theoretical -> operational/system vocabulary
-# Bootstrapped from Experiment #2's 18 source memories
-VOCABULARY_MAP = {
+BRIDGE_DIR = Path(__file__).parent
+SIDECAR_FILE = BRIDGE_DIR / "vocabulary_map.json"
+
+# Seed map — hardcoded baseline. Sidecar file extends/overrides this.
+_SEED_MAP = {
     # Neuroscience / Memory
     "reconsolidation": "memory update, recall modification, memory rewrite",
     "synaptic plasticity": "connection strength change, edge weight update",
@@ -79,12 +83,68 @@ VOCABULARY_MAP = {
     "requisite variety": "matching complexity, sufficient response range",
 }
 
-# Compile patterns for efficient matching (case-insensitive)
-# Use \b at start only — allows plural/conjugated forms to match
-_PATTERNS = {
-    term: (re.compile(r'\b' + re.escape(term) + r's?\b', re.IGNORECASE), synonyms)
-    for term, synonyms in VOCABULARY_MAP.items()
-}
+
+def _load_vocabulary_map() -> dict:
+    """
+    Load vocabulary map: seed + JSON sidecar (sidecar overrides seed).
+    Returns merged dict of {term: synonyms_string}.
+    """
+    merged = dict(_SEED_MAP)
+
+    if SIDECAR_FILE.exists():
+        try:
+            sidecar = json.loads(SIDECAR_FILE.read_text(encoding='utf-8'))
+            if isinstance(sidecar, dict):
+                merged.update(sidecar)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return merged
+
+
+def _compile_patterns(vocab_map: dict) -> dict:
+    """Compile regex patterns for efficient matching."""
+    return {
+        term: (re.compile(r'\b' + re.escape(term) + r's?\b', re.IGNORECASE), synonyms)
+        for term, synonyms in vocab_map.items()
+    }
+
+
+# Load on import — re-call load() to pick up sidecar changes
+VOCABULARY_MAP = _load_vocabulary_map()
+_PATTERNS = _compile_patterns(VOCABULARY_MAP)
+
+
+def reload():
+    """Reload vocabulary map from disk (picks up new sidecar entries)."""
+    global VOCABULARY_MAP, _PATTERNS
+    VOCABULARY_MAP = _load_vocabulary_map()
+    _PATTERNS = _compile_patterns(VOCABULARY_MAP)
+
+
+def add_term(term: str, synonyms: str):
+    """
+    Add a new term to the sidecar file. Called by Gemma bridge expansion.
+
+    Args:
+        term: Academic/foreign-register term (e.g., "allostasis")
+        synonyms: Operational synonyms (e.g., "adaptive stability, flexible balance")
+    """
+    sidecar = {}
+    if SIDECAR_FILE.exists():
+        try:
+            sidecar = json.loads(SIDECAR_FILE.read_text(encoding='utf-8'))
+        except (json.JSONDecodeError, OSError):
+            sidecar = {}
+
+    sidecar[term.lower()] = synonyms
+    SIDECAR_FILE.write_text(
+        json.dumps(sidecar, indent=2, ensure_ascii=False),
+        encoding='utf-8'
+    )
+
+    # Hot-reload
+    reload()
 
 
 def bridge_content(content: str) -> str:
@@ -136,15 +196,29 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: vocabulary_bridge.py <text-or-filepath>")
         print(f"\nVocabulary map: {len(VOCABULARY_MAP)} terms")
+        seed_count = len(_SEED_MAP)
+        sidecar_count = len(VOCABULARY_MAP) - seed_count
+        print(f"  Seed terms: {seed_count}")
+        print(f"  Sidecar terms: {sidecar_count}")
+        print(f"  Sidecar file: {SIDECAR_FILE}")
+        print(f"  Sidecar exists: {SIDECAR_FILE.exists()}")
         print("\nTerms:")
         for term, synonyms in sorted(VOCABULARY_MAP.items()):
-            print(f"  {term} -> {synonyms}")
+            source = "sidecar" if term not in _SEED_MAP else "seed"
+            print(f"  [{source}] {term} -> {synonyms}")
+        sys.exit(0)
+
+    if sys.argv[1] == "add" and len(sys.argv) >= 4:
+        term = sys.argv[2]
+        synonyms = sys.argv[3]
+        add_term(term, synonyms)
+        print(f"Added: {term} -> {synonyms}")
+        print(f"Sidecar now has {len(VOCABULARY_MAP) - len(_SEED_MAP)} custom terms")
         sys.exit(0)
 
     text = sys.argv[1]
 
     # If it looks like a file path, read it
-    from pathlib import Path
     if Path(text).exists():
         text = Path(text).read_text(encoding='utf-8')
 

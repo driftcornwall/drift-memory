@@ -132,7 +132,12 @@ def consolidate_memories(id1: str, id2: str, merged_content: Optional[str] = Non
     # Update embedding index
     try:
         from semantic_search import embed_single, remove_from_index
-        embed_single(id1, final_content)
+        try:
+            from vocabulary_bridge import bridge_content
+            final_content_bridged = bridge_content(final_content)
+        except ImportError:
+            final_content_bridged = final_content
+        embed_single(id1, final_content_bridged)
         remove_from_index(id2)
     except Exception:
         pass

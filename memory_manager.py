@@ -374,10 +374,68 @@ def get_priming_candidates(
             })
             seen_ids.add(mem_id)
 
+    # Phase 5: Domain-aware priming (read-only, 1 slot for under-represented domain)
+    result['domain_balanced'] = []
+    try:
+        COGNITIVE_DOMAINS = {
+            'reflection': ['thought', 'thinking', 'output', 'source:self'],
+            'social': ['social', 'collaboration', 'spindrift', 'spindriftmend',
+                       'kaleaon', 'moltx', 'moltbook'],
+            'technical': ['insight', 'problem_solved', 'error', 'bug', 'fix',
+                          'resolution', 'memory-system', 'architecture', 'api'],
+            'economic': ['economic', 'bounty', 'clawtasks', 'wallet', 'earned'],
+            'identity': ['identity', 'values', 'milestone', 'shipped', 'dossier',
+                         'attestation', 'critical'],
+        }
+
+        # Count domains already in result
+        domain_counts = {d: 0 for d in COGNITIVE_DOMAINS}
+        for item in result['activated'] + result['cooccurring']:
+            mem_id = item['id']
+            for directory in [CORE_DIR, ACTIVE_DIR]:
+                for filepath in directory.glob(f"*{mem_id}*.md"):
+                    metadata, _ = parse_memory_file(filepath)
+                    tags = set(metadata.get('tags', []))
+                    for domain, domain_tags in COGNITIVE_DOMAINS.items():
+                        if tags & set(domain_tags):
+                            domain_counts[domain] += 1
+                    break
+
+        # Find least-represented domain (excluding 0-count domains with no memories)
+        least_domain = min(domain_counts, key=domain_counts.get)
+
+        # Find a memory from that domain that's not already in result
+        domain_tags = set(COGNITIVE_DOMAINS[least_domain])
+        candidates = []
+        for directory in [ACTIVE_DIR, CORE_DIR]:
+            if not directory.exists():
+                continue
+            for filepath in directory.glob("*.md"):
+                metadata, content = parse_memory_file(filepath)
+                mem_id = metadata.get('id', filepath.stem)
+                if mem_id in seen_ids:
+                    continue
+                tags = set(metadata.get('tags', []))
+                if tags & domain_tags:
+                    candidates.append((mem_id, content[:100], metadata))
+
+        if candidates:
+            picked = random.choice(candidates)
+            result['domain_balanced'].append({
+                'id': picked[0],
+                'preview': picked[1],
+                'source': 'domain_balance',
+                'domain': least_domain
+            })
+            seen_ids.add(picked[0])
+    except Exception:
+        pass
+
     # Build deduplicated 'all' list with source tracking
     result['all'] = (
         result['activated'] + result['cooccurring']
         + result['unfinished'] + result['excavated']
+        + result['domain_balanced']
     )
 
     return result
@@ -398,6 +456,7 @@ def get_priming_candidates(
 
 if __name__ == "__main__":
     import sys
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
     if len(sys.argv) < 2:
         print("Memory Manager v2.15 - Entity-Centric Tagging")
