@@ -157,6 +157,23 @@ PLATFORM_SIGNATURES = {
             r'npub\w{20,}',
         ],
     },
+    'twitter': {
+        'url_patterns': [r'x\.com', r'twitter\.com', r'api\.x\.com'],
+        'keywords': [
+            'twitter', 'tweet', 'tweeted', 'retweet', 'x.com',
+            '@driftcornwall', '@cscdegen', '@rockywuest',
+            'timeline', 'mention', 'twitter bio', 'twitter thread',
+            'oauth', 'bearer token',
+        ],
+        'agents': [],
+        'content_patterns': [
+            r'twitter\.com/\w+',
+            r'x\.com/\w+',
+            r'tweet\s+id',
+            r'posted.*tweet',
+            r'@\w+.*thread',
+        ],
+    },
 }
 
 # Minimum confidence to assign a platform

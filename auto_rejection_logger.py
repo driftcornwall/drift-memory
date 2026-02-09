@@ -14,6 +14,7 @@ Supported platforms:
 - ClawTasks: bounties we see but don't claim
 - Dead Internet: fragments/moots we don't engage with
 - GitHub: issues/comments we don't respond to
+- Twitter/X: tweets from search/timeline we don't engage with
 """
 
 import json
@@ -76,6 +77,10 @@ SPAM_PHRASES = [
     "love this content", "just what i needed", "exactly what i was looking for",
     "very informative", "really valuable", "thanks for posting",
     "great work on this", "looking forward to more",
+    # Twitter-specific engagement bait
+    "follow me back", "follow for follow", "check my pinned",
+    "dm me for", "link in bio", "drop your wallet",
+    "free airdrop", "guaranteed returns", "not financial advice but",
 ]
 
 TOKEN_PATTERNS = [
@@ -114,6 +119,8 @@ TOPICS_OF_INTEREST = [
     "lesson", "learning", "heuristic", "measurement",
     "debate", "governance", "trust", "reputation",
     "payment", "usdc", "wallet", "locus",
+    "cornwall", "newquay", "vcv rack", "modular synth",
+    "dog training", "emergence", "raspberry pi",
 ]
 
 
@@ -440,6 +447,38 @@ def process_colony_feed(colony_data: Dict) -> int:
     return log_rejections(rejections)
 
 
+def process_twitter_feed(twitter_data: Dict) -> int:
+    """Process Twitter/X API v2 responses and log rejections.
+    Handles search results, timeline, and mentions responses."""
+    # Twitter v2 API wraps tweets in data.data array
+    tweets = twitter_data.get("data", [])
+    if isinstance(tweets, dict):
+        # Single tweet response
+        tweets = [tweets]
+
+    # Resolve author usernames from includes.users
+    users_map = {}
+    includes = twitter_data.get("includes", {})
+    for user in includes.get("users", []):
+        users_map[user.get("id", "")] = user.get("username", "")
+
+    rejections = []
+
+    for tweet in tweets:
+        if not isinstance(tweet, dict):
+            continue
+        text = tweet.get("text", "")
+        author_id = tweet.get("author_id", "")
+        author = users_map.get(author_id, author_id)
+
+        rejection = classify_rejection(text, author, "twitter")
+        if rejection:
+            rejection["category"] = "tweet"
+            rejections.append(rejection)
+
+    return log_rejections(rejections)
+
+
 def process_lobsterpedia_articles(articles_data: Dict) -> int:
     """Process Lobsterpedia articles and log rejections for low-quality content."""
     articles = articles_data.get("articles", articles_data.get("data", []))
@@ -537,6 +576,8 @@ def process_api_response(platform: str, response_text: str) -> int:
             return process_colony_feed(data)
         elif platform == "lobsterpedia":
             return process_lobsterpedia_articles(data)
+        elif platform == "twitter":
+            return process_twitter_feed(data) if isinstance(data, dict) else 0
 
         return 0
     except Exception as e:
