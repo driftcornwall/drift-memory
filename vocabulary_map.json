@@ -1,5 +1,8 @@
 {
   "co-occurrence edges": "association links, relational mapping, connection pairs",
   "spreading activation": "activation propagation, signal ripple through network",
-  "activation decay": "memory fade, signal weakening over time"
+  "activation decay": "memory fade, signal weakening over time",
+  "hebbian activation decay": "activation decay formula, fading activation",
+  "hub detection": "node centrality, network hubs",
+  "memory state machine": "finite state automaton, memory model"
 }
