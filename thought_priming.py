@@ -294,6 +294,21 @@ def prime_from_thought(transcript_path: str, memory_dir: Path = None) -> str:
         state["returned_ids"].append(m["id"])
     _save_state(state)
 
+    # Register recalls with session state so they count toward co-occurrence
+    # strengthening. Without this, thought-triggered searches are invisible
+    # to the memory graph — they surface memories but don't build edges.
+    try:
+        recall_ids = [m["id"] for m in new_memories]
+        subprocess.run(
+            ["python", str(memory_dir / "memory_manager.py"), "register-recall"] + recall_ids,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            cwd=str(memory_dir)
+        )
+    except Exception:
+        pass  # Never block conversation for recall registration
+
     # Format output
     lines = ["", "=== THOUGHT-TRIGGERED MEMORY ==="]
     for mem in new_memories:

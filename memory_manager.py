@@ -1157,3 +1157,17 @@ if __name__ == "__main__":
         print(f"  Would update: {stats['updated']}" if dry_run else f"  Updated: {stats['updated']}")
         print(f"  Skipped (no entities): {stats['skipped']}")
         print(f"  Already has entities: {stats['already_has']}")
+
+    elif cmd == "register-recall":
+        # Register memory IDs as recalled (for hooks that bypass ask)
+        # Used by user_prompt_submit.py and thought_priming.py to count
+        # their automatic semantic searches as real recalls.
+        ids = sys.argv[2:]
+        if not ids:
+            print("Usage: memory_manager.py register-recall <id1> [id2] ...")
+            sys.exit(1)
+        session_state.load()
+        for mid in ids:
+            session_state.add_retrieved(mid)
+        session_state.save()
+        print(f"Registered {len(ids)} recalls")
