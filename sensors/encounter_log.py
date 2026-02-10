@@ -7,9 +7,9 @@ When I see someone in a photo or know they're present during a sensor session,
 this logs the encounter and feeds it into the memory system.
 
 Integration points:
-  - Writes to memory/.session_contacts.json (WHO graph reads this)
+  - Writes session contacts to PostgreSQL KV (WHO graph reads this)
   - Stores encounter memories with contact_context tags
-  - Reads physical_entities.json for known entity catalog
+  - Reads physical_entities.json for known entity catalog (config, not operational)
 
 Usage:
     python encounter_log.py log <entity_id> [--context "sensor state"]
@@ -33,8 +33,13 @@ if __name__ == '__main__':
 SENSOR_DIR = Path(__file__).parent
 MEMORY_ROOT = SENSOR_DIR.parent / "memory"
 ENTITIES_FILE = SENSOR_DIR / "physical_entities.json"
-SESSION_CONTACTS_FILE = MEMORY_ROOT / ".session_contacts.json"
-ENCOUNTER_HISTORY = SENSOR_DIR / "data" / "encounter_history.jsonl"
+
+# DB adapter for PostgreSQL access
+sys.path.insert(0, str(MEMORY_ROOT))
+from db_adapter import get_db
+
+_SESSION_CONTACTS_KEY = '.session_contacts'
+_ENCOUNTER_HISTORY_KEY = '.encounter_history'
 
 
 def load_entities():
@@ -45,13 +50,16 @@ def load_entities():
 
 
 def load_session_contacts():
-    if not SESSION_CONTACTS_FILE.exists():
+    db = get_db()
+    data = db.kv_get(_SESSION_CONTACTS_KEY)
+    if data is None:
         return {"contacts": [], "encounters": []}
-    return json.loads(SESSION_CONTACTS_FILE.read_text(encoding='utf-8'))
+    return data
 
 
 def save_session_contacts(data):
-    SESSION_CONTACTS_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
+    db = get_db()
+    db.kv_set(_SESSION_CONTACTS_KEY, data)
 
 
 def get_sensor_state():
@@ -182,10 +190,13 @@ def log_encounter(entity_id, context=None, photo_path=None, activity=None):
         },
     }
 
-    # Append to history
-    ENCOUNTER_HISTORY.parent.mkdir(parents=True, exist_ok=True)
-    with open(ENCOUNTER_HISTORY, 'a', encoding='utf-8') as f:
-        f.write(json.dumps(encounter) + '\n')
+    # Append to encounter history in DB
+    db = get_db()
+    history = db.kv_get(_ENCOUNTER_HISTORY_KEY)
+    if history is None:
+        history = []
+    history.append(encounter)
+    db.kv_set(_ENCOUNTER_HISTORY_KEY, history)
 
     # Update session contacts (feeds WHO graph)
     session = load_session_contacts()
@@ -300,19 +311,15 @@ def show_entities():
 
 def show_history(entity_id=None):
     """Show encounter history, optionally filtered by entity."""
-    if not ENCOUNTER_HISTORY.exists():
+    db = get_db()
+    history = db.kv_get(_ENCOUNTER_HISTORY_KEY)
+    if not history:
         print("No encounter history yet")
         return
 
-    encounters = []
-    with open(ENCOUNTER_HISTORY, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                e = json.loads(line)
-                if entity_id and e.get('entity_id') != entity_id:
-                    continue
-                encounters.append(e)
+    encounters = history
+    if entity_id:
+        encounters = [e for e in encounters if e.get('entity_id') == entity_id]
 
     label = f"for {entity_id}" if entity_id else "(all)"
     print(f"ENCOUNTER HISTORY {label} — {len(encounters)} total")

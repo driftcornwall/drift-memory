@@ -32,6 +32,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from db_adapter import get_db
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -39,9 +41,9 @@ from typing import Optional
 # Master switch - can be toggled via environment variable
 ENABLED = os.environ.get('THOUGHT_PRIMING_ENABLED', 'false').lower() == 'true'
 
-# Also check config file for persistence
-CONFIG_FILE = Path(__file__).parent / "thought_priming_config.json"
-STATE_FILE = Path(__file__).parent / ".thought_priming_state.json"
+# DB keys for config and state
+_CONFIG_KEY = '.thought_priming_config'
+_STATE_KEY = '.thought_priming_state'
 
 # Cooldown: only fire every Nth tool call (reduces 200 searches to ~40)
 CALL_COOLDOWN = 5
@@ -53,28 +55,26 @@ def is_enabled() -> bool:
     if env_val is not None:
         return env_val.lower() == 'true'
 
-    # Check config file
-    if CONFIG_FILE.exists():
-        try:
-            config = json.loads(CONFIG_FILE.read_text())
-            return config.get('enabled', False)
-        except:
-            pass
+    # Check DB config — crash loud on DB failure so we notice infra problems
+    db = get_db()
+    config = db.kv_get(_CONFIG_KEY)
+    if config is not None:
+        return config.get('enabled', False)
 
     return False
 
 
 def enable():
     """Enable thought priming."""
-    config = {'enabled': True}
-    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+    db = get_db()
+    db.kv_set(_CONFIG_KEY, {'enabled': True})
     print("Thought priming ENABLED")
 
 
 def disable():
     """Disable thought priming."""
-    config = {'enabled': False}
-    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+    db = get_db()
+    db.kv_set(_CONFIG_KEY, {'enabled': False})
     print("Thought priming DISABLED")
 
 
@@ -82,32 +82,37 @@ def status():
     """Show current status."""
     enabled = is_enabled()
     print(f"Thought priming: {'ENABLED' if enabled else 'DISABLED'}")
-    if CONFIG_FILE.exists():
-        print(f"Config file: {CONFIG_FILE}")
+    print(f"Config store: PostgreSQL key '{_CONFIG_KEY}'")
 
 
 # =============================================================================
-# STATE MANAGEMENT (cross-call persistence via file)
+# STATE MANAGEMENT (cross-call persistence via PostgreSQL)
 # =============================================================================
 
 def _load_state(transcript_path: str) -> dict:
     """Load state, reset on new session (different transcript path)."""
     default = {"last_hash": "", "returned_ids": [], "call_count": 0, "transcript": ""}
-    if STATE_FILE.exists():
-        try:
-            state = json.loads(STATE_FILE.read_text())
-            if state.get("transcript") == transcript_path:
-                return state
-        except Exception:
-            pass
+    try:
+        db = get_db()
+        state = db.kv_get(_STATE_KEY)
+        if state is not None and state.get("transcript") == transcript_path:
+            return state
+    except Exception:
+        pass
     default["transcript"] = transcript_path
     return default
 
 
 def _save_state(state: dict):
-    """Persist state between calls."""
+    """Persist state between calls.
+
+    Wrapped in try/except because state save should never block the
+    conversation — a lost state update just means one redundant search
+    or a re-shown memory, which is harmless.
+    """
     try:
-        STATE_FILE.write_text(json.dumps(state))
+        db = get_db()
+        db.kv_set(_STATE_KEY, state)
     except Exception:
         pass
 

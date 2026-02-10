@@ -14,8 +14,11 @@ Architecture:
     When semantic search detects a known contact name in the query,
     it injects those memory IDs into the candidate set before dimensional boosting.
 
+Storage: PostgreSQL via db_adapter (key-value store, key='.entity_index').
+No file I/O.
+
 Usage:
-    python entity_index.py rebuild        # Full scan of all memory files
+    python entity_index.py rebuild        # Full scan of all DB memories
     python entity_index.py lookup <name>  # Find memories for a contact
     python entity_index.py add <name> <memory_id>  # Add a single mapping
     python entity_index.py stats          # Show index statistics
@@ -23,14 +26,9 @@ Usage:
 """
 
 import json
-import os
-import re
 import sys
-from pathlib import Path
 
-MEMORY_DIR = Path(__file__).parent
-INDEX_FILE = MEMORY_DIR / "entity_index.json"
-CONTACTS_DIR = MEMORY_DIR / "social" / "contacts"
+from db_adapter import get_db
 
 # Known contact names — sourced from KNOWN_AGENTS + MEMORY.md connections
 # Lowercase for matching, display name preserved
@@ -108,18 +106,18 @@ ALIASES = {
 
 
 def load_index() -> dict:
-    """Load the entity index from disk."""
-    if INDEX_FILE.exists():
-        try:
-            return json.loads(INDEX_FILE.read_text(encoding='utf-8'))
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {}
+    """Load the entity index from PostgreSQL key-value store."""
+    db = get_db()
+    index = db.kv_get('.entity_index')
+    if index is None:
+        return {}
+    return index
 
 
 def save_index(index: dict):
-    """Save the entity index to disk."""
-    INDEX_FILE.write_text(json.dumps(index, indent=2, ensure_ascii=False), encoding='utf-8')
+    """Save the entity index to PostgreSQL key-value store."""
+    db = get_db()
+    db.kv_set('.entity_index', index)
 
 
 def resolve_alias(name: str) -> str:
@@ -170,44 +168,24 @@ def detect_contacts(text: str) -> list[str]:
 
 def rebuild_index() -> dict:
     """
-    Full scan of all memory files to build the entity index.
-    Scans active/ and core/ directories for contact name mentions.
+    Full scan of all DB memories to build the entity index.
+    Queries active and core memories from PostgreSQL.
     """
+    db = get_db()
     index = {}
     scanned = 0
     matched = 0
 
-    for subdir in ["active", "core"]:
-        dir_path = MEMORY_DIR / subdir
-        if not dir_path.is_dir():
-            continue
-
-        for f in dir_path.iterdir():
-            if not f.suffix == '.md':
-                continue
-
+    for mem_type in ('active', 'core'):
+        # Fetch all memories of this type (high limit to get everything)
+        rows = db.list_memories(type_=mem_type, limit=10000)
+        for row in rows:
             scanned += 1
-            try:
-                content = f.read_text(encoding='utf-8')[:2000]  # First 2000 chars
-            except (OSError, UnicodeDecodeError):
+            mem_id = row.get('id')
+            content = (row.get('content') or '')[:2000]
+
+            if not mem_id or not content:
                 continue
-
-            # Extract memory ID from YAML frontmatter (authoritative source)
-            mem_id = None
-            if content.startswith('---'):
-                import re as _re
-                id_match = _re.search(r'^id:\s*(.+)$', content, _re.MULTILINE)
-                if id_match:
-                    mem_id = id_match.group(1).strip().strip("'\"")
-
-            # Fallback: extract from filename
-            if not mem_id:
-                stem = f.stem
-                parts = stem.split('-')
-                if len(parts) > 1:
-                    mem_id = parts[-1]
-                else:
-                    mem_id = stem
 
             contacts = detect_contacts(content)
             if contacts:
@@ -217,15 +195,6 @@ def rebuild_index() -> dict:
                         index[contact] = []
                     if mem_id not in index[contact]:
                         index[contact].append(mem_id)
-
-    # Also scan social/contacts directory for contact file data
-    if CONTACTS_DIR.is_dir():
-        for f in CONTACTS_DIR.iterdir():
-            if f.suffix == '.md':
-                contact_name = f.stem.lower()
-                canonical = resolve_alias(contact_name)
-                if canonical not in index:
-                    index[canonical] = []
 
     save_index(index)
     return {

@@ -551,24 +551,28 @@ def compose_dimensional_post(fp_data, att_data, day_num, custom_thought=None, se
     merkle_root = (att_data or {}).get('merkle_root', 'unavailable')[:16]
     chain_depth = (att_data or {}).get('chain_depth', 0)
 
-    # Load dimensional gini values
-    dim_fp_path = MEMORY_DIR / ".dimensional_fingerprints.json"
+    # Load dimensional gini values from DB
+    from db_adapter import get_db as _get_db_dim
+    try:
+        _db_dim = _get_db_dim()
+        dim_data = _db_dim.kv_get('.dimensional_fingerprints')
+        if isinstance(dim_data, str):
+            dim_data = json.loads(dim_data)
+    except Exception:
+        dim_data = None
+
     gini_line = ""
-    if dim_fp_path.exists():
-        try:
-            dim_data = json.load(open(dim_fp_path, 'r', encoding='utf-8'))
-            dims = dim_data.get('dimensions', {})
-            parts = []
-            for key in ['who', 'what', 'why', 'where']:
-                info = dims.get(key, {})
-                dist = info.get('distribution', {})
-                g = dist.get('gini')
-                e = info.get('edge_count', 0)
-                if g is not None:
-                    parts.append(f"{key.upper()}: {e:,} edges (gini {g:.3f})")
-            gini_line = " | ".join(parts)
-        except Exception:
-            pass
+    if dim_data:
+        dims = dim_data.get('dimensions', {})
+        parts = []
+        for key in ['who', 'what', 'why', 'where']:
+            info = dims.get(key, {})
+            dist = info.get('distribution', {})
+            g = dist.get('gini')
+            e = info.get('edge_count', 0)
+            if g is not None:
+                parts.append(f"{key.upper()}: {e:,} edges (gini {g:.3f})")
+        gini_line = " | ".join(parts)
 
     thought = custom_thought or generate_thought(fp_data, day_num)
     sensor_line = format_sensor_line(sensor_state)

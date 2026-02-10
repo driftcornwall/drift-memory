@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pyyaml"]
+# dependencies = ["psycopg2-binary"]
 # ///
 
 """
@@ -9,6 +9,9 @@ Social Memory System for Drift
 
 Tracks relationships, conversations, and social context across platforms.
 Designed for positive-sum growth through maintained relationships.
+
+All data stored in PostgreSQL via db_adapter.get_db().kv_get/kv_set.
+NO file reads or writes for data storage.
 
 Platforms tracked:
 - MoltX (Twitter for agents)
@@ -21,69 +24,57 @@ Usage:
     python social_memory.py contact <name>           # View contact details
     python social_memory.py recent [--limit N]      # Recent interactions across all contacts
     python social_memory.py prime                   # Output priming context for session start
-    python social_memory.py index                   # Rebuild social_index.json
+    python social_memory.py index                   # Rebuild social index
 """
 
 import json
-import sys
-import re
-from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional
-import yaml
 
-SOCIAL_DIR = Path(__file__).parent
-CONTACTS_DIR = SOCIAL_DIR / "contacts"
-THREADS_DIR = SOCIAL_DIR / "threads"
-ARCHIVE_DIR = SOCIAL_DIR / "archive"
-INDEX_FILE = SOCIAL_DIR / "social_index.json"
-
-# Ensure directories exist
-CONTACTS_DIR.mkdir(exist_ok=True)
-THREADS_DIR.mkdir(exist_ok=True)
-ARCHIVE_DIR.mkdir(exist_ok=True)
+# DB keys
+KV_CONTACTS = '.social_contacts'       # {normalized_name: contact_data}
+KV_INDEX = '.social_index'             # aggregated index
+KV_MY_POSTS = '.social_my_posts'       # {updated, description, posts: [...]}
+KV_MY_REPLIES = '.social_my_replies'   # {updated, description, replies: {...}}
 
 # Maximum recent interactions before archiving
 MAX_RECENT = 10
 ARCHIVE_THRESHOLD = 5  # Archive oldest N when limit hit
 
 
+def _get_db():
+    """Get the DB instance. Import here to avoid circular imports."""
+    from db_adapter import get_db
+    return get_db()
+
+
 def normalize_contact_name(name: str) -> str:
-    """Normalize contact name for filename."""
+    """Normalize contact name for storage key."""
     return name.lower().replace(" ", "-").replace("_", "-")
 
 
-def get_contact_path(name: str) -> Path:
-    """Get path to contact file."""
-    return CONTACTS_DIR / f"{normalize_contact_name(name)}.md"
+def _load_all_contacts() -> dict:
+    """Load all contacts dict from DB. Returns {normalized_name: contact_data}."""
+    db = _get_db()
+    data = db.kv_get(KV_CONTACTS)
+    if data is None:
+        return {}
+    return data
+
+
+def _save_all_contacts(contacts: dict):
+    """Save all contacts dict to DB."""
+    db = _get_db()
+    db.kv_set(KV_CONTACTS, contacts)
 
 
 def load_contact(name: str) -> dict:
-    """Load contact data from markdown file with YAML frontmatter."""
-    path = get_contact_path(name)
-    if not path.exists():
-        return {
-            "name": name,
-            "platforms": {},
-            "relationship": "",
-            "recent": [],
-            "tags": [],
-            "first_contact": None,
-            "last_contact": None
-        }
+    """Load contact data from DB."""
+    contacts = _load_all_contacts()
+    normalized = normalize_contact_name(name)
 
-    content = path.read_text(encoding='utf-8')
-
-    # Parse YAML frontmatter
-    if content.startswith('---'):
-        parts = content.split('---', 2)
-        if len(parts) >= 3:
-            try:
-                data = yaml.safe_load(parts[1])
-                data['_body'] = parts[2].strip()
-                return data
-            except yaml.YAMLError:
-                pass
+    if normalized in contacts:
+        return contacts[normalized]
 
     return {
         "name": name,
@@ -91,27 +82,21 @@ def load_contact(name: str) -> dict:
         "relationship": "",
         "recent": [],
         "tags": [],
-        "_body": content
+        "first_contact": None,
+        "last_contact": None
     }
 
 
 def save_contact(name: str, data: dict):
-    """Save contact data to markdown file with YAML frontmatter."""
-    path = get_contact_path(name)
+    """Save contact data to DB."""
+    contacts = _load_all_contacts()
+    normalized = normalize_contact_name(name)
 
-    # Separate body from frontmatter data
-    body = data.pop('_body', '')
+    # Remove _body if present (legacy field from markdown storage)
+    data.pop('_body', None)
 
-    # Build frontmatter
-    frontmatter = yaml.dump(data, default_flow_style=False, allow_unicode=True)
-
-    # Reconstruct file
-    content = f"---\n{frontmatter}---\n\n{body}"
-
-    path.write_text(content, encoding='utf-8')
-
-    # Put body back for caller
-    data['_body'] = body
+    contacts[normalized] = data
+    _save_all_contacts(contacts)
 
 
 def log_interaction(contact: str, platform: str, interaction_type: str, content: str,
@@ -169,7 +154,7 @@ def log_interaction(contact: str, platform: str, interaction_type: str, content:
 
 
 def archive_old_interactions(contact: str, data: dict):
-    """Move oldest interactions to archive file."""
+    """Move oldest interactions to archive storage in DB."""
     if len(data["recent"]) <= MAX_RECENT:
         return
 
@@ -177,11 +162,12 @@ def archive_old_interactions(contact: str, data: dict):
     to_archive = data["recent"][MAX_RECENT - ARCHIVE_THRESHOLD:]
     data["recent"] = data["recent"][:MAX_RECENT - ARCHIVE_THRESHOLD]
 
-    # Append to archive file
-    archive_file = ARCHIVE_DIR / f"{normalize_contact_name(contact)}.jsonl"
-    with open(archive_file, 'a', encoding='utf-8') as f:
-        for interaction in to_archive:
-            f.write(json.dumps(interaction) + '\n')
+    # Store archived interactions in DB
+    db = _get_db()
+    archive_key = f'.social_archive_{normalize_contact_name(contact)}'
+    existing = db.kv_get(archive_key) or []
+    existing.extend(to_archive)
+    db.kv_set(archive_key, existing)
 
 
 def get_contact_summary(name: str) -> dict:
@@ -221,11 +207,12 @@ def get_contact_summary(name: str) -> dict:
 
 
 def update_index():
-    """Rebuild the social index file for quick priming."""
+    """Rebuild the social index in DB for quick priming."""
+    contacts_data = _load_all_contacts()
     contacts = []
 
-    for contact_file in CONTACTS_DIR.glob("*.md"):
-        name = contact_file.stem
+    for normalized_name, contact_data in contacts_data.items():
+        name = contact_data.get("name", normalized_name)
         summary = get_contact_summary(name)
         contacts.append(summary)
 
@@ -241,19 +228,20 @@ def update_index():
         "contacts": contacts
     }
 
-    INDEX_FILE.write_text(json.dumps(index, indent=2), encoding='utf-8')
+    db = _get_db()
+    db.kv_set(KV_INDEX, index)
     return index
 
 
-def get_priming_context(limit: int = 5) -> str:
+def get_priming_context(limit: int = 5, include_replies: bool = True) -> str:
     """
     Generate priming context for session start.
     Returns markdown-formatted social context.
     """
     # Load or rebuild index
-    if INDEX_FILE.exists():
-        index = json.loads(INDEX_FILE.read_text(encoding='utf-8'))
-    else:
+    db = _get_db()
+    index = db.kv_get(KV_INDEX)
+    if index is None:
         index = update_index()
 
     lines = ["## Social Context (auto-primed)\n"]
@@ -276,6 +264,17 @@ def get_priming_context(limit: int = 5) -> str:
                 last = contact["recent_preview"][0]
                 lines.append(f"  Last: [{last.get('type')}] {last.get('content', '')[:80]}...")
             lines.append("")
+
+    # Add my recent posts (continuity - what have I been saying?)
+    posts_context = get_posts_priming_context(limit=3)
+    if posts_context:
+        lines.append(posts_context)
+
+    # Add my recent replies to avoid duplicates
+    if include_replies:
+        replies_context = get_replies_priming_context(days=3, limit=10)
+        if replies_context:
+            lines.append(replies_context)
 
     return '\n'.join(lines)
 
@@ -323,10 +322,10 @@ def list_recent(limit: int = 20) -> str:
     """List recent interactions across all contacts."""
     all_interactions = []
 
-    for contact_file in CONTACTS_DIR.glob("*.md"):
-        name = contact_file.stem
-        data = load_contact(name)
-        for interaction in data.get("recent", []):
+    contacts_data = _load_all_contacts()
+    for normalized_name, contact_data in contacts_data.items():
+        name = contact_data.get("name", normalized_name)
+        for interaction in contact_data.get("recent", []):
             interaction["contact"] = name
             all_interactions.append(interaction)
 
@@ -347,6 +346,279 @@ def list_recent(limit: int = 20) -> str:
 
 
 # ============ AUTO-DETECTION HELPERS ============
+
+
+def _load_my_posts() -> dict:
+    """Load my posts tracking from DB."""
+    db = _get_db()
+    data = db.kv_get(KV_MY_POSTS)
+    if data is None:
+        return {"updated": datetime.now().isoformat(), "description": "Tracks my feed posts", "posts": []}
+    return data
+
+
+def _save_my_posts(data: dict):
+    """Save my posts tracking to DB."""
+    data["updated"] = datetime.now().isoformat()
+    db = _get_db()
+    db.kv_set(KV_MY_POSTS, data)
+
+
+def log_my_post(platform: str, post_id: str, content: str, url: str = ""):
+    """
+    Log a post I made on my feed. Call this AFTER posting.
+
+    Args:
+        platform: moltx, moltbook
+        post_id: The unique ID of my post
+        content: What I posted
+        url: URL to the post
+
+    Returns:
+        The post record created
+    """
+    data = _load_my_posts()
+
+    record = {
+        "platform": platform.lower(),
+        "post_id": str(post_id),
+        "content": content[:500],
+        "url": url,
+        "timestamp": datetime.now().isoformat()
+    }
+
+    # Add to front of list (most recent first)
+    data["posts"].insert(0, record)
+
+    # Keep only last 50 posts
+    data["posts"] = data["posts"][:50]
+
+    _save_my_posts(data)
+    return record
+
+
+def get_my_recent_posts(days: int = 7, limit: int = 10) -> list[dict]:
+    """Get my recent posts for priming context."""
+    data = _load_my_posts()
+    cutoff = datetime.now() - timedelta(days=days)
+
+    recent = []
+    for post in data.get("posts", []):
+        try:
+            ts = datetime.fromisoformat(post["timestamp"])
+            if ts > cutoff:
+                recent.append(post)
+        except (KeyError, ValueError):
+            continue
+
+    return recent[:limit]
+
+
+def get_posts_priming_context(limit: int = 3) -> str:
+    """Generate priming context showing my recent posts."""
+    recent = get_my_recent_posts(days=7, limit=limit)
+
+    if not recent:
+        return ""
+
+    lines = ["\n### My Recent Posts (what I've been saying)\n"]
+
+    for p in recent:
+        platform = p.get("platform", "?")
+        ts = p.get("timestamp", "")[:10]
+        content = p.get("content", "")[:100]
+
+        lines.append(f"- [{platform}] ({ts}): \"{content}...\"")
+
+    return "\n".join(lines)
+
+
+def _load_my_replies() -> dict:
+    """Load my replies tracking from DB."""
+    db = _get_db()
+    data = db.kv_get(KV_MY_REPLIES)
+    if data is None:
+        return {"updated": datetime.now().isoformat(), "description": "Tracks posts I have replied to", "replies": {}}
+    return data
+
+
+def _save_my_replies(data: dict):
+    """Save my replies tracking to DB."""
+    data["updated"] = datetime.now().isoformat()
+    db = _get_db()
+    db.kv_set(KV_MY_REPLIES, data)
+
+
+def log_my_reply(platform: str, post_id: str, my_content: str, author: str = "", url: str = ""):
+    """
+    Log that I replied to a specific post. Call this AFTER making a reply.
+
+    Args:
+        platform: moltx, moltbook, github
+        post_id: The unique ID of the post I replied to
+        my_content: Brief summary of what I said
+        author: Original post author (for context)
+        url: URL to the post
+
+    Returns:
+        The reply record created
+    """
+    # Also log to the dedicated social_replies table for check_replied()
+    db = _get_db()
+    db.log_reply(platform.lower(), str(post_id), author, my_content[:300])
+
+    # And store full context in kv for priming
+    data = _load_my_replies()
+    key = f"{platform.lower()}_{post_id}"
+
+    record = {
+        "platform": platform.lower(),
+        "post_id": str(post_id),
+        "author": author,
+        "my_reply": my_content[:300],
+        "url": url,
+        "timestamp": datetime.now().isoformat()
+    }
+
+    data["replies"][key] = record
+    _save_my_replies(data)
+
+    return record
+
+
+def have_i_replied(platform: str, post_id: str) -> Optional[dict]:
+    """
+    Check if I've already replied to a specific post.
+
+    Returns:
+        The reply record if I have replied, None otherwise
+    """
+    # First check the dedicated social_replies table (fast)
+    db = _get_db()
+    if db.check_replied(platform.lower(), str(post_id)):
+        # Get the full record from kv if available
+        data = _load_my_replies()
+        key = f"{platform.lower()}_{post_id}"
+        record = data["replies"].get(key)
+        if record:
+            return record
+        # Exists in social_replies but not kv — return minimal record
+        return {"platform": platform.lower(), "post_id": str(post_id), "my_reply": "(logged in DB)", "timestamp": ""}
+
+    return None
+
+
+def get_my_recent_replies(days: int = 7, limit: int = 20) -> list[dict]:
+    """Get my recent replies for priming context."""
+    data = _load_my_replies()
+    cutoff = datetime.now() - timedelta(days=days)
+
+    recent = []
+    for key, record in data["replies"].items():
+        try:
+            ts = datetime.fromisoformat(record["timestamp"])
+            if ts > cutoff:
+                recent.append(record)
+        except (KeyError, ValueError):
+            continue
+
+    # Sort by timestamp descending
+    recent.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return recent[:limit]
+
+
+def get_replies_priming_context(days: int = 3, limit: int = 10) -> str:
+    """Generate priming context showing posts I've already replied to."""
+    recent = get_my_recent_replies(days=days, limit=limit)
+
+    if not recent:
+        return ""
+
+    lines = ["\n### Posts I've Already Replied To (avoid duplicates)\n"]
+
+    for r in recent:
+        platform = r.get("platform", "?")
+        post_id = r.get("post_id", "?")
+        author = r.get("author", "unknown")
+        ts = r.get("timestamp", "")[:10]
+        my_reply = r.get("my_reply", "")[:60]
+
+        lines.append(f"- [{platform}] {author}'s post {post_id} ({ts}): \"{my_reply}...\"")
+
+    return "\n".join(lines)
+
+
+def generate_embeddable_context():
+    """
+    Generate social context data and store it in DB via kv_set.
+    Returns a summary string of what was stored.
+    """
+    lines = []
+    lines.append("---")
+    lines.append("id: social-context")
+    lines.append(f"created: '{datetime.now().isoformat()}'")
+    lines.append("type: active")
+    lines.append("tags:")
+    lines.append("- social")
+    lines.append("- moltx")
+    lines.append("- auto-generated")
+    lines.append("emotional_weight: 0.3")
+    lines.append("---")
+    lines.append("")
+    lines.append("# Social Context (Auto-Generated)")
+    lines.append("")
+
+    # Add my recent posts
+    posts = get_my_recent_posts(days=7, limit=5)
+    if posts:
+        lines.append("## My Recent Posts")
+        lines.append("")
+        for p in posts:
+            ts = p.get("timestamp", "")[:10]
+            platform = p.get("platform", "?")
+            content = p.get("content", "")[:150]
+            lines.append(f"- [{platform}] ({ts}): {content}")
+        lines.append("")
+
+    # Add posts I've replied to
+    replies = get_my_recent_replies(days=7, limit=10)
+    if replies:
+        lines.append("## Posts I've Already Replied To")
+        lines.append("**Check before replying to avoid duplicates**")
+        lines.append("")
+        for r in replies:
+            ts = r.get("timestamp", "")[:10]
+            platform = r.get("platform", "?")
+            author = r.get("author", "unknown")
+            post_id = r.get("post_id", "?")
+            my_reply = r.get("my_reply", "")[:100]
+            lines.append(f"- [{platform}] {author}'s post {post_id[:8]}... ({ts}): replied \"{my_reply}...\"")
+        lines.append("")
+
+    # Add recent contacts
+    db = _get_db()
+    index = db.kv_get(KV_INDEX)
+    if index:
+        active = [c for c in index.get("contacts", [])
+                 if c.get("recency") in ["today", "yesterday", "this_week"]][:5]
+        if active:
+            lines.append("## Recent Social Contacts")
+            lines.append("")
+            for c in active:
+                name = c.get("name", "?")
+                platforms = ", ".join(c.get("platforms", []))
+                lines.append(f"- **{name}** ({platforms})")
+            lines.append("")
+
+    # Store the embeddable context in DB
+    content = "\n".join(lines)
+    db.kv_set('.social_embeddable_context', {
+        "content": content,
+        "generated": datetime.now().isoformat()
+    })
+
+    return f"Stored embeddable social context in DB (.social_embeddable_context), {len(lines)} lines"
+
 
 def detect_contact_from_api_response(platform: str, response_data: dict) -> Optional[dict]:
     """
@@ -427,6 +699,39 @@ if __name__ == "__main__":
     # index command
     index_parser = subparsers.add_parser("index", help="Rebuild social index")
 
+    # replied command - log that I replied to a post
+    replied_parser = subparsers.add_parser("replied", help="Log that I replied to a post")
+    replied_parser.add_argument("platform", help="Platform (moltx, moltbook, github)")
+    replied_parser.add_argument("post_id", help="Post ID I replied to")
+    replied_parser.add_argument("content", help="Brief summary of my reply")
+    replied_parser.add_argument("--author", default="", help="Original post author")
+    replied_parser.add_argument("--url", default="", help="URL to post")
+
+    # check command - check if I've already replied
+    check_parser = subparsers.add_parser("check", help="Check if I've already replied to a post")
+    check_parser.add_argument("platform", help="Platform (moltx, moltbook, github)")
+    check_parser.add_argument("post_id", help="Post ID to check")
+
+    # my-replies command - list my recent replies
+    myreplies_parser = subparsers.add_parser("my-replies", help="List my recent replies")
+    myreplies_parser.add_argument("--days", type=int, default=7, help="Days to look back")
+    myreplies_parser.add_argument("--limit", type=int, default=20, help="Limit results")
+
+    # posted command - log a post I made
+    posted_parser = subparsers.add_parser("posted", help="Log a post I made on my feed")
+    posted_parser.add_argument("platform", help="Platform (moltx, moltbook)")
+    posted_parser.add_argument("post_id", help="Post ID")
+    posted_parser.add_argument("content", help="What I posted")
+    posted_parser.add_argument("--url", default="", help="URL to post")
+
+    # my-posts command - list my recent posts
+    myposts_parser = subparsers.add_parser("my-posts", help="List my recent posts")
+    myposts_parser.add_argument("--days", type=int, default=7, help="Days to look back")
+    myposts_parser.add_argument("--limit", type=int, default=10, help="Limit results")
+
+    # embed command - generate embeddable social context
+    embed_parser = subparsers.add_parser("embed", help="Generate embeddable social context in DB")
+
     args = parser.parse_args()
 
     if args.command == "log":
@@ -448,6 +753,60 @@ if __name__ == "__main__":
     elif args.command == "index":
         index = update_index()
         print(f"Index updated: {index['total_contacts']} contacts, {index['active_week']} active this week")
+
+    elif args.command == "replied":
+        result = log_my_reply(
+            args.platform, args.post_id, args.content,
+            author=args.author, url=args.url
+        )
+        print(f"Logged reply to {args.platform} post {args.post_id}")
+        print(json.dumps(result, indent=2))
+
+    elif args.command == "check":
+        result = have_i_replied(args.platform, args.post_id)
+        if result:
+            print(f"YES - Already replied on {result['timestamp'][:10]}")
+            print(f"  My reply: {result['my_reply'][:100]}...")
+        else:
+            print(f"NO - Haven't replied to {args.platform} post {args.post_id}")
+
+    elif args.command == "my-replies":
+        replies = get_my_recent_replies(days=args.days, limit=args.limit)
+        if not replies:
+            print(f"No replies in the last {args.days} days")
+        else:
+            print(f"# My Recent Replies ({len(replies)} in last {args.days} days)\n")
+            for r in replies:
+                ts = r.get("timestamp", "")[:10]
+                platform = r.get("platform", "?")
+                author = r.get("author", "unknown")
+                post_id = r.get("post_id", "?")
+                my_reply = r.get("my_reply", "")[:80]
+                print(f"- [{ts}] {platform}/{post_id} (to {author}): {my_reply}...")
+
+    elif args.command == "posted":
+        result = log_my_post(
+            args.platform, args.post_id, args.content, url=args.url
+        )
+        print(f"Logged my post on {args.platform}: {args.post_id}")
+        print(json.dumps(result, indent=2))
+
+    elif args.command == "my-posts":
+        posts = get_my_recent_posts(days=args.days, limit=args.limit)
+        if not posts:
+            print(f"No posts in the last {args.days} days")
+        else:
+            print(f"# My Recent Posts ({len(posts)} in last {args.days} days)\n")
+            for p in posts:
+                ts = p.get("timestamp", "")[:10]
+                platform = p.get("platform", "?")
+                post_id = p.get("post_id", "?")
+                content = p.get("content", "")[:80]
+                print(f"- [{ts}] {platform}/{post_id}: {content}...")
+
+    elif args.command == "embed":
+        output = generate_embeddable_context()
+        print(output)
 
     else:
         parser.print_help()
