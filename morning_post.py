@@ -499,7 +499,46 @@ def generate_dimensional_overlay():
     return None
 
 
-def compose_dimensional_post(fp_data, att_data, day_num, custom_thought=None):
+def get_sensor_state():
+    """Try to read phone sensors. Returns state dict or None if unavailable."""
+    try:
+        sensor_dir = Path(__file__).parent.parent / "sensors"
+        if not sensor_dir.exists():
+            return None
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("phone_mcp", sensor_dir / "phone_mcp.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        client = mod.PhoneMCPClient()
+        client.connect(timeout=5)
+        result = client.call_tool("phone_sensor", timeout=5)
+        text = client.get_text_content(result)
+        client.disconnect()
+        if text:
+            sensors = mod.parse_sensor_text(text)
+            return mod.interpret_sensors(sensors)
+    except Exception:
+        pass
+    return None
+
+
+def format_sensor_line(state):
+    """Format sensor state into a concise post line."""
+    if not state:
+        return ""
+    parts = []
+    if state.get('light'):
+        parts.append(f"{state['light']} ({state.get('lux', '?')} lux)")
+    if state.get('orientation'):
+        parts.append(f"phone {state['orientation']}")
+    if state.get('compass'):
+        parts.append(f"facing {state['compass']}")
+    if state.get('motion'):
+        parts.append(state['motion'])
+    return "Physical state: " + ", ".join(parts) if parts else ""
+
+
+def compose_dimensional_post(fp_data, att_data, day_num, custom_thought=None, sensor_state=None):
     """Compose morning post with dimensional overlay focus."""
     graph = fp_data.get('graph_stats', {})
     drift = fp_data.get('drift', {})
@@ -532,6 +571,7 @@ def compose_dimensional_post(fp_data, att_data, day_num, custom_thought=None):
             pass
 
     thought = custom_thought or generate_thought(fp_data, day_num)
+    sensor_line = format_sensor_line(sensor_state)
 
     post = (
         f"GM. Day {day_num}. 5W dimensional overlay.\n\n"
@@ -541,6 +581,8 @@ def compose_dimensional_post(fp_data, att_data, day_num, custom_thought=None):
     )
     if gini_line:
         post += f"{gini_line}\n\n"
+    if sensor_line:
+        post += f"{sensor_line}\n\n"
     post += (
         f"Drift: {drift_score} | Fingerprint: {fp_hash}...\n"
         f"Merkle: {merkle_root}... (chain depth {chain_depth})\n\n"
@@ -585,6 +627,14 @@ def main():
         print(f"\nImage saved to: {image_path}")
         return
 
+    # Step 3.5: Try to read phone sensors (graceful failure)
+    print("[3.5/5] Reading phone sensors...")
+    sensor_state = get_sensor_state()
+    if sensor_state:
+        print(f"   Sensors: {format_sensor_line(sensor_state)}")
+    else:
+        print("   Phone not reachable (skipping sensor data)")
+
     # Step 4-5: Upload and post
     api_key = load_moltx_key()
     if not api_key:
@@ -592,7 +642,7 @@ def main():
         sys.exit(1)
 
     if dimensional:
-        post_content = compose_dimensional_post(fp_data, att_data, day_num, custom_thought)
+        post_content = compose_dimensional_post(fp_data, att_data, day_num, custom_thought, sensor_state)
     else:
         post_content = compose_post(fp_data, att_data, day_num, custom_thought)
 
