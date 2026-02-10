@@ -17,8 +17,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MEMORY_ROOT = Path(__file__).parent
-SESSION_FILE = MEMORY_ROOT / ".session_state.json"
-PENDING_COOCCURRENCE_FILE = MEMORY_ROOT / ".pending_cooccurrence.json"
 SESSION_TIMEOUT_HOURS = 4
 
 # Module-level state
@@ -30,6 +28,20 @@ _session_loaded: bool = False
 RECALL_SOURCES = ("manual", "start_priming", "thought_priming", "prompt_priming")
 
 
+def _start_db_session() -> None:
+    """Start a DB session. Raises on failure."""
+    global _db_session_id
+    from db_adapter import get_db
+    _db_session_id = get_db().start_session()
+
+_db_session_id = None
+
+
+def get_db_session_id():
+    """Get the current DB session ID (or None if not using DB)."""
+    return _db_session_id
+
+
 def load() -> None:
     """Load session state from file. Idempotent — only loads once per process."""
     global _session_retrieved, _recalls_by_source, _session_loaded
@@ -39,14 +51,19 @@ def load() -> None:
 
     _session_loaded = True
 
+    # Start a DB session
+    _start_db_session()
+
     # v2.16: Process pending co-occurrences from previous session (deferred)
-    if PENDING_COOCCURRENCE_FILE.exists():
-        try:
-            # Import from co_occurrence directly (not memory_manager) to avoid circular dep
+    # v3.0: Check DB KV store instead of file
+    try:
+        from db_adapter import get_db as _get_db_for_pending
+        pending = _get_db_for_pending().kv_get('.pending_cooccurrence')
+        if pending:
             from co_occurrence import process_pending_cooccurrence
             process_pending_cooccurrence()
-        except Exception as e:
-            print(f"Warning: Could not process pending co-occurrences: {e}")
+    except Exception as e:
+        print(f"Warning: Could not process pending co-occurrences: {e}")
 
     # v2.16: Process pending semantic indexing from previous session
     pending_index_file = MEMORY_ROOT / ".pending_index"
@@ -68,18 +85,21 @@ def load() -> None:
         except Exception as e:
             print(f"Warning: Could not process pending index: {e}")
 
-    if not SESSION_FILE.exists():
-        _session_retrieved = set()
-        return
-
+    # Load session state from DB KV store
     try:
-        data = json.loads(SESSION_FILE.read_text(encoding='utf-8'))
+        from db_adapter import get_db as _get_db_for_session
+        raw = _get_db_for_session().kv_get('.session_state')
+        if not raw:
+            _session_retrieved = set()
+            return
+
+        data = json.loads(raw) if isinstance(raw, str) else raw
         session_start = datetime.fromisoformat(data.get('started', '2000-01-01'))
 
         hours_old = (datetime.now(timezone.utc) - session_start).total_seconds() / 3600
         if hours_old > SESSION_TIMEOUT_HOURS:
             _session_retrieved = set()
-            SESSION_FILE.unlink(missing_ok=True)
+            _get_db_for_session().kv_set('.session_state', None)
         else:
             _session_retrieved = set(data.get('retrieved', []))
             _recalls_by_source = data.get('recalls_by_source', {})
@@ -89,14 +109,15 @@ def load() -> None:
 
 
 def save() -> None:
-    """Save session state to file."""
+    """Save session state to DB KV store."""
+    from db_adapter import get_db as _get_db_for_save
+    db = _get_db_for_save()
+
     started = datetime.now(timezone.utc).isoformat()
-    if SESSION_FILE.exists():
-        try:
-            data = json.loads(SESSION_FILE.read_text(encoding='utf-8'))
-            started = data.get('started', started)
-        except (json.JSONDecodeError, KeyError):
-            pass
+    existing = db.kv_get('.session_state')
+    if existing:
+        prev = json.loads(existing) if isinstance(existing, str) else existing
+        started = prev.get('started', started)
 
     data = {
         'started': started,
@@ -104,7 +125,7 @@ def save() -> None:
         'recalls_by_source': _recalls_by_source,
         'last_updated': datetime.now(timezone.utc).isoformat()
     }
-    SESSION_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
+    db.kv_set('.session_state', data)
 
 
 def get_retrieved() -> set[str]:
@@ -137,9 +158,18 @@ def get_recalls_by_source() -> dict[str, list[str]]:
 
 
 def clear() -> None:
-    """Clear session state and delete state file."""
-    global _session_retrieved, _session_loaded, _recalls_by_source
+    """Clear session state."""
+    global _session_retrieved, _session_loaded, _recalls_by_source, _db_session_id
     _session_retrieved = set()
     _recalls_by_source = {}
     _session_loaded = False
-    SESSION_FILE.unlink(missing_ok=True)
+
+    # Clear DB KV
+    from db_adapter import get_db
+    db = get_db()
+    db.kv_set('.session_state', None)
+
+    # End DB session
+    if _db_session_id is not None:
+        db.end_session(_db_session_id)
+        _db_session_id = None

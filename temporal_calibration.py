@@ -37,13 +37,8 @@ import json
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
-from pathlib import Path
 
-MEMORY_DIR = Path(__file__).parent
-CALIBRATION_FILE = MEMORY_DIR / ".calibration_history.json"
-EDGES_V3_FILE = MEMORY_DIR / ".edges_v3.json"
-CORE_DIR = MEMORY_DIR / "core"
-ACTIVE_DIR = MEMORY_DIR / "active"
+from db_adapter import get_db, db_to_file_metadata
 
 # Domain keywords for classifying what a hub connects to
 DOMAIN_KEYWORDS = {
@@ -66,39 +61,22 @@ TOP_HUBS = 10
 TOP_NEIGHBORS = 8
 
 
-def parse_memory_file(filepath):
-    """Parse a memory file into (metadata, content)."""
-    text = filepath.read_text(encoding='utf-8')
-    if not text.startswith('---'):
-        return {}, text
-    parts = text.split('---', 2)
-    if len(parts) < 3:
-        return {}, text
-    try:
-        import yaml
-        metadata = yaml.safe_load(parts[1]) or {}
-    except Exception:
-        metadata = {}
-    return metadata, parts[2].strip()
-
-
 def load_memory_content():
-    """Load all memory IDs, their content snippets, and tags."""
+    """Load all memory IDs, their content snippets, and tags from PostgreSQL."""
+    db = get_db()
+    rows = db.list_memories(type_filter=['core', 'active'])
     memories = {}
-    for directory in [CORE_DIR, ACTIVE_DIR]:
-        if not directory.exists():
+    for row in rows:
+        metadata, content = db_to_file_metadata(row)
+        mem_id = metadata.get('id')
+        if not mem_id:
             continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            mem_id = metadata.get('id')
-            if not mem_id:
-                continue
-            memories[mem_id] = {
-                'tags': metadata.get('tags', []),
-                'type': metadata.get('type', 'active'),
-                'recall_count': metadata.get('recall_count', 0),
-                'snippet': content[:200],
-            }
+        memories[mem_id] = {
+            'tags': metadata.get('tags', []),
+            'type': metadata.get('type', 'active'),
+            'recall_count': metadata.get('recall_count', 0),
+            'snippet': content[:200],
+        }
     return memories
 
 
@@ -114,35 +92,19 @@ def classify_domain(content, tags):
 
 
 def build_adjacency():
-    """Build adjacency map from edges_v3 or memory co-occurrences."""
+    """Build adjacency map from PostgreSQL edge data."""
+    db = get_db()
+    edges = db.get_all_edges()
     adjacency = defaultdict(dict)
 
-    if EDGES_V3_FILE.exists():
-        with open(EDGES_V3_FILE, 'r', encoding='utf-8') as f:
-            edges = json.load(f)
-        for pair_key, edge_data in edges.items():
-            parts = pair_key.split('|')
-            if len(parts) != 2:
-                continue
-            id1, id2 = parts
-            belief = edge_data.get('belief', 1.0)
-            adjacency[id1][id2] = belief
-            adjacency[id2][id1] = belief
-    else:
-        # Fallback to memory file co-occurrences
-        for directory in [CORE_DIR, ACTIVE_DIR]:
-            if not directory.exists():
-                continue
-            for filepath in directory.glob("*.md"):
-                metadata, _ = parse_memory_file(filepath)
-                mem_id = metadata.get('id')
-                if not mem_id:
-                    continue
-                co_occ = metadata.get('co_occurrences', {})
-                for other_id, weight in co_occ.items():
-                    adjacency[mem_id][other_id] = weight
-                    if mem_id not in adjacency[other_id]:
-                        adjacency[other_id][mem_id] = weight
+    for pair_key, edge_data in edges.items():
+        parts = pair_key.split('|')
+        if len(parts) != 2:
+            continue
+        id1, id2 = parts
+        belief = edge_data.get('belief', 1.0)
+        adjacency[id1][id2] = belief
+        adjacency[id2][id1] = belief
 
     return adjacency
 
@@ -215,17 +177,20 @@ def generate_reading(n_hubs=TOP_HUBS, n_neighbors=TOP_NEIGHBORS):
 
 
 def load_history():
-    """Load calibration history."""
-    if CALIBRATION_FILE.exists():
-        with open(CALIBRATION_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return []
+    """Load calibration history from PostgreSQL KV store."""
+    db = get_db()
+    data = db.kv_get('.calibration_history')
+    if data is None:
+        return []
+    if isinstance(data, str):
+        return json.loads(data)
+    return data
 
 
 def save_history(history):
-    """Save calibration history."""
-    with open(CALIBRATION_FILE, 'w', encoding='utf-8') as f:
-        json.dump(history, f, indent=2)
+    """Save calibration history to PostgreSQL KV store."""
+    db = get_db()
+    db.kv_set('.calibration_history', history)
 
 
 def compare_readings(current, previous):

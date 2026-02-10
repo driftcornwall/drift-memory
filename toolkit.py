@@ -33,6 +33,7 @@ TOOLKIT_CONFIG = {
     "has_reciprocity": False,
     "has_excavation": False,
     "has_telegram": True,
+    "has_twitter": True,
     "has_dashboard": True,
     "has_dimensional_viz": True,
     "has_temporal_calibration": True,
@@ -154,6 +155,20 @@ def build_registry():
             Command("tg-test", "comms", "Test Telegram connection", "telegram_bot", "test"),
         ]
 
+    # === TWITTER ===
+    if cfg.get("has_twitter"):
+        cmds += [
+            Command("tw-new", "social", "Check NEW mentions only", "@twitter/client", "new-mentions"),
+            Command("tw-mentions", "social", "Get all mentions", "@twitter/client", "mentions"),
+            Command("tw-post", "social", "Post a tweet", "@twitter/client", "post", "<text> [--reply-to ID]"),
+            Command("tw-like", "social", "Like a tweet", "@twitter/client", "like", "<tweet_id>"),
+            Command("tw-timeline", "social", "Get home timeline", "@twitter/client", "timeline"),
+            Command("tw-search", "social", "Search tweets", "@twitter/client", "search", "<query>"),
+            Command("tw-me", "social", "Get my profile", "@twitter/client", "me"),
+            Command("tw-state", "social", "Show interaction state", "@twitter/client", "state"),
+            Command("tw-contacts", "social", "Twitter contacts (5W log)", "@twitter/client", "contacts"),
+        ]
+
     # === DASHBOARD ===
     if cfg.get("has_dashboard"):
         cmds += [
@@ -204,7 +219,20 @@ REGISTRY = build_registry()
 
 
 def resolve_module(module_name):
-    """Lazy-import a module by name, handling subpackages."""
+    """Lazy-import a module by name, handling subpackages and external dirs."""
+    # Handle @dir/module syntax for modules outside memory/
+    if module_name.startswith('@'):
+        rel_path = module_name[1:]  # e.g. "twitter/client"
+        ext_path = MEMORY_ROOT.parent / rel_path.replace('/', os.sep)
+        ext_dir = ext_path.parent
+        mod_name = ext_path.stem
+        old_path = sys.path.copy()
+        sys.path.insert(0, str(ext_dir))
+        try:
+            return __import__(mod_name)
+        finally:
+            sys.path = old_path
+
     old_path = sys.path.copy()
     if str(MEMORY_ROOT) not in sys.path:
         sys.path.insert(0, str(MEMORY_ROOT))
@@ -379,22 +407,22 @@ def cmd_status():
     # [6] IDENTITY STACK
     print("[6] IDENTITY STACK")
     try:
-        import json
-        chain_file = MEMORY_ROOT / ".merkle_chain.json"
-        if chain_file.exists():
-            chain = json.loads(chain_file.read_text(encoding='utf-8'))
-            depth = len(chain) if isinstance(chain, list) else chain.get('depth', '?')
-            print(f"    Merkle chain: depth {depth}")
-        else:
-            print(f"    Merkle chain: not initialized")
-
-        rej_file = MEMORY_ROOT / ".rejection_log.json"
-        if rej_file.exists():
-            rejs = json.loads(rej_file.read_text(encoding='utf-8'))
-            items = rejs if isinstance(rejs, list) else rejs.get('rejections', [])
-            print(f"    Rejections logged: {len(items)}")
-        else:
-            print(f"    Rejections logged: 0")
+        from db_adapter import get_db as _get_db_dossier
+        db = _get_db_dossier()
+        # Merkle chain from attestations table
+        with db._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT data FROM {db._table('attestations')} ORDER BY timestamp DESC LIMIT 1")
+                row = cur.fetchone()
+                if row and row[0]:
+                    att_data = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+                    depth = att_data.get('chain_depth', '?')
+                    print(f"    Merkle chain: depth {depth}")
+                else:
+                    print(f"    Merkle chain: not initialized")
+        # Rejections from DB
+        cs = db.comprehensive_stats()
+        print(f"    Rejections logged: {cs.get('rejections', 0)}")
     except Exception as e:
         print(f"    [UNAVAILABLE] {e}")
     print()
@@ -424,14 +452,13 @@ def cmd_status():
     # [8] SEARCH INDEX
     print("[8] SEARCH INDEX")
     try:
-        idx_file = MEMORY_ROOT / ".embeddings_index.json"
-        if idx_file.exists():
-            import json
-            idx = json.loads(idx_file.read_text(encoding='utf-8'))
-            count = len(idx) if isinstance(idx, list) else idx.get('count', len(idx.get('embeddings', {})))
-            print(f"    Indexed memories: {count}")
-        else:
-            print(f"    Index: not built")
+        from db_adapter import get_db as _get_db_idx
+        db = _get_db_idx()
+        with db._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT COUNT(*) FROM {db._table('text_embeddings')}")
+                count = cur.fetchone()[0]
+        print(f"    Indexed memories: {count}")
     except Exception as e:
         print(f"    [UNAVAILABLE] {e}")
     print()
@@ -439,13 +466,14 @@ def cmd_status():
     # [9] SESSION
     print("[9] SESSION")
     try:
-        session_file = MEMORY_ROOT / ".session_state.json"
-        if session_file.exists():
-            import json
-            state = json.loads(session_file.read_text(encoding='utf-8'))
-            recalled = state.get('recalled_count', state.get('memories_recalled', 0))
-            started = state.get('started', state.get('session_start', '?'))
-            print(f"    Recalled this session: {recalled}")
+        from db_adapter import get_db as _get_db_sess
+        db = _get_db_sess()
+        raw = db.kv_get('.session_state')
+        if raw:
+            state = json.loads(raw) if isinstance(raw, str) else raw
+            retrieved = state.get('retrieved', [])
+            started = state.get('started', '?')
+            print(f"    Recalled this session: {len(retrieved)}")
             print(f"    Session started: {started}")
         else:
             print(f"    No active session")
@@ -518,11 +546,14 @@ def cmd_health():
             elif mod_name == "platform_context" and hasattr(mod, 'PLATFORMS'):
                 detail = f"({len(mod.PLATFORMS)} platforms)"
             elif mod_name == "gemma_bridge":
-                status = "WARN"
-                detail = "(requires Ollama)"
-                warned += 1
-                print(f"  {mod_name:<30s} {status:<6s} {detail}")
-                continue
+                if hasattr(mod, '_ollama_available') and mod._ollama_available():
+                    detail = "(Ollama running)"
+                else:
+                    status = "WARN"
+                    detail = "(Ollama not reachable)"
+                    warned += 1
+                    print(f"  {mod_name:<30s} {status:<6s} {detail}")
+                    continue
 
             passed += 1
             print(f"  {mod_name:<30s} {status:<6s} {detail}")

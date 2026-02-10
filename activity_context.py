@@ -25,11 +25,9 @@ Date: 2026-02-05
 """
 
 import io
-import json
 import sys
 from collections import Counter
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 # Fix Windows cp1252 encoding (only when running as main script)
@@ -38,14 +36,6 @@ if __name__ == '__main__':
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     if sys.stderr and hasattr(sys.stderr, 'buffer'):
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-
-MEMORY_ROOT = Path(__file__).parent
-ACTIVE_DIR = MEMORY_ROOT / "active"
-CORE_DIR = MEMORY_ROOT / "core"
-SEMANTIC_DIR = MEMORY_ROOT / "semantic"
-SESSION_ACTIVITY_FILE = MEMORY_ROOT / ".session_activity.json"
-SESSION_PLATFORMS_FILE = MEMORY_ROOT / ".session_platforms.json"
-SESSION_STATE_FILE = MEMORY_ROOT / ".session_state.json"
 
 # === Activity Types ===
 
@@ -214,25 +204,28 @@ def classify_session() -> dict:
             'source': 'auto_classify'
         }
     """
-    # Gather platform signals
+    # Gather platform signals from DB
     platforms = {}
-    if SESSION_PLATFORMS_FILE.exists():
-        try:
-            data = json.loads(SESSION_PLATFORMS_FILE.read_text(encoding='utf-8'))
-            for p in data.get('platforms', []):
+    from db_adapter import get_db
+    db = get_db()
+    row = db.kv_get('.session_platforms')
+    if row and isinstance(row, dict):
+        value = row.get('value', row)
+        if isinstance(value, dict):
+            for p in value.get('platforms', []):
                 platforms[p] = 1.0
-        except Exception:
-            pass
 
-    # Gather recalled memory tags
+    # Gather recalled memory tags from DB
     recalled_tags = []
-    if SESSION_STATE_FILE.exists():
-        try:
-            state = json.loads(SESSION_STATE_FILE.read_text(encoding='utf-8'))
-            recalled_ids = state.get('retrieved', [])
-            recalled_tags = _get_tags_for_memories(recalled_ids)
-        except Exception:
-            pass
+    recalled_ids = []
+    row = db.kv_get('.session_state')
+    if row and isinstance(row, dict):
+        value = row.get('value', row)
+        if isinstance(value, dict):
+            recalled_ids = value.get('retrieved', [])
+
+    if recalled_ids:
+        recalled_tags = _get_tags_for_memories(recalled_ids)
 
     # Detect activity from signals
     scores = detect_activity(platforms=platforms, recalled_tags=recalled_tags)
@@ -261,58 +254,31 @@ def classify_session() -> dict:
 
 def _get_tags_for_memories(memory_ids: list[str]) -> list[str]:
     """Look up tags for a list of memory IDs."""
-    import yaml
+    from db_adapter import get_db
 
     all_tags = []
+    db = get_db()
     for mem_id in memory_ids:
-        for directory in [CORE_DIR, ACTIVE_DIR]:
-            if not directory.exists():
-                continue
-            # Fast path: filename matches ID
-            filepath = directory / f"{mem_id}.md"
-            if filepath.exists():
-                try:
-                    text = filepath.read_text(encoding='utf-8', errors='replace')
-                    if text.startswith('---'):
-                        parts = text.split('---', 2)
-                        if len(parts) >= 3:
-                            metadata = yaml.safe_load(parts[1]) or {}
-                            all_tags.extend(metadata.get('tags', []))
-                except Exception:
-                    pass
-                break
-            # Slow path: scan frontmatter IDs
-            for fp in directory.glob("*.md"):
-                try:
-                    text = fp.read_text(encoding='utf-8', errors='replace')
-                    if text.startswith('---'):
-                        parts = text.split('---', 2)
-                        if len(parts) >= 3:
-                            metadata = yaml.safe_load(parts[1]) or {}
-                            if metadata.get('id') == mem_id:
-                                all_tags.extend(metadata.get('tags', []))
-                                break
-                except Exception:
-                    pass
+        row = db.get_memory(mem_id)
+        if row:
+            tags = row.get('tags', [])
+            if isinstance(tags, list):
+                all_tags.extend(tags)
 
     return all_tags
 
 
 def get_session_activity() -> Optional[dict]:
     """
-    Get session activity context.
-
-    First checks .session_activity.json (from real-time tracking).
+    Get session activity context from DB KV store.
     Falls back to classify_session() if not available.
     """
-    # Check for real-time tracked data
-    if SESSION_ACTIVITY_FILE.exists():
-        try:
-            data = json.loads(SESSION_ACTIVITY_FILE.read_text(encoding='utf-8'))
-            if data.get('dominant'):
-                return data
-        except Exception:
-            pass
+    from db_adapter import get_db
+    row = get_db().kv_get('.session_activity')
+    if row and isinstance(row, dict):
+        value = row.get('value', row)
+        if isinstance(value, dict) and value.get('dominant'):
+            return value
 
     # Fall back to classification
     return classify_session()
@@ -326,12 +292,16 @@ def track_activity(activity_type: str):
     if activity_type not in ACTIVITY_TYPES:
         return
 
+    from db_adapter import get_db
+    db = get_db()
+
+    # Load existing data from DB
     data = {'scores': {}, 'events': [], 'dominant': None, 'secondary': []}
-    if SESSION_ACTIVITY_FILE.exists():
-        try:
-            data = json.loads(SESSION_ACTIVITY_FILE.read_text(encoding='utf-8'))
-        except Exception:
-            pass
+    existing = db.kv_get('.session_activity')
+    if existing and isinstance(existing, dict):
+        value = existing.get('value', existing)
+        if isinstance(value, dict):
+            data = value
 
     # Increment score
     scores = data.get('scores', {})
@@ -352,31 +322,36 @@ def track_activity(activity_type: str):
     data['classified_at'] = datetime.now(timezone.utc).isoformat()
     data['source'] = 'real_time'
 
-    SESSION_ACTIVITY_FILE.write_text(
-        json.dumps(data, indent=2), encoding='utf-8'
-    )
+    db.kv_set('.session_activity', data)
 
 
 def clear_session_activity():
     """Clear session activity tracking (called at session end)."""
-    SESSION_ACTIVITY_FILE.unlink(missing_ok=True)
+    from db_adapter import get_db
+    db = get_db()
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"DELETE FROM {db._table('key_value_store')} WHERE key = %s",
+                ('.session_activity',)
+            )
 
 
 def backfill_edge_activity(dry_run: bool = False) -> dict:
     """
-    Backfill activity context into existing .edges_v3.json edges.
+    Backfill activity context into existing edges in PostgreSQL.
 
-    Infers activity from each observation's platform field +
-    the platform_context already on the edge.
+    Infers activity from each edge's platform_context field.
 
     Returns stats about what was updated.
     """
-    edges_file = MEMORY_ROOT / ".edges_v3.json"
-    if not edges_file.exists():
-        print("No .edges_v3.json found.")
-        return {'total': 0, 'updated': 0}
+    from db_adapter import get_db
+    db = get_db()
+    edges = db.get_all_edges()
 
-    edges = json.loads(edges_file.read_text(encoding='utf-8'))
+    if not edges:
+        print("No edges found in database.")
+        return {'total': 0, 'updated': 0}
 
     stats = {
         'total': len(edges),
@@ -393,19 +368,8 @@ def backfill_edge_activity(dry_run: bool = False) -> dict:
             stats['skipped_existing'] += 1
             continue
 
-        # Infer activity from observations and platform_context
+        # Infer activity from edge-level platform_context
         inferred = Counter()
-
-        # Method 1: From observation platform fields
-        for obs in edge.get('observations', []):
-            platform_str = obs.get('source', {}).get('platform') or ''
-            for platform in platform_str.split(','):
-                platform = platform.strip()
-                if platform in PLATFORM_ACTIVITY_MAP:
-                    for activity, weight in PLATFORM_ACTIVITY_MAP[platform].items():
-                        inferred[activity] += weight
-
-        # Method 2: From edge-level platform_context
         platform_ctx = edge.get('platform_context', {})
         for platform, count in platform_ctx.items():
             if platform.startswith('_'):
@@ -418,32 +382,34 @@ def backfill_edge_activity(dry_run: bool = False) -> dict:
             stats['no_signal'] += 1
             continue
 
-        # Normalize to integer counts (approximate number of observations
-        # per activity type)
+        # Normalize to proportional counts
         total = sum(inferred.values())
-        num_obs = len(edge.get('observations', []))
         activity_context = {}
         for activity, score in inferred.items():
-            count = max(1, round(score / total * num_obs))
+            count = max(1, round(score / total))
             activity_context[activity] = count
             stats['activity_counts'][activity] += count
 
-        edge['activity_context'] = activity_context
         stats['updated'] += 1
 
-    if not dry_run:
-        edges_file.write_text(json.dumps(edges, indent=2), encoding='utf-8')
+        if not dry_run:
+            id1, id2 = pair_key.split('|')
+            db.upsert_edge(
+                id1, id2,
+                belief=edge.get('belief', 0),
+                platform_context=edge.get('platform_context', {}),
+                activity_context=activity_context,
+                topic_context=edge.get('topic_context', {}),
+            )
 
     return stats
 
 
 def activity_stats() -> dict:
-    """Get activity context statistics from edges."""
-    edges_file = MEMORY_ROOT / ".edges_v3.json"
-    if not edges_file.exists():
-        return {'total_edges': 0, 'tagged': 0}
-
-    edges = json.loads(edges_file.read_text(encoding='utf-8'))
+    """Get activity context statistics from edges in PostgreSQL."""
+    from db_adapter import get_db
+    db = get_db()
+    edges = db.get_all_edges()
 
     total = len(edges)
     tagged = 0
@@ -543,21 +509,24 @@ if __name__ == '__main__':
 
 def get_activity_stats() -> dict:
     """Get activity distribution stats for 5W attestation."""
-    from collections import defaultdict
-    stats = defaultdict(int)
-    
-    for directory in [MEMORY_ROOT / "core", MEMORY_ROOT / "active", MEMORY_ROOT / "archive"]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            try:
-                text = filepath.read_text(encoding='utf-8')
-                if 'activity_context:' in text:
-                    import re
-                    match = re.search(r'activity_context:\s*(\w+)', text)
-                    if match:
-                        stats[match.group(1)] += 1
-            except:
-                pass
-    
+    from db_adapter import get_db
+    import psycopg2.extras
+
+    db = get_db()
+    stats = Counter()
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT extra_metadata->'activity_context' as activity
+                FROM {db._table('memories')}
+                WHERE type IN ('core', 'active', 'archive')
+                AND extra_metadata ? 'activity_context'
+            """)
+            for row in cur.fetchall():
+                act = row.get('activity')
+                if act and isinstance(act, str):
+                    # Remove JSON quotes if present
+                    act = act.strip('"')
+                    stats[act] += 1
+
     return {'by_activity': dict(stats)}

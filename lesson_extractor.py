@@ -54,15 +54,40 @@ CATEGORIES = {
 
 
 def load_lessons():
-    if LESSONS_FILE.exists():
-        with open(LESSONS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+    from db_adapter import get_db
+    db = get_db()
+    rows = db.get_lessons()
+    if rows:
+        lessons = []
+        for r in rows:
+            entry = {
+                'id': r.get('id', ''),
+                'category': r.get('category', ''),
+                'lesson': r.get('lesson', ''),
+                'evidence': r.get('evidence', ''),
+                'source': r.get('source', 'manual'),
+                'confidence': float(r.get('confidence', 0.7)),
+                'created': r['created'].isoformat() if hasattr(r.get('created'), 'isoformat') else str(r.get('created', '')),
+                'recalled_count': r.get('recalled_count', 0),
+                'last_recalled': r['last_recalled'].isoformat() if r.get('last_recalled') and hasattr(r['last_recalled'], 'isoformat') else r.get('last_recalled'),
+            }
+            lessons.append(entry)
+        return lessons
     return []
 
 
 def save_lessons(lessons):
-    with open(LESSONS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(lessons, f, indent=2, ensure_ascii=False)
+    from db_adapter import get_db
+    db = get_db()
+    for lesson in lessons:
+        db.add_lesson(
+            lesson_id=lesson.get('id', ''),
+            category=lesson.get('category', ''),
+            lesson=lesson.get('lesson', ''),
+            evidence=lesson.get('evidence', ''),
+            source=lesson.get('source', 'manual'),
+            confidence=float(lesson.get('confidence', 0.7)),
+        )
 
 
 def generate_id(lesson_text):
@@ -93,6 +118,7 @@ def add_lesson(category, lesson, evidence='', source='manual', confidence=0.7):
 
     lessons.append(entry)
     save_lessons(lessons)
+
     return entry
 
 
@@ -179,15 +205,16 @@ def mine_memory_md():
 
 def mine_rejections():
     """Extract decision heuristics from rejection log patterns."""
-    log_file = MEMORY_DIR / '.rejection_log.json'
-    if not log_file.exists():
-        print('No rejection log found')
+    try:
+        from rejection_log import get_rejections
+        rejections = get_rejections(limit=10000)
+    except Exception as e:
+        print(f'Could not load rejections from DB: {e}')
         return []
 
-    with open(log_file, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-
-    rejections = data.get('rejections', data) if isinstance(data, dict) else data
+    if not rejections:
+        print('No rejections found')
+        return []
 
     by_category = {}
     for r in rejections:
@@ -345,14 +372,17 @@ def apply_lessons(situation):
             print(f'    Evidence: {lesson["evidence"][:100]}')
         print()
 
-    # Update recall counts
-    all_lessons = load_lessons()
+    # Update recall counts in DB
+    from db_adapter import get_db
+    db = get_db()
     recalled_ids = {l['id'] for _, l in scored[:3]}
-    for lesson in all_lessons:
-        if lesson['id'] in recalled_ids:
-            lesson['recalled_count'] = lesson.get('recalled_count', 0) + 1
-            lesson['last_recalled'] = datetime.now(timezone.utc).isoformat()
-    save_lessons(all_lessons)
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            for rid in recalled_ids:
+                cur.execute(
+                    f"UPDATE {db._table('lessons')} SET recalled_count = recalled_count + 1, last_recalled = NOW() WHERE id = %s",
+                    (rid,)
+                )
 
     return [l for _, l in scored[:5]]
 
@@ -390,14 +420,17 @@ def get_priming_lessons(context_keywords=None, max_lessons=5):
         text = lesson['lesson'][:150]
         lines.append(f"  [{cat}] {text}")
 
-    # Update recall counts
-    all_lessons = load_lessons()
+    # Update recall counts in DB
+    from db_adapter import get_db
+    db = get_db()
     selected_ids = {l['id'] for l in selected}
-    for lesson in all_lessons:
-        if lesson['id'] in selected_ids:
-            lesson['recalled_count'] = lesson.get('recalled_count', 0) + 1
-            lesson['last_recalled'] = datetime.now(timezone.utc).isoformat()
-    save_lessons(all_lessons)
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            for rid in selected_ids:
+                cur.execute(
+                    f"UPDATE {db._table('lessons')} SET recalled_count = recalled_count + 1, last_recalled = NOW() WHERE id = %s",
+                    (rid,)
+                )
 
     return "\n".join(lines)
 
@@ -438,13 +471,17 @@ def get_contextual_lessons(situation, max_lessons=3):
         text = lesson['lesson'][:200]
         lines.append(f"  [{cat}] {text}")
 
-    all_lessons = load_lessons()
+    # Update recall counts in DB
+    from db_adapter import get_db
+    db = get_db()
     selected_ids = {l['id'] for l in selected}
-    for lesson in all_lessons:
-        if lesson['id'] in selected_ids:
-            lesson['recalled_count'] = lesson.get('recalled_count', 0) + 1
-            lesson['last_recalled'] = datetime.now(timezone.utc).isoformat()
-    save_lessons(all_lessons)
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            for rid in selected_ids:
+                cur.execute(
+                    f"UPDATE {db._table('lessons')} SET recalled_count = recalled_count + 1, last_recalled = NOW() WHERE id = %s",
+                    (rid,)
+                )
 
     return "\n".join(lines)
 

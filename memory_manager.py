@@ -18,12 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-# Phase 2 extraction: shared infrastructure (constants, parse/write)
-from memory_common import (
-    MEMORY_ROOT, CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR, ALL_DIRS,
-    SESSION_FILE, PENDING_COOCCURRENCE_FILE,
-    parse_memory_file, write_memory_file,
-)
+# Phase 2 extraction: shared infrastructure (constants)
+from memory_common import MEMORY_ROOT
 
 # Phase 5 extraction: co-occurrence system (logging, edge provenance, pair decay)
 from co_occurrence import (
@@ -82,35 +78,30 @@ from decay_evolution import (
 
 def recall_memory(memory_id: str) -> Optional[tuple[dict, str]]:
     """
-    Recall a memory by ID, updating its metadata.
-    Searches all directories. Tracks co-occurrence with other memories retrieved this session.
+    Recall a memory by ID, updating its metadata. DB-only.
+    Tracks co-occurrence with other memories retrieved this session.
     Session state persists to disk so it survives Python process restarts.
     """
+    from db_adapter import get_db, db_to_file_metadata
+
     session_state.load()
 
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob(f"*-{memory_id}.md"):
-            metadata, content = parse_memory_file(filepath)
+    db = get_db()
+    row = db.recall_memory(memory_id)
+    if not row:
+        return None
 
-            # Update recall metadata
-            metadata['last_recalled'] = datetime.now(timezone.utc).isoformat()
-            metadata['recall_count'] = metadata.get('recall_count', 0) + 1
-            metadata['sessions_since_recall'] = 0
+    # Bump emotional weight in DB
+    current_weight = row.get('emotional_weight', 0.5)
+    new_weight = min(1.0, float(current_weight) + 0.05)
+    db.update_memory(memory_id, emotional_weight=new_weight)
+    row['emotional_weight'] = new_weight
 
-            # Utility increases with each recall
-            current_weight = metadata.get('emotional_weight', 0.5)
-            metadata['emotional_weight'] = min(1.0, current_weight + 0.05)
+    session_state.add_retrieved(memory_id)
+    session_state.save()
 
-            # Track co-occurrence with other memories retrieved this session
-            session_state.add_retrieved(memory_id)
-            session_state.save()
-
-            write_memory_file(filepath, metadata, content)
-            return metadata, content
-
-    return None
+    metadata, content = db_to_file_metadata(row)
+    return metadata, content
 
 
 def get_session_retrieved() -> set[str]:
@@ -128,16 +119,18 @@ def clear_session() -> None:
 
 
 def list_all_tags() -> dict[str, int]:
-    """Get all tags across all memories with counts."""
-    tag_counts = {}
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, _ = parse_memory_file(filepath)
-            for tag in metadata.get('tags', []):
-                tag_counts[tag] = tag_counts.get(tag, 0) + 1
-    return dict(sorted(tag_counts.items(), key=lambda x: x[1], reverse=True))
+    """Get all tags across all memories with counts. DB-only."""
+    from db_adapter import get_db
+    import psycopg2.extras
+    db = get_db()
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT unnest(tags) AS tag, COUNT(*) AS cnt
+                FROM {db._table('memories')}
+                GROUP BY tag ORDER BY cnt DESC
+            """)
+            return {row[0]: row[1] for row in cur.fetchall()}
 
 
 # ============================================================================
@@ -155,61 +148,46 @@ def get_comprehensive_stats() -> dict:
     - cooccurrence_stats: pair counts, link rates
     - session_stats: current session info
     """
-    # Memory counts by type
-    core_count = len(list(CORE_DIR.glob('*.md'))) if CORE_DIR.exists() else 0
-    active_count = len(list(ACTIVE_DIR.glob('*.md'))) if ACTIVE_DIR.exists() else 0
-    archive_count = len(list(ARCHIVE_DIR.glob('*.md'))) if ARCHIVE_DIR.exists() else 0
+    from db_adapter import get_db
+    import psycopg2.extras
 
-    # Co-occurrence stats - scan all memories
-    total_pairs = 0
-    total_count = 0
-    unique_pairs = set()
+    db = get_db()
+    db_stats = db.comprehensive_stats()
 
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, _ = parse_memory_file(filepath)
-            memory_id = metadata.get('id')
-            if not memory_id:
-                continue
-            co_occurrences = metadata.get('co_occurrences', {})
+    # Co-occurrence stats from co_occurrences table
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT COUNT(*), COALESCE(SUM(max_count), 0) FROM (
+                    SELECT MAX(count) as max_count
+                    FROM {db._table('co_occurrences')}
+                    GROUP BY LEAST(memory_id, other_id), GREATEST(memory_id, other_id)
+                ) sub
+            """)
+            row = cur.fetchone()
+            unique_pairs = row[0]
+            total_count = float(row[1])
 
-            for other_id, count in co_occurrences.items():
-                if not other_id:
-                    continue
-                # Normalize pair to avoid double counting
-                pair = tuple(sorted([memory_id, other_id]))
-                if pair not in unique_pairs:
-                    unique_pairs.add(pair)
-                    total_pairs += 1
-                    total_count += count
-
-    avg_count = total_count / total_pairs if total_pairs > 0 else 0
-
-    # Session stats
+    avg_count = total_count / unique_pairs if unique_pairs > 0 else 0
     session_recalls = len(session_state.get_retrieved())
 
-    # Decay history (if tracked)
-    decay_file = MEMORY_ROOT / ".decay_history.json"
+    # Decay history from DB key-value store (fallback to file for backward compat)
     last_decay = {"decayed": 0, "pruned": 0}
-    if decay_file.exists():
-        try:
-            history = json.loads(decay_file.read_text(encoding='utf-8'))
-            if history.get('sessions'):
-                last_decay = history['sessions'][-1]
-        except (json.JSONDecodeError, KeyError):
-            pass
+    decay_json = db.kv_get('.decay_history')
+    if decay_json:
+        history = json.loads(decay_json) if isinstance(decay_json, str) else decay_json
+        if history.get('sessions'):
+            last_decay = history['sessions'][-1]
 
     return {
         "memory_stats": {
-            "total": core_count + active_count + archive_count,
-            "core": core_count,
-            "active": active_count,
-            "archive": archive_count
+            "total": db_stats['total_memories'],
+            "core": db_stats['memories'].get('core', 0),
+            "active": db_stats['memories'].get('active', 0),
+            "archive": db_stats['memories'].get('archive', 0)
         },
         "cooccurrence_stats": {
-            "active_pairs": total_pairs,
+            "active_pairs": unique_pairs,
             "total_count": total_count,
             "avg_count_per_pair": round(avg_count, 2)
         },
@@ -221,7 +199,8 @@ def get_comprehensive_stats() -> dict:
         "config": {
             "decay_rate": PAIR_DECAY_RATE,
             "session_timeout_hours": SESSION_TIMEOUT_HOURS
-        }
+        },
+        "source": "database"
     }
 
 
@@ -296,20 +275,18 @@ def get_priming_candidates(
         })
         seen_ids.add(mem_id)
 
-    # Phase 2: Co-occurrence expansion
+    # Phase 2: Co-occurrence expansion (DB-only)
+    from db_adapter import get_db, db_to_file_metadata
+    db = get_db()
+
     for mem_id, _, _, _ in activated:
         co_occurring = find_co_occurring_memories(mem_id, limit=cooccur_per_memory)
         for other_id, count in co_occurring:
             if other_id not in seen_ids:
-                # Get preview for co-occurring memory
                 preview = ""
-                for directory in [CORE_DIR, ACTIVE_DIR]:
-                    if not directory.exists():
-                        continue
-                    for filepath in directory.glob(f"*-{other_id}.md"):
-                        _, content = parse_memory_file(filepath)
-                        preview = content[:100]
-                        break
+                row = db.get_memory(other_id)
+                if row:
+                    preview = (row.get('content') or '')[:100]
 
                 result['cooccurring'].append({
                     'id': other_id,
@@ -320,72 +297,57 @@ def get_priming_candidates(
                 })
                 seen_ids.add(other_id)
 
-    # Phase 3: Unfinished work scan
+    # Phase 3: Unfinished work scan (DB-only)
     if include_unfinished:
-        unfinished_keywords = ['pending', 'in-progress', 'todo', 'will do', 'need to', 'should', 'next:']
         unfinished_tags = ['pending', 'in-progress', 'todo', 'blocked']
+        import psycopg2.extras
+        with db._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(f"""
+                    SELECT id, content, tags FROM {db._table('memories')}
+                    WHERE type = 'active'
+                    AND (tags && %s::text[] OR content ILIKE ANY(%s))
+                    LIMIT 3
+                """, (
+                    unfinished_tags,
+                    ['%pending%', '%in-progress%', '%todo%', '%will do%', '%need to%']
+                ))
+                for row in cur.fetchall():
+                    mem_id = row['id']
+                    if mem_id not in seen_ids:
+                        tags = row.get('tags', [])
+                        has_tag = any(t in tags for t in unfinished_tags)
+                        result['unfinished'].append({
+                            'id': mem_id,
+                            'preview': (row.get('content') or '')[:100],
+                            'source': 'unfinished',
+                            'match': 'tag' if has_tag else 'keyword'
+                        })
+                        seen_ids.add(mem_id)
 
-        for directory in [ACTIVE_DIR]:
-            if not directory.exists():
-                continue
-            for filepath in directory.glob("*.md"):
-                metadata, content = parse_memory_file(filepath)
-                mem_id = metadata.get('id', filepath.stem)
-
-                if mem_id in seen_ids:
-                    continue
-
-                tags = metadata.get('tags', [])
-                content_lower = content.lower()
-
-                # Check tags
-                has_unfinished_tag = any(t in tags for t in unfinished_tags)
-                # Check content
-                has_unfinished_keyword = any(kw in content_lower for kw in unfinished_keywords)
-
-                if has_unfinished_tag or has_unfinished_keyword:
-                    result['unfinished'].append({
+    # Phase 4: Dead memory excavation (DB-only, read-only)
+    from decay_evolution import GRACE_PERIOD_SESSIONS
+    import psycopg2.extras
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT id, content, sessions_since_recall FROM {db._table('memories')}
+                WHERE type = 'active' AND recall_count = 0
+                AND sessions_since_recall > %s
+                ORDER BY RANDOM() LIMIT 2
+            """, (GRACE_PERIOD_SESSIONS,))
+            for row in cur.fetchall():
+                mem_id = row['id']
+                if mem_id not in seen_ids:
+                    result['excavated'].append({
                         'id': mem_id,
-                        'preview': content[:100],
-                        'source': 'unfinished',
-                        'match': 'tag' if has_unfinished_tag else 'keyword'
+                        'preview': (row.get('content') or '')[:100],
+                        'source': 'excavation',
+                        'sessions_dead': row.get('sessions_since_recall', 0)
                     })
                     seen_ids.add(mem_id)
 
-                    # Limit unfinished to avoid overwhelm
-                    if len(result['unfinished']) >= 3:
-                        break
-            if len(result['unfinished']) >= 3:
-                break
-
-    # Phase 4: Dead memory excavation (read-only, NOT counted as recall)
-    from decay_evolution import GRACE_PERIOD_SESSIONS
-    dead_pool = []
-    for directory in [ACTIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            mem_id = metadata.get('id', filepath.stem)
-            if mem_id in seen_ids:
-                continue
-            recall_count = metadata.get('recall_count', 0)
-            sessions_since = metadata.get('sessions_since_recall', 0)
-            if recall_count == 0 and sessions_since > GRACE_PERIOD_SESSIONS:
-                dead_pool.append((mem_id, content[:100], metadata))
-
-    if dead_pool:
-        excavated = random.sample(dead_pool, min(2, len(dead_pool)))
-        for mem_id, preview, metadata in excavated:
-            result['excavated'].append({
-                'id': mem_id,
-                'preview': preview,
-                'source': 'excavation',
-                'sessions_dead': metadata.get('sessions_since_recall', 0)
-            })
-            seen_ids.add(mem_id)
-
-    # Phase 5: Domain-aware priming (read-only, 1 slot for under-represented domain)
+    # Phase 5: Domain-aware priming (DB-only)
     result['domain_primed'] = []
     try:
         COGNITIVE_DOMAINS = {
@@ -399,36 +361,29 @@ def get_priming_candidates(
                          'attestation', 'critical'],
         }
 
-        # Count domains already in result
+        # Count domains in already-selected memories
         domain_counts = {d: 0 for d in COGNITIVE_DOMAINS}
         for item in result['activated'] + result['cooccurring']:
-            mem_id = item['id']
-            for directory in [CORE_DIR, ACTIVE_DIR]:
-                for filepath in directory.glob(f"*{mem_id}*.md"):
-                    metadata, _ = parse_memory_file(filepath)
-                    tags = set(metadata.get('tags', []))
-                    for domain, domain_tags in COGNITIVE_DOMAINS.items():
-                        if tags & set(domain_tags):
-                            domain_counts[domain] += 1
-                    break
+            row = db.get_memory(item['id'])
+            if row:
+                tags = set(row.get('tags', []))
+                for domain, domain_tags in COGNITIVE_DOMAINS.items():
+                    if tags & set(domain_tags):
+                        domain_counts[domain] += 1
 
-        # Find least-represented domain (excluding 0-count domains with no memories)
         least_domain = min(domain_counts, key=domain_counts.get)
+        domain_tag_list = COGNITIVE_DOMAINS[least_domain]
 
-        # Find a memory from that domain that's not already in result
-        domain_tags = set(COGNITIVE_DOMAINS[least_domain])
-        candidates = []
-        for directory in [ACTIVE_DIR, CORE_DIR]:
-            if not directory.exists():
-                continue
-            for filepath in directory.glob("*.md"):
-                metadata, content = parse_memory_file(filepath)
-                mem_id = metadata.get('id', filepath.stem)
-                if mem_id in seen_ids:
-                    continue
-                tags = set(metadata.get('tags', []))
-                if tags & domain_tags:
-                    candidates.append((mem_id, content[:100], metadata))
+        with db._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(f"""
+                    SELECT id, content FROM {db._table('memories')}
+                    WHERE type IN ('active', 'core')
+                    AND tags && %s::text[]
+                    ORDER BY RANDOM() LIMIT 5
+                """, (domain_tag_list,))
+                candidates = [(r['id'], (r.get('content') or '')[:100]) for r in cur.fetchall()
+                              if r['id'] not in seen_ids]
 
         if candidates:
             picked = random.choice(candidates)
@@ -442,7 +397,7 @@ def get_priming_candidates(
     except Exception:
         pass
 
-    # Phase 6: Dimensional hub priming (Phase 3 of Multi-Graph Architecture)
+    # Phase 6: Dimensional hub priming (DB-only)
     if dimension:
         try:
             from context_manager import load_graph
@@ -452,15 +407,9 @@ def get_priming_candidates(
                     if hub_id in seen_ids:
                         continue
                     preview = ""
-                    for directory in [CORE_DIR, ACTIVE_DIR]:
-                        if not directory.exists():
-                            continue
-                        for filepath in directory.glob(f"*{hub_id}*"):
-                            _, content = parse_memory_file(filepath)
-                            preview = content[:100]
-                            break
-                        if preview:
-                            break
+                    row = db.get_memory(hub_id)
+                    if row:
+                        preview = (row.get('content') or '')[:100]
                     result['dimensional'].append({
                         'id': hub_id,
                         'preview': preview,
@@ -758,19 +707,30 @@ if __name__ == "__main__":
             if not results:
                 print("No matching memories found. (Is the index built? Run: memory_manager.py index)")
             else:
-                # Epsilon-greedy: 10% chance to inject one low-recall memory (exploratory)
+                # Epsilon-greedy: 10% chance to inject one low-recall memory (exploratory, DB-only)
                 if random.random() < 0.10:
                     result_ids = {r['id'] for r in results}
-                    low_recall = []
-                    for fp in (ACTIVE_DIR.glob("*.md") if ACTIVE_DIR.exists() else []):
-                        meta, content = parse_memory_file(fp)
-                        mid = meta.get('id', fp.stem)
-                        if mid not in result_ids and meta.get('recall_count', 0) <= 1:
-                            low_recall.append({'id': mid, 'score': 0.0, 'preview': content[:150],
-                                               'exploratory': True})
-                    if low_recall:
-                        pick = random.choice(low_recall)
-                        results.append(pick)
+                    try:
+                        from db_adapter import get_db as _get_db
+                        import psycopg2.extras
+                        _db = _get_db()
+                        with _db._conn() as conn:
+                            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                                cur.execute(f"""
+                                    SELECT id, content FROM {_db._table('memories')}
+                                    WHERE type = 'active' AND recall_count <= 1
+                                    ORDER BY RANDOM() LIMIT 1
+                                """)
+                                row = cur.fetchone()
+                                if row and row['id'] not in result_ids:
+                                    results.append({
+                                        'id': row['id'],
+                                        'score': 0.0,
+                                        'preview': (row.get('content') or '')[:150],
+                                        'exploratory': True
+                                    })
+                    except Exception:
+                        pass
 
                 print(f"Memories matching '{query}':\n")
                 for r in results:
@@ -807,40 +767,34 @@ if __name__ == "__main__":
     # v2.11: Trust-based decay commands
     elif cmd == "trust" and len(sys.argv) > 2:
         mem_id = sys.argv[2]
-        found = False
-        for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-            if not directory.exists():
-                continue
-            for filepath in directory.glob("*.md"):
-                metadata, content = parse_memory_file(filepath)
-                if metadata.get('id') == mem_id:
-                    found = True
-                    tier = get_memory_trust_tier(metadata)
-                    multiplier = get_decay_multiplier(metadata)
-                    is_import = is_imported_memory(metadata)
-                    sessions = metadata.get('sessions_since_recall', 0)
-                    effective_sessions = sessions * multiplier
+        from db_adapter import get_db as _get_db, db_to_file_metadata as _db_to_file
+        _db = _get_db()
+        row = _db.get_memory(mem_id)
+        if row:
+            metadata, _ = _db_to_file(row)
+            tier = get_memory_trust_tier(metadata)
+            multiplier = get_decay_multiplier(metadata)
+            is_import = is_imported_memory(metadata)
+            sessions = metadata.get('sessions_since_recall', 0)
+            effective_sessions = sessions * multiplier
 
-                    print(f"\n=== Trust Info: {mem_id} ===")
-                    print(f"Type: {'IMPORTED' if is_import else 'NATIVE'}")
-                    print(f"Location: {filepath.parent.name}/")
-                    print(f"Trust tier: {tier}")
-                    print(f"Decay multiplier: {multiplier}x")
-                    print(f"Sessions since recall: {sessions}")
-                    print(f"Effective sessions: {effective_sessions:.1f}")
-                    print(f"Recall count: {metadata.get('recall_count', 0)}")
-                    print(f"Emotional weight: {metadata.get('emotional_weight', 0):.2f}")
+            print(f"\n=== Trust Info: {mem_id} ===")
+            print(f"Type: {'IMPORTED' if is_import else 'NATIVE'}")
+            print(f"Location: {row.get('type', 'active')}/")
+            print(f"Trust tier: {tier}")
+            print(f"Decay multiplier: {multiplier}x")
+            print(f"Sessions since recall: {sessions}")
+            print(f"Effective sessions: {effective_sessions:.1f}")
+            print(f"Recall count: {metadata.get('recall_count', 0)}")
+            print(f"Emotional weight: {metadata.get('emotional_weight', 0):.2f}")
 
-                    if is_import:
-                        source = metadata.get('source', {})
-                        print(f"\nImport details:")
-                        print(f"  Source agent: {source.get('agent', 'unknown')}")
-                        print(f"  Imported at: {source.get('imported_at', 'unknown')}")
-                        print(f"  Original weight: {source.get('original_weight', 'unknown')}")
-                    break
-            if found:
-                break
-        if not found:
+            if is_import:
+                source = metadata.get('source', {})
+                print(f"\nImport details:")
+                print(f"  Source agent: {source.get('agent', 'unknown')}")
+                print(f"  Imported at: {source.get('imported_at', 'unknown')}")
+                print(f"  Original weight: {source.get('original_weight', 'unknown')}")
+        else:
             print(f"Memory not found: {mem_id}")
 
     elif cmd == "imported":
@@ -861,29 +815,23 @@ if __name__ == "__main__":
     # v2.14: Activation decay commands (credit: SpindriftMend)
     elif cmd == "activation" and len(sys.argv) > 2:
         mem_id = sys.argv[2]
-        found = False
-        for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-            if not directory.exists():
-                continue
-            for filepath in directory.glob(f"*-{mem_id}.md"):
-                metadata, content = parse_memory_file(filepath)
-                found = True
+        from db_adapter import get_db as _get_db, db_to_file_metadata as _db_to_file
+        _db = _get_db()
+        row = _db.get_memory(mem_id)
+        if row:
+            metadata, content = _db_to_file(row)
+            activation = calculate_activation(metadata)
+            recall_count = metadata.get('recall_count', 0)
+            emotional_weight = metadata.get('emotional_weight', 0)
+            last_recalled = metadata.get('last_recalled', 'never')
 
-                activation = calculate_activation(metadata)
-                recall_count = metadata.get('recall_count', 0)
-                emotional_weight = metadata.get('emotional_weight', 0)
-                last_recalled = metadata.get('last_recalled', 'never')
-
-                print(f"\n=== Activation: {mem_id} ===")
-                print(f"Activation score: {activation:.4f}")
-                print(f"Emotional weight: {emotional_weight:.3f}")
-                print(f"Recall count: {recall_count}")
-                print(f"Last recalled: {str(last_recalled)[:19]}")
-                print(f"Content preview: {content[:80]}...")
-                break
-            if found:
-                break
-        if not found:
+            print(f"\n=== Activation: {mem_id} ===")
+            print(f"Activation score: {activation:.4f}")
+            print(f"Emotional weight: {emotional_weight:.3f}")
+            print(f"Recall count: {recall_count}")
+            print(f"Last recalled: {str(last_recalled)[:19]}")
+            print(f"Content preview: {content[:80]}...")
+        else:
             print(f"Memory not found: {mem_id}")
 
     elif cmd == "activated":
@@ -961,67 +909,68 @@ if __name__ == "__main__":
     # v2.13: Self-evolution commands
     elif cmd == "evolution" and len(sys.argv) > 2:
         mem_id = sys.argv[2]
-        found = False
-        for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-            if not directory.exists():
-                continue
-            for filepath in directory.glob(f"*-{mem_id}.md"):
-                metadata, _ = parse_memory_file(filepath)
-                found = True
+        from db_adapter import get_db as _get_db, db_to_file_metadata as _db_to_file
+        _db = _get_db()
+        row = _db.get_memory(mem_id)
+        if row:
+            metadata, _ = _db_to_file(row)
+            outcomes = metadata.get('retrieval_outcomes', {})
+            success_rate = metadata.get('retrieval_success_rate', None)
+            evolution_mult = calculate_evolution_decay_multiplier(metadata)
 
-                outcomes = metadata.get('retrieval_outcomes', {})
-                success_rate = metadata.get('retrieval_success_rate', None)
-                evolution_mult = calculate_evolution_decay_multiplier(metadata)
-
-                print(f"\n=== Evolution Stats: {mem_id} ===")
-                print(f"Retrieval outcomes:")
-                print(f"  Productive: {outcomes.get('productive', 0)}")
-                print(f"  Generative: {outcomes.get('generative', 0)}")
-                print(f"  Dead-ends: {outcomes.get('dead_end', 0)}")
-                print(f"  Total: {outcomes.get('total', 0)}")
-                print()
-                if success_rate is not None:
-                    print(f"Success rate: {success_rate:.1%}")
-                else:
-                    print(f"Success rate: Not enough data (need {MIN_RETRIEVALS_FOR_EVOLUTION} retrievals)")
-                print(f"Decay multiplier: {evolution_mult:.2f}x", end="")
-                if evolution_mult < 1.0:
-                    print(" (slower decay - valuable memory)")
-                elif evolution_mult > 1.0:
-                    print(" (faster decay - noisy memory)")
-                else:
-                    print(" (normal decay)")
-                break
-            if found:
-                break
-        if not found:
+            print(f"\n=== Evolution Stats: {mem_id} ===")
+            print(f"Retrieval outcomes:")
+            print(f"  Productive: {outcomes.get('productive', 0)}")
+            print(f"  Generative: {outcomes.get('generative', 0)}")
+            print(f"  Dead-ends: {outcomes.get('dead_end', 0)}")
+            print(f"  Total: {outcomes.get('total', 0)}")
+            print()
+            if success_rate is not None:
+                print(f"Success rate: {success_rate:.1%}")
+            else:
+                print(f"Success rate: Not enough data (need {MIN_RETRIEVALS_FOR_EVOLUTION} retrievals)")
+            print(f"Decay multiplier: {evolution_mult:.2f}x", end="")
+            if evolution_mult < 1.0:
+                print(" (slower decay - valuable memory)")
+            elif evolution_mult > 1.0:
+                print(" (faster decay - noisy memory)")
+            else:
+                print(" (normal decay)")
+        else:
             print(f"Memory not found: {mem_id}")
 
     elif cmd == "evolution-stats":
-        # Show overview of memories with evolution data
+        # Show overview of memories with evolution data (DB-only)
+        from db_adapter import get_db as _get_db, db_to_file_metadata as _db_to_file
+        import psycopg2.extras
+        _db = _get_db()
         print("\n=== Self-Evolution Overview ===\n")
         valuable = []
         noisy = []
         neutral = []
 
-        for directory in [CORE_DIR, ACTIVE_DIR]:
-            if not directory.exists():
-                continue
-            for filepath in directory.glob("*.md"):
-                metadata, _ = parse_memory_file(filepath)
-                mem_id = metadata.get('id', filepath.stem)
-                outcomes = metadata.get('retrieval_outcomes', {})
-                total = outcomes.get('total', 0)
+        with _db._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(f"""
+                    SELECT * FROM {_db._table('memories')}
+                    WHERE type IN ('core', 'active')
+                    AND extra_metadata->>'retrieval_outcomes' IS NOT NULL
+                """)
+                for row in cur.fetchall():
+                    metadata, _ = _db_to_file(dict(row))
+                    mem_id = metadata.get('id')
+                    outcomes = metadata.get('retrieval_outcomes', {})
+                    total = outcomes.get('total', 0)
 
-                if total >= MIN_RETRIEVALS_FOR_EVOLUTION:
-                    mult = calculate_evolution_decay_multiplier(metadata)
-                    rate = metadata.get('retrieval_success_rate', 0)
-                    if mult < 1.0:
-                        valuable.append((mem_id, rate, total))
-                    elif mult > 1.0:
-                        noisy.append((mem_id, rate, total))
-                    else:
-                        neutral.append((mem_id, rate, total))
+                    if total >= MIN_RETRIEVALS_FOR_EVOLUTION:
+                        mult = calculate_evolution_decay_multiplier(metadata)
+                        rate = metadata.get('retrieval_success_rate', 0)
+                        if mult < 1.0:
+                            valuable.append((mem_id, rate, total))
+                        elif mult > 1.0:
+                            noisy.append((mem_id, rate, total))
+                        else:
+                            neutral.append((mem_id, rate, total))
 
         print(f"Valuable memories (slower decay): {len(valuable)}")
         for mem_id, rate, total in valuable[:5]:
@@ -1079,32 +1028,25 @@ if __name__ == "__main__":
     # v2.15: Entity-centric tagging commands (Kaleaon ENTITY edges)
     elif cmd == "entities" and len(sys.argv) > 2:
         mem_id = sys.argv[2]
-        found = False
-        for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-            if not directory.exists():
-                continue
-            for filepath in directory.glob(f"*-{mem_id}.md"):
-                metadata, content = parse_memory_file(filepath)
-                found = True
+        from db_adapter import get_db as _get_db, db_to_file_metadata as _db_to_file
+        _db = _get_db()
+        row = _db.get_memory(mem_id)
+        if row:
+            metadata, content = _db_to_file(row)
+            entities = metadata.get('entities')
+            if not entities:
+                entities = detect_entities(content, metadata.get('tags', []))
+                print(f"\n=== Entities for {mem_id} (detected, not stored) ===")
+            else:
+                print(f"\n=== Entities for {mem_id} ===")
 
-                # Get or detect entities
-                entities = metadata.get('entities')
-                if not entities:
-                    entities = detect_entities(content, metadata.get('tags', []))
-                    print(f"\n=== Entities for {mem_id} (detected, not stored) ===")
-                else:
-                    print(f"\n=== Entities for {mem_id} ===")
-
-                if entities:
-                    for etype, elist in entities.items():
-                        if elist:
-                            print(f"  {etype}: {', '.join(elist)}")
-                else:
-                    print("  No entities detected")
-                break
-            if found:
-                break
-        if not found:
+            if entities:
+                for etype, elist in entities.items():
+                    if elist:
+                        print(f"  {etype}: {', '.join(elist)}")
+            else:
+                print("  No entities detected")
+        else:
             print(f"Memory not found: {mem_id}")
 
     elif cmd == "entity-search" and len(sys.argv) >= 4:
@@ -1162,12 +1104,21 @@ if __name__ == "__main__":
         # Register memory IDs as recalled (for hooks that bypass ask)
         # Used by user_prompt_submit.py and thought_priming.py to count
         # their automatic semantic searches as real recalls.
+        # --source <name> tags which recall path triggered this.
         ids = sys.argv[2:]
+        source = "manual"
+        if "--source" in ids:
+            idx = ids.index("--source")
+            if idx + 1 < len(ids):
+                source = ids[idx + 1]
+                ids = ids[:idx] + ids[idx + 2:]
+            else:
+                ids = ids[:idx]
         if not ids:
-            print("Usage: memory_manager.py register-recall <id1> [id2] ...")
+            print("Usage: memory_manager.py register-recall [--source <name>] <id1> [id2] ...")
             sys.exit(1)
         session_state.load()
         for mid in ids:
-            session_state.add_retrieved(mid)
+            session_state.add_retrieved(mid, source=source)
         session_state.save()
-        print(f"Registered {len(ids)} recalls")
+        print(f"Registered {len(ids)} recalls (source={source})")

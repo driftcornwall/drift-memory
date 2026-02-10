@@ -10,14 +10,12 @@ Usage:
     python pipeline_health.py trend [n]         # Show last n snapshots (default 10)
 """
 
-import json
-import os
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
-HEALTH_DIR = os.path.join(os.path.dirname(__file__), "health")
-SNAPSHOTS_FILE = os.path.join(HEALTH_DIR, "snapshots.json")
+from db_adapter import get_db
+
+SNAPSHOTS_KV_KEY = '.health_snapshots'
 
 # Anomaly thresholds
 EDGE_DROP_THRESHOLD = 0.20      # >20% edge loss in one session = alert
@@ -28,53 +26,28 @@ DECAY_SPIKE_THRESHOLD = 3.0     # Decay events >3x average = alert
 
 
 def get_current_stats():
-    """Collect current pipeline stats from memory system."""
-    mem_dir = os.path.dirname(__file__)
-    sys.path.insert(0, mem_dir)
-    from memory_common import CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR, parse_memory_file
+    """Collect current pipeline stats from PostgreSQL."""
+    db = get_db()
 
-    all_memories = []
-    for d in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if os.path.exists(d):
-            for f in os.listdir(d):
-                if f.endswith('.md'):
-                    all_memories.append(os.path.join(d, f))
+    stats = db.comprehensive_stats()
+    memory_count = stats.get('total_memories', 0)
 
-    memory_count = len(all_memories)
+    edge_info = stats.get('edges', {})
+    edge_pairs = edge_info.get('total_edges', 0)
+    edge_sum = round(edge_info.get('total_belief', 0.0), 2)
 
-    edge_count = 0
-    edge_sum = 0.0
-    for path in all_memories:
-        try:
-            meta, _ = parse_memory_file(Path(path))
-            co = meta.get('co_occurrences', {})
-            edge_count += len(co)
-            edge_sum += sum(co.values())
-        except Exception:
-            pass
+    session_state = db.kv_get('.session_state') or {}
+    recalls = len(session_state.get('recalled_memories', []))
 
-    # Edges are bidirectional — each pair counted twice
-    unique_pairs = edge_count // 2
-
-    session_file = os.path.join(mem_dir, "session_state.json")
-    recalls = 0
-    decay_events = 0
-    prune_events = 0
-    if os.path.exists(session_file):
-        try:
-            with open(session_file, 'r', encoding='utf-8') as f:
-                session = json.load(f)
-            recalls = len(session.get('recalled_memories', []))
-            decay_events = session.get('decay_events', 0)
-            prune_events = session.get('prune_events', 0)
-        except Exception:
-            pass
+    decay_history = db.kv_get('.decay_history') or {}
+    decay_events = decay_history.get('decay_events', 0)
+    prune_events = decay_history.get('prune_events', 0)
 
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "memory_count": memory_count,
-        "edge_pairs": unique_pairs,
-        "edge_sum": round(edge_sum / 2, 2),
+        "edge_pairs": edge_pairs,
+        "edge_sum": edge_sum,
         "recalls": recalls,
         "decay_events": decay_events,
         "prune_events": prune_events,
@@ -82,18 +55,18 @@ def get_current_stats():
 
 
 def load_snapshots():
-    """Load all historical snapshots."""
-    if not os.path.exists(SNAPSHOTS_FILE):
+    """Load all historical snapshots from DB."""
+    db = get_db()
+    data = db.kv_get(SNAPSHOTS_KV_KEY)
+    if data is None:
         return []
-    with open(SNAPSHOTS_FILE, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    return data
 
 
 def save_snapshots(snapshots):
-    """Save snapshots to disk."""
-    os.makedirs(HEALTH_DIR, exist_ok=True)
-    with open(SNAPSHOTS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(snapshots, f, indent=2)
+    """Save snapshots to DB."""
+    db = get_db()
+    db.kv_set(SNAPSHOTS_KV_KEY, snapshots)
 
 
 def snapshot():

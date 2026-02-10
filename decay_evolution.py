@@ -5,6 +5,9 @@ Decay Evolution — Memory lifecycle operations.
 Extracted from memory_manager.py (Phase 4).
 Handles trust tiers, activation scoring, session maintenance,
 compression, promotion, retrieval outcomes, and adaptive decay.
+
+DB-ONLY: All memory reads/writes go through PostgreSQL via db_adapter.
+No file-based fallbacks. If DB is down, we crash loud.
 """
 
 import json
@@ -12,10 +15,8 @@ import math
 from datetime import datetime, timezone
 from typing import Optional
 
-from memory_common import (
-    MEMORY_ROOT, CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR, ALL_DIRS,
-    parse_memory_file, write_memory_file,
-)
+from memory_common import MEMORY_ROOT
+from db_adapter import get_db, db_to_file_metadata
 from entity_detection import detect_entities
 import session_state
 
@@ -97,20 +98,20 @@ def is_imported_memory(metadata: dict) -> bool:
 def list_imported_memories() -> list:
     """List all imported memories with their trust tiers."""
     imported = []
-    for directory in [ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
+    db = get_db()
+
+    for type_ in ('active', 'archive'):
+        rows = db.list_memories(type_=type_, limit=5000)
+        for row in rows:
+            metadata, content = db_to_file_metadata(row)
             if is_imported_memory(metadata):
                 imported.append({
-                    'filepath': filepath,
-                    'id': metadata.get('id', filepath.stem),
+                    'id': metadata.get('id', ''),
                     'trust_tier': get_memory_trust_tier(metadata),
                     'decay_multiplier': get_decay_multiplier(metadata),
                     'recall_count': metadata.get('recall_count', 0),
                     'sessions_since_recall': metadata.get('sessions_since_recall', 0),
-                    'source_agent': metadata.get('source', {}).get('agent', 'unknown'),
+                    'source_agent': metadata.get('source', {}).get('agent', 'unknown') if isinstance(metadata.get('source'), dict) else 'unknown',
                     'emotional_weight': metadata.get('emotional_weight', 0.5),
                 })
     return imported
@@ -120,73 +121,107 @@ def list_imported_memories() -> list:
 
 def session_maintenance():
     """
-    Run at the start of each session to:
+    Run at session end/start to:
     1. Increment sessions_since_recall for all active memories
     2. Identify decay candidates (with trust-based decay multipliers for imports)
     3. Prune never-recalled imports after IMPORTED_PRUNE_SESSIONS
     4. Report status
 
     v2.11: Trust-based decay for imported memories
+    v2.12: DB-accelerated path (bulk SQL UPDATE, ~0.2s vs ~13s)
+    v3.0: DB-only — no file fallback
     """
-    print("\n=== Memory Session Maintenance ===\n")
+    import psycopg2.extras
+
+    db = get_db()
+
+    # Step 1: Bulk increment sessions_since_recall for ALL active memories
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                UPDATE {db._table('memories')}
+                SET sessions_since_recall = COALESCE(sessions_since_recall, 0) + 1
+                WHERE type = 'active'
+            """)
+            updated = cur.rowcount
+
+    # Step 2: Fetch all active memories to classify
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT id, type, tags, recall_count, emotional_weight,
+                       sessions_since_recall, source, extra_metadata
+                FROM {db._table('memories')}
+                WHERE type = 'active'
+            """)
+            rows = cur.fetchall()
+
+    # Also count core/archive for reporting
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT type, COUNT(*) FROM {db._table('memories')}
+                GROUP BY type
+            """)
+            type_counts = dict(cur.fetchall())
 
     decay_candidates = []
     reinforced = []
     prune_candidates = []
 
-    for filepath in ACTIVE_DIR.glob("*.md") if ACTIVE_DIR.exists() else []:
-        metadata, content = parse_memory_file(filepath)
+    for row in rows:
+        meta = {
+            'id': row['id'],
+            'tags': row.get('tags') or [],
+            'recall_count': row.get('recall_count', 0),
+            'emotional_weight': row.get('emotional_weight', 0.5),
+            'sessions_since_recall': row.get('sessions_since_recall', 0),
+            'source': row.get('source') or row.get('extra_metadata', {}).get('source', {}),
+        }
 
-        sessions = metadata.get('sessions_since_recall', 0) + 1
-        metadata['sessions_since_recall'] = sessions
-
-        decay_multiplier = get_decay_multiplier(metadata)
+        sessions = meta['sessions_since_recall']
+        decay_multiplier = get_decay_multiplier(meta)
         effective_sessions = sessions * decay_multiplier
-
-        emotional_weight = metadata.get('emotional_weight', 0.5)
-        recall_count = metadata.get('recall_count', 0)
+        emotional_weight = meta.get('emotional_weight') or 0.5
+        recall_count = meta.get('recall_count', 0)
 
         should_resist_decay = (
             emotional_weight >= EMOTIONAL_WEIGHT_THRESHOLD or
             recall_count >= RECALL_COUNT_THRESHOLD
         )
-
-        # Grace period: skip decay for young memories
         in_grace_period = sessions < GRACE_PERIOD_SESSIONS
+        is_import = is_imported_memory(meta)
 
-        is_import = is_imported_memory(metadata)
         if is_import and recall_count == 0 and sessions >= IMPORTED_PRUNE_SESSIONS:
-            prune_candidates.append((filepath, metadata, content))
+            prune_candidates.append(meta)
         elif not in_grace_period and effective_sessions >= DECAY_THRESHOLD_SESSIONS and not should_resist_decay:
-            decay_candidates.append((filepath, metadata, content, decay_multiplier))
+            meta['_decay_multiplier'] = decay_multiplier
+            decay_candidates.append(meta)
         elif should_resist_decay:
-            reinforced.append((filepath, metadata))
+            reinforced.append(meta)
 
-        write_memory_file(filepath, metadata, content)
-
-    print(f"Active memories: {len(list(ACTIVE_DIR.glob('*.md'))) if ACTIVE_DIR.exists() else 0}")
-    print(f"Core memories: {len(list(CORE_DIR.glob('*.md'))) if CORE_DIR.exists() else 0}")
-    print(f"Archived memories: {len(list(ARCHIVE_DIR.glob('*.md'))) if ARCHIVE_DIR.exists() else 0}")
+    # Step 3: Report (compact)
+    print(f"\n=== Memory Session Maintenance (DB) ===\n")
+    print(f"Active memories: {type_counts.get('active', 0)} (incremented {updated})")
+    print(f"Core memories: {type_counts.get('core', 0)}")
+    print(f"Archived memories: {type_counts.get('archive', 0)}")
 
     if decay_candidates:
-        print(f"\nDecay candidates ({len(decay_candidates)}):")
-        for item in decay_candidates:
-            fp, meta = item[0], item[1]
-            multiplier = item[3] if len(item) > 3 else 1.0
-            eff_sessions = meta.get('sessions_since_recall', 0) * multiplier
-            import_marker = " [IMPORT]" if is_imported_memory(meta) else ""
-            print(f"  - {fp.name}: {meta.get('sessions_since_recall')} sessions (eff: {eff_sessions:.1f}), weight={meta.get('emotional_weight'):.2f}{import_marker}")
+        print(f"\nDecay candidates: {len(decay_candidates)}")
+        for meta in decay_candidates[:5]:
+            m = meta.get('_decay_multiplier', 1.0)
+            eff = meta['sessions_since_recall'] * m
+            print(f"  - {meta['id']}: {meta['sessions_since_recall']} sessions (eff: {eff:.1f}), weight={meta.get('emotional_weight') or 0.5:.2f}")
+        if len(decay_candidates) > 5:
+            print(f"  ... and {len(decay_candidates) - 5} more")
 
     if prune_candidates:
-        print(f"\nPrune candidates - never-recalled imports ({len(prune_candidates)}):")
-        for fp, meta, _ in prune_candidates:
-            source = meta.get('source', {}).get('agent', 'unknown')
-            print(f"  - {fp.name}: from {source}, {meta.get('sessions_since_recall')} sessions, 0 recalls")
+        print(f"\nPrune candidates: {len(prune_candidates)}")
 
     if reinforced:
-        print(f"\nReinforced (resist decay):")
-        for fp, meta in reinforced[:5]:
-            print(f"  - {fp.name}: recalls={meta.get('recall_count')}, weight={meta.get('emotional_weight'):.2f}")
+        print(f"\nReinforced: {len(reinforced)}")
+        for meta in reinforced[:3]:
+            print(f"  - {meta['id']}: recalls={meta.get('recall_count')}, weight={meta.get('emotional_weight') or 0.5:.2f}")
 
     return decay_candidates, prune_candidates
 
@@ -198,21 +233,27 @@ def compress_memory(memory_id: str, compressed_content: str):
     Compress a memory - move to archive with reduced content.
     The original content is lost but can be referenced.
     """
-    for filepath in ACTIVE_DIR.glob(f"*-{memory_id}.md"):
-        metadata, original_content = parse_memory_file(filepath)
+    db = get_db()
+    row = db.get_memory(memory_id)
+    if not row:
+        print(f"Memory {memory_id} not found in DB")
+        return None
 
-        metadata['compressed_at'] = datetime.now(timezone.utc).isoformat()
-        metadata['original_length'] = len(original_content)
+    metadata, original_content = db_to_file_metadata(row)
 
-        new_path = ARCHIVE_DIR / filepath.name
-        ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-        write_memory_file(new_path, metadata, compressed_content)
+    db.update_memory(
+        memory_id,
+        type='archive',
+        content=compressed_content,
+        extra_metadata={
+            **(row.get('extra_metadata') or {}),
+            'compressed_at': datetime.now(timezone.utc).isoformat(),
+            'original_length': len(original_content),
+        }
+    )
 
-        filepath.unlink()
-        print(f"Compressed: {filepath.name} -> {new_path}")
-        return new_path
-
-    return None
+    print(f"Compressed: {memory_id} -> archive")
+    return memory_id
 
 
 def promote_hot_memories() -> list[str]:
@@ -225,26 +266,26 @@ def promote_hot_memories() -> list[str]:
     if not HEAT_PROMOTION_ENABLED:
         return []
 
-    if not ACTIVE_DIR.exists():
-        return []
+    db = get_db()
+    rows = db.list_memories(type_='active', limit=5000)
 
     promoted = []
-    CORE_DIR.mkdir(parents=True, exist_ok=True)
-
-    for filepath in ACTIVE_DIR.glob("*.md"):
-        metadata, content = parse_memory_file(filepath)
+    for row in rows:
+        metadata, content = db_to_file_metadata(row)
         recall_count = metadata.get('recall_count', 0)
 
         if recall_count >= HEAT_PROMOTION_THRESHOLD:
-            memory_id = metadata.get('id', 'unknown')
+            memory_id = metadata.get('id', '')
 
-            metadata['type'] = 'core'
-            metadata['promoted_at'] = datetime.now(timezone.utc).isoformat()
-            metadata['promoted_reason'] = f'recall_count={recall_count} >= {HEAT_PROMOTION_THRESHOLD}'
-
-            new_path = CORE_DIR / filepath.name
-            write_memory_file(new_path, metadata, content)
-            filepath.unlink()
+            db.update_memory(
+                memory_id,
+                type='core',
+                extra_metadata={
+                    **(row.get('extra_metadata') or {}),
+                    'promoted_at': datetime.now(timezone.utc).isoformat(),
+                    'promoted_reason': f'recall_count={recall_count} >= {HEAT_PROMOTION_THRESHOLD}',
+                }
+            )
 
             promoted.append(memory_id)
             print(f"Promoted to core: {memory_id} (recall_count={recall_count})")
@@ -257,14 +298,14 @@ def promote_hot_memories() -> list[str]:
 # --- Decay event logging ---
 
 def log_decay_event(decayed: int, pruned: int):
-    """Log a decay event for stats tracking."""
-    decay_file = MEMORY_ROOT / ".decay_history.json"
+    """Log a decay event for stats tracking. DB-only via KV store."""
+    db = get_db()
+
+    # Load existing history from DB KV
     history = {"sessions": []}
-    if decay_file.exists():
-        try:
-            history = json.loads(decay_file.read_text(encoding='utf-8'))
-        except (json.JSONDecodeError, KeyError):
-            pass
+    existing = db.kv_get('.decay_history')
+    if existing:
+        history = json.loads(existing) if isinstance(existing, str) else existing
 
     history["sessions"].append({
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -273,7 +314,7 @@ def log_decay_event(decayed: int, pruned: int):
     })
 
     history["sessions"] = history["sessions"][-20:]
-    decay_file.write_text(json.dumps(history, indent=2), encoding='utf-8')
+    db.kv_set('.decay_history', history)
 
 
 # --- Entity backfill (maintenance) ---
@@ -290,11 +331,13 @@ def backfill_entities(dry_run: bool = True) -> dict:
     """
     stats = {'updated': 0, 'skipped': 0, 'already_has': 0}
 
-    for directory in [CORE_DIR, ACTIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
+    db = get_db()
+
+    for type_ in ('core', 'active'):
+        rows = db.list_memories(type_=type_, limit=5000)
+        for row in rows:
+            metadata, content = db_to_file_metadata(row)
+            memory_id = metadata.get('id', '')
 
             if metadata.get('entities'):
                 stats['already_has'] += 1
@@ -307,11 +350,10 @@ def backfill_entities(dry_run: bool = True) -> dict:
                 continue
 
             if dry_run:
-                print(f"Would update {filepath.name}: {detected}")
+                print(f"Would update {memory_id}: {detected}")
                 stats['updated'] += 1
             else:
-                metadata['entities'] = detected
-                write_memory_file(filepath, metadata, content)
+                db.update_memory(memory_id, entities=detected)
                 stats['updated'] += 1
 
     return stats
@@ -376,13 +418,13 @@ def get_most_activated_memories(limit: int = 10) -> list[tuple[str, float, dict]
         List of (memory_id, activation_score, metadata, preview) tuples
     """
     results = []
+    db = get_db()
 
-    for directory in [CORE_DIR, ACTIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            memory_id = metadata.get('id', filepath.stem)
+    for type_ in ('core', 'active'):
+        rows = db.list_memories(type_=type_, limit=5000)
+        for row in rows:
+            metadata, content = db_to_file_metadata(row)
+            memory_id = metadata.get('id', '')
             activation = calculate_activation(metadata)
             results.append((memory_id, activation, metadata, content[:100]))
 
@@ -406,43 +448,46 @@ def log_retrieval_outcome(memory_id: str, outcome: str) -> bool:
         print(f"Invalid outcome: {outcome}. Must be one of {valid_outcomes}")
         return False
 
-    for directory in ALL_DIRS:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob(f"*-{memory_id}.md"):
-            metadata, content = parse_memory_file(filepath)
+    db = get_db()
+    row = db.get_memory(memory_id)
+    if not row:
+        return False
 
-            outcomes = metadata.get('retrieval_outcomes', {
-                'productive': 0,
-                'generative': 0,
-                'dead_end': 0,
-                'total': 0
-            })
+    metadata, content = db_to_file_metadata(row)
 
-            outcomes[outcome] = outcomes.get(outcome, 0) + 1
-            outcomes['total'] = outcomes.get('total', 0) + 1
-            metadata['retrieval_outcomes'] = outcomes
+    outcomes = metadata.get('retrieval_outcomes', {
+        'productive': 0,
+        'generative': 0,
+        'dead_end': 0,
+        'total': 0
+    })
 
-            total = outcomes['total']
-            if total > 0:
-                successes = outcomes.get('productive', 0) + (outcomes.get('generative', 0) * 2)
-                metadata['retrieval_success_rate'] = round(successes / (total + outcomes.get('generative', 0)), 3)
+    outcomes[outcome] = outcomes.get(outcome, 0) + 1
+    outcomes['total'] = outcomes.get('total', 0) + 1
 
-            write_memory_file(filepath, metadata, content)
-            return True
+    total = outcomes['total']
+    retrieval_success_rate = None
+    if total > 0:
+        successes = outcomes.get('productive', 0) + (outcomes.get('generative', 0) * 2)
+        retrieval_success_rate = round(successes / (total + outcomes.get('generative', 0)), 3)
 
-    return False
+    db.update_memory(
+        memory_id,
+        retrieval_outcomes=outcomes,
+        retrieval_success_rate=retrieval_success_rate,
+    )
+
+    return True
 
 
 def get_retrieval_success_rate(memory_id: str) -> Optional[float]:
     """Get the retrieval success rate for a memory."""
-    for directory in ALL_DIRS:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob(f"*-{memory_id}.md"):
-            metadata, _ = parse_memory_file(filepath)
-            return metadata.get('retrieval_success_rate')
-    return None
+    db = get_db()
+    row = db.get_memory(memory_id)
+    if not row:
+        return None
+    metadata, _ = db_to_file_metadata(row)
+    return metadata.get('retrieval_success_rate')
 
 
 def calculate_evolution_decay_multiplier(metadata: dict) -> float:
@@ -488,36 +533,34 @@ def auto_log_retrieval_outcomes() -> dict:
         log_retrieval_outcome(mem_id, "productive")
         results["productive"] += 1
 
+    # Check for generative outcomes: memories created today that were caused_by retrieved memories
     today = datetime.now(timezone.utc).date().isoformat()
-    for directory in [ACTIVE_DIR]:
-        if not directory.exists():
+    db = get_db()
+    rows = db.list_memories(type_='active', limit=5000)
+    for row in rows:
+        metadata, _ = db_to_file_metadata(row)
+        created = metadata.get('created', '')
+        if hasattr(created, 'isoformat'):
+            created = created.isoformat()
+        created = str(created)[:10]
+        if created != today:
             continue
-        for filepath in directory.glob("*.md"):
-            metadata, _ = parse_memory_file(filepath)
-            created = metadata.get('created', '')
-            if hasattr(created, 'isoformat'):
-                created = created.isoformat()
-            created = str(created)[:10]
-            if created != today:
-                continue
 
-            caused_by = metadata.get('caused_by', [])
-            for mem_id in retrieved:
-                if mem_id in caused_by:
-                    log_retrieval_outcome(mem_id, "generative")
-                    results["generative"] += 1
+        caused_by = metadata.get('caused_by', [])
+        for mem_id in retrieved:
+            if mem_id in caused_by:
+                log_retrieval_outcome(mem_id, "generative")
+                results["generative"] += 1
 
+    # Check if last retrieved memory was a dead end
     if retrieved:
         last_mem = retrieved[-1]
-        for directory in [CORE_DIR, ACTIVE_DIR]:
-            if not directory.exists():
-                continue
-            for filepath in directory.glob(f"*-{last_mem}.md"):
-                metadata, _ = parse_memory_file(filepath)
-                outcomes = metadata.get('retrieval_outcomes', {})
-                if outcomes.get('generative', 0) == 0:
-                    log_retrieval_outcome(last_mem, "dead_end")
-                    results["dead_end"] += 1
-                break
+        last_row = db.get_memory(last_mem)
+        if last_row:
+            last_metadata, _ = db_to_file_metadata(last_row)
+            outcomes = last_metadata.get('retrieval_outcomes', {})
+            if outcomes.get('generative', 0) == 0:
+                log_retrieval_outcome(last_mem, "dead_end")
+                results["dead_end"] += 1
 
     return results

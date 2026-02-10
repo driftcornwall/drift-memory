@@ -43,7 +43,6 @@ from collections import Counter
 from typing import Optional
 
 MEMORY_DIR = Path(__file__).parent
-REJECTION_LOG_FILE = MEMORY_DIR / ".rejection_log.json"
 
 VALID_CATEGORIES = [
     'bounty',          # ClawTasks bounties skipped
@@ -55,28 +54,13 @@ VALID_CATEGORIES = [
 
 
 def load_rejections() -> list[dict]:
-    """Load all rejection entries."""
-    if REJECTION_LOG_FILE.exists():
-        try:
-            with open(REJECTION_LOG_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                return data.get('rejections', [])
-        except (json.JSONDecodeError, KeyError):
-            pass
-    return []
+    """Load all rejection entries from DB."""
+    return get_rejections(limit=10000)
 
 
 def save_rejections(rejections: list[dict]) -> None:
-    """Save rejection entries with metadata."""
-    data = {
-        'version': '1.0',
-        'agent': 'DriftCornwall',
-        'count': len(rejections),
-        'last_updated': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
-        'rejections': rejections
-    }
-    with open(REJECTION_LOG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2)
+    """No-op — DB is the only store. Kept for backward compat."""
+    pass
 
 
 def log_rejection(
@@ -114,9 +98,12 @@ def log_rejection(
         'source': source,
     }
 
-    rejections = load_rejections()
-    rejections.append(entry)
-    save_rejections(rejections)
+    # DB-only write
+    from db_adapter import get_db
+    get_db().log_rejection(
+        category=category, reason=reason, target=target,
+        context=context, tags=tags, source=source
+    )
 
     return entry
 
@@ -130,26 +117,24 @@ def log_batch_rejections(entries: list[dict]) -> int:
 
     Returns count of entries added.
     """
-    rejections = load_rejections()
-    timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-
+    # DB-only batch write
+    from db_adapter import get_db
+    db = get_db()
+    count = 0
     for entry in entries:
         if entry.get('category') not in VALID_CATEGORIES:
             continue
+        db.log_rejection(
+            category=entry['category'],
+            reason=entry.get('reason', 'unspecified'),
+            target=entry.get('target'),
+            context=entry.get('context'),
+            tags=entry.get('tags'),
+            source=entry.get('source'),
+        )
+        count += 1
 
-        rejection = {
-            'timestamp': timestamp,
-            'category': entry['category'],
-            'reason': entry.get('reason', 'unspecified'),
-            'target': entry.get('target'),
-            'context': entry.get('context'),
-            'tags': entry.get('tags', []),
-            'source': entry.get('source'),
-        }
-        rejections.append(rejection)
-
-    save_rejections(rejections)
-    return len(entries)
+    return count
 
 
 def get_rejections(
@@ -168,18 +153,38 @@ def get_rejections(
     Returns:
         List of rejection entries, newest first
     """
-    rejections = load_rejections()
+    from db_adapter import get_db
+    import psycopg2.extras
 
-    if category:
-        rejections = [r for r in rejections if r['category'] == category]
+    db = get_db()
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            query = f"SELECT * FROM {db._table('rejections')} WHERE 1=1"
+            params = []
+            if category:
+                query += " AND category = %s"
+                params.append(category)
+            if since:
+                query += " AND timestamp > %s"
+                params.append(since)
+            query += " ORDER BY timestamp DESC LIMIT %s"
+            params.append(limit)
+            cur.execute(query, params)
+            rows = [dict(r) for r in cur.fetchall()]
 
-    if since:
-        rejections = [r for r in rejections if r['timestamp'] > since]
-
-    # Newest first
-    rejections.sort(key=lambda r: r['timestamp'], reverse=True)
-
-    return rejections[:limit]
+    result = []
+    for r in rows:
+        entry = {
+            'timestamp': r['timestamp'].isoformat().replace('+00:00', 'Z') if hasattr(r['timestamp'], 'isoformat') else str(r['timestamp']),
+            'category': r.get('category', ''),
+            'reason': r.get('reason', ''),
+            'target': r.get('target'),
+            'context': r.get('context'),
+            'tags': r.get('tags', []),
+            'source': r.get('source'),
+        }
+        result.append(entry)
+    return result
 
 
 def compute_taste_profile() -> dict:
@@ -196,7 +201,27 @@ def compute_taste_profile() -> dict:
     Returns:
         Taste profile dict
     """
-    rejections = load_rejections()
+    from db_adapter import get_db
+    import psycopg2.extras
+
+    db = get_db()
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"SELECT * FROM {db._table('rejections')} ORDER BY timestamp ASC")
+            rows = [dict(r) for r in cur.fetchall()]
+
+    rejections = []
+    for r in rows:
+        entry = {
+            'timestamp': r['timestamp'].isoformat().replace('+00:00', 'Z') if hasattr(r['timestamp'], 'isoformat') else str(r['timestamp']),
+            'category': r.get('category', ''),
+            'reason': r.get('reason', ''),
+            'target': r.get('target'),
+            'context': r.get('context'),
+            'tags': r.get('tags', []),
+            'source': r.get('source'),
+        }
+        rejections.append(entry)
 
     if not rejections:
         return {
@@ -305,6 +330,10 @@ def generate_taste_attestation() -> dict:
     attestation['attestation_hash'] = hashlib.sha256(
         attestation_content.encode('utf-8')
     ).hexdigest()
+
+    # Write attestation to DB
+    from db_adapter import get_db
+    get_db().store_attestation('taste', attestation['attestation_hash'], attestation)
 
     return attestation
 

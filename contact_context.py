@@ -21,17 +21,13 @@ Usage:
 Credit: 5W framework discussion with Lex (2026-02-05)
 """
 
-import json
 import re
-from pathlib import Path
-from datetime import datetime, timezone
-from typing import Optional
 from collections import defaultdict
 
-MEMORY_ROOT = Path(__file__).parent
-CORE_DIR = MEMORY_ROOT / "core"
-ACTIVE_DIR = MEMORY_ROOT / "active"
-ARCHIVE_DIR = MEMORY_ROOT / "archive"
+import psycopg2.extras
+
+from db_adapter import get_db, db_to_file_metadata
+import session_state
 
 # My known usernames (to exclude from contact extraction)
 MY_NAMES = {'driftcornwall', 'drift', 'spindriftmend', 'spindrift'}
@@ -51,42 +47,6 @@ KNOWN_CONTACTS = {
     'mikaopenclaw': ['mikaopenclaw', 'mika'],
     'mogra': ['mogra', 'mogradev', 'mograflower'],
 }
-
-
-def parse_memory_file(filepath: Path) -> tuple[dict, str]:
-    """Parse a memory file into metadata and content."""
-    try:
-        text = filepath.read_text(encoding='utf-8')
-    except Exception:
-        return {}, ""
-
-    if not text.startswith('---'):
-        return {}, text
-
-    parts = text.split('---', 2)
-    if len(parts) < 3:
-        return {}, text
-
-    import yaml
-    try:
-        metadata = yaml.safe_load(parts[1]) or {}
-    except Exception:
-        metadata = {}
-
-    content = parts[2].strip()
-    return metadata, content
-
-
-def write_memory_file(filepath: Path, metadata: dict, content: str):
-    """Write metadata and content back to a memory file."""
-    import yaml
-
-    yaml_str = yaml.dump(metadata, default_flow_style=False, allow_unicode=True, sort_keys=False)
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write('---\n')
-        f.write(yaml_str)
-        f.write('---\n\n')
-        f.write(content)
 
 
 def extract_contacts(content: str) -> list[str]:
@@ -120,47 +80,67 @@ def extract_contacts(content: str) -> list[str]:
 
 
 def get_session_contacts() -> list[str]:
-    """Get contacts from current session."""
-    session_file = MEMORY_ROOT / ".session_contacts.json"
-    if not session_file.exists():
-        return []
-    try:
-        data = json.loads(session_file.read_text(encoding='utf-8'))
-        return data.get('contacts', [])
-    except Exception:
+    """Get contacts from current session by examining retrieved memories."""
+    session_state.load()
+    retrieved_ids = session_state.get_retrieved_list()
+    if not retrieved_ids:
         return []
 
+    db = get_db()
+    contacts = set()
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Fetch contact_context for all retrieved memories this session
+            cur.execute(
+                f"SELECT id, contact_context, content, tags FROM {db._table('memories')} "
+                f"WHERE id = ANY(%s)",
+                (retrieved_ids,)
+            )
+            for row in cur.fetchall():
+                row = dict(row)
+                cc = row.get('contact_context') or []
+                if cc:
+                    contacts.update(cc)
+                else:
+                    # Extract from content + tags if not already tagged
+                    tags = row.get('tags') or []
+                    if isinstance(tags, str):
+                        tags = [t.strip() for t in tags.split(',')]
+                    full_content = (row.get('content') or '') + ' ' + ' '.join(tags)
+                    contacts.update(extract_contacts(full_content))
 
-def clear_session_contacts():
-    """Clear session contacts (called at session end)."""
-    session_file = MEMORY_ROOT / ".session_contacts.json"
-    if session_file.exists():
-        session_file.unlink()
+    return list(contacts)
 
 
 def backfill_contact_context():
     """
-    Backfill contact_context into all existing memories.
+    Backfill contact_context into all existing memories via DB.
     """
+    db = get_db()
     updated = 0
     skipped = 0
 
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT * FROM {db._table('memories')} WHERE type IN ('core', 'active', 'archive')"
+            )
+            rows = cur.fetchall()
 
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
+        for row in rows:
+            row = dict(row)
+            metadata, content = db_to_file_metadata(row)
 
             if not metadata.get('id'):
                 continue
 
             # Skip if already has contact_context
-            if 'contact_context' in metadata:
+            existing_cc = row.get('contact_context') or []
+            if existing_cc:
                 skipped += 1
                 continue
 
-            # Extract contacts
+            # Extract contacts from content + tags
             tags = metadata.get('tags', [])
             if isinstance(tags, str):
                 tags = [t.strip() for t in tags.split(',')]
@@ -168,8 +148,7 @@ def backfill_contact_context():
             contacts = extract_contacts(full_content)
 
             if contacts:
-                metadata['contact_context'] = contacts
-                write_memory_file(filepath, metadata, content)
+                db.update_memory(row['id'], contact_context=contacts)
                 updated += 1
 
     print(f"Backfill complete: {updated} memories updated, {skipped} already tagged")
@@ -178,37 +157,36 @@ def backfill_contact_context():
 
 def backfill_edges():
     """
-    Backfill contact_context into existing .edges_v3.json edges.
+    Backfill contact_context into existing edges via DB.
     """
-    edges_file = MEMORY_ROOT / ".edges_v3.json"
-    if not edges_file.exists():
-        print("No .edges_v3.json found.")
-        return 0
+    db = get_db()
 
-    # Load edges
-    with open(edges_file, 'r', encoding='utf-8') as f:
-        edges_raw = json.load(f)
-
-    # Build contact cache for all memories
+    # Build contact cache for all memories from DB
     contact_cache = {}
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            memory_id = metadata.get('id')
-            if memory_id:
-                if 'contact_context' in metadata:
-                    contact_cache[memory_id] = metadata['contact_context']
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT id, contact_context, content, tags FROM {db._table('memories')} "
+                f"WHERE type IN ('core', 'active', 'archive')"
+            )
+            for row in cur.fetchall():
+                row = dict(row)
+                memory_id = row['id']
+                cc = row.get('contact_context') or []
+                if cc:
+                    contact_cache[memory_id] = cc
                 else:
-                    tags = metadata.get('tags', [])
+                    tags = row.get('tags') or []
                     if isinstance(tags, str):
                         tags = [t.strip() for t in tags.split(',')]
-                    full_content = content + ' ' + ' '.join(tags)
+                    full_content = (row.get('content') or '') + ' ' + ' '.join(tags)
                     contact_cache[memory_id] = extract_contacts(full_content)
 
+    # Read all edges from DB
+    all_edges = db.get_all_edges()
+
     updated = 0
-    for pair_key, edge_data in edges_raw.items():
+    for pair_key, edge_data in all_edges.items():
         ids = pair_key.split('|')
         if len(ids) != 2:
             continue
@@ -221,46 +199,55 @@ def backfill_edges():
         all_contacts = list(contacts1 | contacts2)
 
         if all_contacts:
-            if 'contact_context' not in edge_data:
-                edge_data['contact_context'] = all_contacts
+            existing_cc = edge_data.get('contact_context') or []
+            if not existing_cc:
+                # Update the edge's contact_context in the DB
+                with db._conn() as conn:
+                    with conn.cursor() as cur:
+                        a, b = (id1, id2) if id1 < id2 else (id2, id1)
+                        cur.execute(
+                            f"UPDATE {db._table('edges_v3')} "
+                            f"SET contact_context = %s "
+                            f"WHERE id1 = %s AND id2 = %s",
+                            (all_contacts, a, b)
+                        )
                 updated += 1
-
-    # Save
-    with open(edges_file, 'w', encoding='utf-8') as f:
-        json.dump(edges_raw, f, indent=2)
 
     print(f"Edge backfill complete: {updated} edges updated")
     return updated
 
 
 def get_contact_stats() -> dict:
-    """Get statistics on contact distribution."""
+    """Get statistics on contact distribution from DB."""
     stats = defaultdict(lambda: {'count': 0, 'memories': []})
     total = 0
 
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
+    db = get_db()
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT * FROM {db._table('memories')} WHERE type IN ('core', 'active', 'archive')"
+            )
+            for row in cur.fetchall():
+                row = dict(row)
+                metadata, content = db_to_file_metadata(row)
+                memory_id = metadata.get('id')
+                if not memory_id:
+                    continue
 
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            memory_id = metadata.get('id')
-            if not memory_id:
-                continue
+                total += 1
+                contacts = row.get('contact_context') or []
+                if not contacts:
+                    tags = metadata.get('tags', [])
+                    if isinstance(tags, str):
+                        tags = [t.strip() for t in tags.split(',')]
+                    full_content = content + ' ' + ' '.join(tags)
+                    contacts = extract_contacts(full_content)
 
-            total += 1
-            contacts = metadata.get('contact_context', [])
-            if not contacts:
-                tags = metadata.get('tags', [])
-                if isinstance(tags, str):
-                    tags = [t.strip() for t in tags.split(',')]
-                full_content = content + ' ' + ' '.join(tags)
-                contacts = extract_contacts(full_content)
-
-            for contact in contacts:
-                stats[contact]['count'] += 1
-                if len(stats[contact]['memories']) < 3:
-                    stats[contact]['memories'].append(memory_id)
+                for contact in contacts:
+                    stats[contact]['count'] += 1
+                    if len(stats[contact]['memories']) < 3:
+                        stats[contact]['memories'].append(memory_id)
 
     return {'total': total, 'by_contact': dict(stats)}
 

@@ -23,9 +23,6 @@ from typing import Optional
 import math
 
 MEMORY_DIR = Path(__file__).parent
-ACTIVE_DIR = MEMORY_DIR / "active"
-CORE_DIR = MEMORY_DIR / "core"
-EMBEDDINGS_FILE = MEMORY_DIR / "embeddings.json"
 
 # Embedding dimensions vary by model:
 # - OpenAI text-embedding-3-small: 1536
@@ -126,44 +123,6 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
-def load_embeddings() -> dict:
-    """Load embeddings index from disk."""
-    if EMBEDDINGS_FILE.exists():
-        try:
-            with open(EMBEDDINGS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            pass
-    return {"memories": {}, "model": "text-embedding-3-small"}
-
-
-def save_embeddings(data: dict):
-    """Save embeddings index to disk."""
-    with open(EMBEDDINGS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f)
-
-
-def parse_memory_file(path: Path) -> tuple[Optional[str], Optional[str]]:
-    """Parse a memory file and return (id, content)."""
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        # Parse YAML frontmatter
-        if content.startswith('---'):
-            parts = content.split('---', 2)
-            if len(parts) >= 3:
-                import re
-                # Extract ID from frontmatter
-                id_match = re.search(r'^id:\s*(.+)$', parts[1], re.MULTILINE)
-                memory_id = id_match.group(1).strip() if id_match else path.stem
-                # Content is everything after frontmatter
-                body = parts[2].strip()
-                return memory_id, body
-
-        return path.stem, content
-    except Exception as e:
-        return None, None
 
 
 def detect_embedding_source() -> str:
@@ -185,117 +144,80 @@ def detect_embedding_source() -> str:
 
 def index_memories(force: bool = False) -> dict:
     """
-    Index all memories by generating embeddings.
+    Index all memories by generating embeddings. DB-only.
+
+    Reads memories from PostgreSQL, generates embeddings, stores back to DB.
 
     Args:
-        force: If True, re-index all memories. Otherwise, only index new ones.
+        force: If True, re-index all memories. Otherwise, only index unembedded ones.
 
     Returns:
         Summary of indexing results.
     """
+    from db_adapter import get_db
+    import psycopg2.extras
+
+    db = get_db()
     model_source = detect_embedding_source()
-    data = load_embeddings() if not force else {"memories": {}, "model": model_source}
-    existing = set(data["memories"].keys())
 
-    stats = {"indexed": 0, "skipped": 0, "failed": 0, "total": 0}
+    # Get all memories from DB
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"SELECT id, content FROM {db._table('memories')} WHERE type IN ('core', 'active')")
+            all_memories = cur.fetchall()
 
-    # Collect all memory files
-    memory_files = []
-    for directory in [CORE_DIR, ACTIVE_DIR]:
-        if directory.exists():
-            memory_files.extend(directory.glob("*.md"))
+    # Get already-embedded IDs (unless forcing)
+    existing = set()
+    if not force:
+        with db._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT memory_id FROM {db._table('text_embeddings')}")
+                existing = {row[0] for row in cur.fetchall()}
 
-    stats["total"] = len(memory_files)
+    stats = {"indexed": 0, "skipped": 0, "failed": 0, "total": len(all_memories)}
 
-    for path in memory_files:
-        memory_id, content = parse_memory_file(path)
+    for row in all_memories:
+        memory_id = row['id']
+        content = row.get('content', '')
         if not memory_id or not content:
             stats["failed"] += 1
             continue
 
-        # Skip if already indexed (unless forcing)
         if memory_id in existing and not force:
             stats["skipped"] += 1
             continue
 
-        # Apply vocabulary bridge before embedding (cross-register matching)
+        # Apply vocabulary bridge before embedding
         try:
             from vocabulary_bridge import bridge_content
             bridged = bridge_content(content)
         except ImportError:
             bridged = content
 
-        # Generate embedding
+        # Generate embedding and store to DB
         embedding = get_embedding(bridged)
         if embedding:
-            data["memories"][memory_id] = {
-                "embedding": embedding,
-                "path": str(path),
-                "preview": content[:200]
-            }
+            db.store_embedding(
+                memory_id=memory_id,
+                embedding=embedding,
+                preview=content[:200],
+                model=model_source,
+            )
             stats["indexed"] += 1
             print(f"  Indexed: {memory_id}")
         else:
             stats["failed"] += 1
             print(f"  Failed: {memory_id}")
 
-    # Update model info
-    data["model"] = model_source
-    data["embedding_dim"] = len(next(iter(data["memories"].values()), {}).get("embedding", [])) if data["memories"] else 0
-
-    save_embeddings(data)
-
-    # Bulk sync to DB if available
-    try:
-        from db_adapter import is_db_active, get_db
-        if is_db_active() and stats["indexed"] > 0:
-            db = get_db()
-            synced = 0
-            for memory_id, info in data["memories"].items():
-                emb = info.get("embedding")
-                if emb:
-                    try:
-                        db.store_embedding(
-                            memory_id=memory_id,
-                            embedding=emb,
-                            preview=info.get("preview", "")[:200],
-                            model=model_source,
-                        )
-                        synced += 1
-                    except Exception:
-                        pass
-            if synced:
-                print(f"  Synced {synced} embeddings to database")
-    except Exception:
-        pass
-
     return stats
 
 
 def load_memory_tags(memory_id: str) -> list[str]:
-    """Load tags from a memory file (or DB)."""
-    try:
-        from db_adapter import is_db_active, get_db
-        if is_db_active():
-            row = get_db().get_memory(memory_id)
-            if row and row.get('tags'):
-                return row['tags']
-    except Exception:
-        pass
-
-    for directory in [ACTIVE_DIR, CORE_DIR]:
-        for pattern in [f"{memory_id}.md", f"*{memory_id}*.md"]:
-            matches = list(directory.glob(pattern))
-            if matches:
-                try:
-                    content = matches[0].read_text(encoding='utf-8')
-                    if content.startswith('---'):
-                        import re
-                        tags_match = re.search(r'^tags:\s*\[([^\]]*)\]', content, re.MULTILINE)
-                        if tags_match:
-                            return [t.strip().strip("'\"") for t in tags_match.group(1).split(',')]
-                except:
-                    pass
+    """Load tags from DB."""
+    from db_adapter import get_db
+    row = get_db().get_memory(memory_id)
+    if row and row.get('tags'):
+        return row['tags']
     return []
 
 
@@ -340,41 +262,19 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
 
     results = []
 
-    # Try pgvector search first (single indexed query vs loading all embeddings)
-    db_searched = False
-    try:
-        from db_adapter import is_db_active, get_db
-        if is_db_active():
-            db = get_db()
-            # Fetch extra for post-filtering by threshold and boosting
-            rows = db.search_embeddings(query_embedding, limit=limit * 3)
-            for row in rows:
-                score = float(row.get('similarity', 0))
-                if score >= threshold:
-                    results.append({
-                        "id": row['id'],
-                        "score": score,
-                        "preview": (row.get('preview') or row.get('content', ''))[:150],
-                        "path": f"db://{row.get('type', 'active')}/{row['id']}.md"
-                    })
-            db_searched = True
-    except Exception:
-        pass
-
-    # Fall back to file-based search
-    if not db_searched:
-        data = load_embeddings()
-        if not data["memories"]:
-            return []
-        for memory_id, info in data["memories"].items():
-            score = cosine_similarity(query_embedding, info["embedding"])
-            if score >= threshold:
-                results.append({
-                    "id": memory_id,
-                    "score": score,
-                    "preview": info.get("preview", "")[:150],
-                    "path": info.get("path", "")
-                })
+    # pgvector search — DB-only, no file fallback
+    from db_adapter import get_db
+    db = get_db()
+    rows = db.search_embeddings(query_embedding, limit=limit * 3)
+    for row in rows:
+        score = float(row.get('similarity', 0))
+        if score >= threshold:
+            results.append({
+                "id": row['id'],
+                "score": score,
+                "preview": (row.get('preview') or row.get('content', ''))[:150],
+                "path": f"db://{row.get('type', 'active')}/{row['id']}.md"
+            })
 
     # === ENTITY INDEX INJECTION (Fix for WHO dimension) ===
     # When query mentions a known contact, inject their memories into candidates
@@ -387,21 +287,22 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
             injected = 0
             for mem_id in entity_mem_ids[:10]:  # Cap at 10 injected
                 if mem_id not in existing_ids:
-                    # Load this memory's embedding and compute actual similarity
+                    # Load this memory's embedding from DB and compute actual similarity
                     mem_score = threshold  # Default to threshold
+                    preview = ""
+                    path = ""
                     try:
-                        data = load_embeddings()
-                        if mem_id in data.get("memories", {}):
-                            emb = data["memories"][mem_id]["embedding"]
-                            mem_score = cosine_similarity(query_embedding, emb)
-                            preview = data["memories"][mem_id].get("preview", "")[:150]
-                            path = data["memories"][mem_id].get("path", "")
+                        emb_row = db.get_embedding(mem_id) if hasattr(db, 'get_embedding') else None
+                        if emb_row and emb_row.get('embedding'):
+                            mem_score = cosine_similarity(query_embedding, emb_row['embedding'])
+                            preview = (emb_row.get('preview') or '')[:150]
                         else:
-                            preview = ""
-                            path = ""
+                            # No embedding — get preview from memory content
+                            mem_row = db.get_memory(mem_id)
+                            if mem_row:
+                                preview = (mem_row.get('content') or '')[:150]
                     except Exception:
-                        preview = ""
-                        path = ""
+                        pass
 
                     # Strong boost for entity-matched memories (2x)
                     # These are KNOWN contacts mentioned in the query — high confidence
@@ -474,42 +375,14 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
 
     # === DIMENSIONAL BOOSTING (Phase 3: 5W-aware search) ===
     if dimension and results:
-        try:
-            # DB-first: get degree counts directly
-            _db_root = str(Path(__file__).parent.parent.parent / "memorydatabase" / "database")
-            if _db_root not in sys.path:
-                sys.path.insert(0, _db_root)
-            from db import MemoryDB
-            _schema = 'spin' if 'Moltbook2' in str(Path(__file__).parent) else 'drift'
-            _db = MemoryDB(schema=_schema)
-            result_ids = [r['id'] for r in results]
-            dim_degree = _db.get_dimension_degree(dimension, sub_view or '', result_ids)
-            for result in results:
-                degree = dim_degree.get(result['id'], 0)
-                if degree > 0:
-                    result['score'] *= (1 + DIMENSION_BOOST_SCALE * math.log(1 + degree))
-                    result['dim_boosted'] = True
-                    result['dim_degree'] = degree
-        except Exception:
-            # Fallback to file-based load_graph
-            try:
-                from context_manager import load_graph
-                graph = load_graph(dimension, sub_view)
-                if graph and graph.get('edges'):
-                    dim_degree = {}
-                    for edge_key in graph['edges']:
-                        parts = edge_key.split('|')
-                        if len(parts) == 2:
-                            dim_degree[parts[0]] = dim_degree.get(parts[0], 0) + 1
-                            dim_degree[parts[1]] = dim_degree.get(parts[1], 0) + 1
-                    for result in results:
-                        degree = dim_degree.get(result['id'], 0)
-                        if degree > 0:
-                            result['score'] *= (1 + DIMENSION_BOOST_SCALE * math.log(1 + degree))
-                            result['dim_boosted'] = True
-                            result['dim_degree'] = degree
-            except Exception:
-                pass
+        result_ids = [r['id'] for r in results]
+        dim_degree = db.get_dimension_degree(dimension, sub_view or '', result_ids)
+        for result in results:
+            degree = dim_degree.get(result['id'], 0)
+            if degree > 0:
+                result['score'] *= (1 + DIMENSION_BOOST_SCALE * math.log(1 + degree))
+                result['dim_boosted'] = True
+                result['dim_degree'] = degree
 
     # Sort by (boosted) score descending
     results.sort(key=lambda x: x["score"], reverse=True)
@@ -528,23 +401,24 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
 
 
 def get_status() -> dict:
-    """Get status of the semantic search index."""
-    data = load_embeddings()
+    """Get status of the semantic search index. DB-only."""
+    from db_adapter import get_db
+    db = get_db()
 
-    # Count actual memory files
-    memory_count = 0
-    for directory in [CORE_DIR, ACTIVE_DIR]:
-        if directory.exists():
-            memory_count += len(list(directory.glob("*.md")))
+    memory_count = db.count_memories()
 
-    indexed_count = len(data.get("memories", {}))
+    import psycopg2.extras
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {db._table('text_embeddings')}")
+            indexed_count = cur.fetchone()[0]
 
     return {
         "indexed": indexed_count,
         "total_memories": memory_count,
         "coverage": f"{indexed_count}/{memory_count}",
-        "model": data.get("model", "unknown"),
-        "index_file": str(EMBEDDINGS_FILE),
+        "model": "qwen3-embedding",
+        "store": "postgresql/pgvector",
         "has_openai_key": bool(os.getenv("OPENAI_API_KEY")),
         "local_endpoint": os.getenv("LOCAL_EMBEDDING_ENDPOINT", "not configured")
     }
@@ -553,32 +427,19 @@ def get_status() -> dict:
 def embed_single(memory_id: str, content: str) -> bool:
     """
     Embed a single memory (call this when storing new memories).
-    Returns True if successful.
+    Returns True if successful. DB-only.
     """
     embedding = get_embedding(content)
     if not embedding:
         return False
 
-    # File write
-    data = load_embeddings()
-    data["memories"][memory_id] = {
-        "embedding": embedding,
-        "preview": content[:200]
-    }
-    save_embeddings(data)
-
-    # Dual-write to DB
-    try:
-        from db_adapter import is_db_active, get_db
-        if is_db_active():
-            get_db().store_embedding(
-                memory_id=memory_id,
-                embedding=embedding,
-                preview=content[:200],
-                model=data.get("model", "unknown"),
-            )
-    except Exception:
-        pass
+    from db_adapter import get_db
+    get_db().store_embedding(
+        memory_id=memory_id,
+        embedding=embedding,
+        preview=content[:200],
+        model="qwen3-embedding",
+    )
 
     return True
 
@@ -600,56 +461,70 @@ def find_similar_pairs(threshold: float = 0.85, limit: int = 20) -> list[dict]:
     Returns:
         List of dicts with {id1, id2, similarity, preview1, preview2}
     """
-    data = load_embeddings()
-    memories = data.get("memories", {})
+    # Load all embeddings from DB
+    from db_adapter import get_db
+    import psycopg2.extras
+    db = get_db()
 
-    if len(memories) < 2:
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"SELECT memory_id, embedding, preview FROM {db._table('text_embeddings')}")
+            rows = cur.fetchall()
+
+    if len(rows) < 2:
         return []
 
     # Compare all pairs
     pairs = []
-    memory_ids = list(memories.keys())
-
-    for i, id1 in enumerate(memory_ids):
-        emb1 = memories[id1].get("embedding")
+    for i, r1 in enumerate(rows):
+        emb1 = r1.get('embedding')
         if not emb1:
             continue
-
-        for id2 in memory_ids[i+1:]:
-            emb2 = memories[id2].get("embedding")
+        for r2 in rows[i+1:]:
+            emb2 = r2.get('embedding')
             if not emb2:
                 continue
 
-            sim = cosine_similarity(emb1, emb2)
+            sim = cosine_similarity(list(emb1), list(emb2))
             if sim >= threshold:
                 pairs.append({
-                    "id1": id1,
-                    "id2": id2,
+                    "id1": r1['memory_id'],
+                    "id2": r2['memory_id'],
                     "similarity": round(sim, 4),
-                    "preview1": memories[id1].get("preview", "")[:80],
-                    "preview2": memories[id2].get("preview", "")[:80]
+                    "preview1": (r1.get("preview") or "")[:80],
+                    "preview2": (r2.get("preview") or "")[:80]
                 })
 
-    # Sort by similarity descending
     pairs.sort(key=lambda x: x["similarity"], reverse=True)
     return pairs[:limit]
 
 
 def get_memory_embedding(memory_id: str) -> Optional[list[float]]:
-    """Get the embedding for a specific memory."""
-    data = load_embeddings()
-    mem = data.get("memories", {}).get(memory_id)
-    return mem.get("embedding") if mem else None
+    """Get the embedding for a specific memory. DB-only."""
+    from db_adapter import get_db
+    db = get_db()
+    import psycopg2.extras
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT embedding FROM {db._table('text_embeddings')} WHERE memory_id = %s",
+                (memory_id,)
+            )
+            row = cur.fetchone()
+            return list(row['embedding']) if row else None
 
 
 def remove_from_index(memory_id: str) -> bool:
-    """Remove a memory from the embedding index (after consolidation)."""
-    data = load_embeddings()
-    if memory_id in data.get("memories", {}):
-        del data["memories"][memory_id]
-        save_embeddings(data)
-        return True
-    return False
+    """Remove a memory from the embedding index. DB-only."""
+    from db_adapter import get_db
+    db = get_db()
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"DELETE FROM {db._table('text_embeddings')} WHERE memory_id = %s",
+                (memory_id,)
+            )
+            return cur.rowcount > 0
 
 
 if __name__ == "__main__":

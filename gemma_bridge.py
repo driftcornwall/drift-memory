@@ -151,7 +151,7 @@ def scan_dead_memories(limit: int = 20) -> dict:
         Dict with scan results: {scanned, terms_found, terms_added}
     """
     from vocabulary_bridge import VOCABULARY_MAP, add_term
-    from memory_common import parse_memory_file, ACTIVE_DIR, CORE_DIR
+    from db_adapter import get_db, db_to_file_metadata
 
     if not _ollama_available():
         return {"error": f"Ollama not running or {MODEL} not pulled"}
@@ -160,15 +160,14 @@ def scan_dead_memories(limit: int = 20) -> dict:
     stats = {"scanned": 0, "terms_found": 0, "terms_added": 0, "new_terms": []}
 
     # Find dead memories (low recall, sorted by session age)
+    db = get_db()
+    rows = db.list_memories(type_filter=['active', 'core'])
     candidates = []
-    for directory in [ACTIVE_DIR, CORE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            recall_count = metadata.get('recall_count', 0)
-            if recall_count <= 1 and len(content) > 100:
-                candidates.append((metadata.get('sessions_since_recall', 0), content, metadata.get('id', '')))
+    for row in rows:
+        metadata, content = db_to_file_metadata(row)
+        recall_count = metadata.get('recall_count', 0)
+        if recall_count <= 1 and len(content) > 100:
+            candidates.append((metadata.get('sessions_since_recall', 0), content, metadata.get('id', '')))
 
     # Sort by most neglected first
     candidates.sort(reverse=True)

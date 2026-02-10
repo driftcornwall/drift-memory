@@ -5,6 +5,8 @@ Co-occurrence System — Edge provenance, pair decay, and co-occurrence logging.
 Extracted from memory_manager.py (Phase 5).
 Manages the co-occurrence graph: logging pairs from session recalls,
 v3 edge provenance with observations/beliefs, and pair decay.
+
+PostgreSQL is the ONLY data store. No file fallbacks.
 """
 
 import json
@@ -12,15 +14,14 @@ import math
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 from memory_common import (
-    MEMORY_ROOT, CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR, ALL_DIRS,
-    PENDING_COOCCURRENCE_FILE,
-    parse_memory_file, write_memory_file,
+    ALL_DIRS,
+    parse_memory_file,
     SELF_EVOLUTION_ENABLED, get_agent_name,
 )
+from db_adapter import get_db, db_to_file_metadata
 from decay_evolution import calculate_evolution_decay_multiplier, log_decay_event
 import session_state
 
@@ -68,31 +69,28 @@ def log_co_occurrences() -> int:
         return 0
 
     pairs_updated = 0
+    db = get_db()
+    import psycopg2.extras
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            for i, id1 in enumerate(retrieved):
+                for id2 in retrieved[i + 1:]:
+                    for memory_id, other_id in [(id1, id2), (id2, id1)]:
+                        cur.execute(f"""
+                            INSERT INTO {db._table('co_occurrences')} (memory_id, other_id, count)
+                            VALUES (%s, %s, 1)
+                            ON CONFLICT (memory_id, other_id)
+                            DO UPDATE SET count = {db._table('co_occurrences')}.count + 1
+                        """, (memory_id, other_id))
+                    pairs_updated += 1
 
-    for i, mem_id_1 in enumerate(retrieved):
-        for mem_id_2 in retrieved[i + 1:]:
-            for memory_id, other_id in [(mem_id_1, mem_id_2), (mem_id_2, mem_id_1)]:
-                for directory in ALL_DIRS:
-                    if not directory.exists():
-                        continue
-                    for filepath in directory.glob(f"*-{memory_id}.md"):
-                        metadata, content = parse_memory_file(filepath)
-
-                        co_occurrences = metadata.get('co_occurrences', {})
-                        co_occurrences[other_id] = co_occurrences.get(other_id, 0) + 1
-                        metadata['co_occurrences'] = co_occurrences
-
-                        write_memory_file(filepath, metadata, content)
-                        pairs_updated += 1
-                        break
-
-    print(f"Logged {pairs_updated // 2} co-occurrence pairs from {len(retrieved)} memories")
-    return pairs_updated // 2
+    print(f"Logged {pairs_updated} co-occurrence pairs from {len(retrieved)} memories")
+    return pairs_updated
 
 
 def log_co_occurrences_v3() -> tuple[int, str]:
     """
-    Log co-occurrences to edges_v3.json with activity context.
+    Log co-occurrences to edges_v3 DB table with activity context.
     Layer 2.1 integration - tags edges with WHY they formed.
 
     Returns: (pairs_updated, session_activity)
@@ -116,7 +114,7 @@ def log_co_occurrences_v3() -> tuple[int, str]:
     except Exception:
         pass
 
-    edges = _load_edges_v3()
+    db = get_db()
     session_id = datetime.now(timezone.utc).isoformat()
     pairs_updated = 0
 
@@ -124,54 +122,39 @@ def log_co_occurrences_v3() -> tuple[int, str]:
         for id2 in retrieved[i + 1:]:
             pair = tuple(sorted([id1, id2]))
 
-            obs = _create_observation(
+            # Fetch existing edge once per pair
+            existing_edge = db.get_edge(pair[0], pair[1])
+
+            # Build context dicts for the edge, merging with existing
+            platform_context = existing_edge.get('platform_context', {}) if existing_edge else {}
+            for plat in session_platforms:
+                platform_context[plat] = platform_context.get(plat, 0) + 1
+
+            activity_context = existing_edge.get('activity_context', {}) if existing_edge else {}
+            if session_activity:
+                activity_context[session_activity] = activity_context.get(session_activity, 0) + 1
+
+            # Compute belief: for new edges start at 1.0; for existing, increment
+            belief = (existing_edge.get('belief', 0.0) if existing_edge else 0.0) + 1.0
+
+            db.upsert_edge(
+                pair[0], pair[1],
+                belief=belief,
+                platform_context=platform_context,
+                activity_context=activity_context,
+                topic_context=existing_edge.get('topic_context', {}) if existing_edge else {},
+            )
+            db.add_observation(
+                pair[0], pair[1],
                 source_type='session_recall',
-                weight=1.0,
-                trust_tier='self',
                 session_id=session_id,
                 agent=get_agent_name(),
                 platform=','.join(session_platforms) if session_platforms else None,
-                activity=session_activity
+                activity=session_activity,
             )
-
-            now = datetime.now(timezone.utc).isoformat()
-            if pair not in edges:
-                edges[pair] = {
-                    'observations': [],
-                    'belief': 0.0,
-                    'first_formed': now,
-                    'last_updated': now,
-                    'platform_context': {},
-                    'activity_context': {},
-                    'thinking_about': [],
-                }
-
-            edges[pair]['observations'].append(obs)
-            edges[pair]['belief'] = aggregate_belief(edges[pair]['observations'])
-            edges[pair]['last_updated'] = now
-
-            if 'platform_context' not in edges[pair]:
-                edges[pair]['platform_context'] = {}
-            for plat in session_platforms:
-                edges[pair]['platform_context'][plat] = edges[pair]['platform_context'].get(plat, 0) + 1
-
-            if 'activity_context' not in edges[pair]:
-                edges[pair]['activity_context'] = {}
-            if session_activity:
-                edges[pair]['activity_context'][session_activity] = (
-                    edges[pair]['activity_context'].get(session_activity, 0) + 1
-                )
-
-            if 'thinking_about' not in edges[pair]:
-                edges[pair]['thinking_about'] = []
-            other_memories = [m for m in retrieved if m not in pair]
-            for mem_id in other_memories:
-                if mem_id not in edges[pair]['thinking_about']:
-                    edges[pair]['thinking_about'].append(mem_id)
 
             pairs_updated += 1
 
-    _save_edges_v3(edges)
     return pairs_updated, session_activity
 
 
@@ -179,106 +162,104 @@ def log_co_occurrences_v3() -> tuple[int, str]:
 
 def save_pending_cooccurrence() -> int:
     """
-    v2.16: Fast session end - save retrieved IDs to pending file for deferred processing.
+    v2.16: Fast session end - save retrieved IDs to DB KV for deferred processing.
     The expensive co-occurrence calculation happens at NEXT session start.
+
+    v2.17: APPENDS to existing pending data instead of overwriting.
+    Multiple stop hooks can fire before a single start hook processes them.
+    v3.0: DB KV store instead of file.
     """
     retrieved = session_state.get_retrieved_list()
     if not retrieved:
         print("No memories to save to pending.")
         return 0
 
-    pending_data = {
+    new_entry = {
         'retrieved': retrieved,
         'session_id': datetime.now(timezone.utc).isoformat(),
         'agent': get_agent_name(),
         'saved_at': datetime.now(timezone.utc).isoformat()
     }
-    PENDING_COOCCURRENCE_FILE.write_text(
-        json.dumps(pending_data, indent=2), encoding='utf-8'
-    )
 
-    session_state.clear()
+    # Read existing pending data from DB KV and append
+    db = get_db()
+    existing_sessions = []
+    existing_raw = db.kv_get('.pending_cooccurrence')
+    if existing_raw:
+        existing = json.loads(existing_raw) if isinstance(existing_raw, str) else existing_raw
+        if 'sessions' in existing:
+            existing_sessions = existing['sessions']
+        elif 'retrieved' in existing:
+            existing_sessions = [existing]
 
-    print(f"Saved {len(retrieved)} memories to pending co-occurrence file.")
+    existing_sessions.append(new_entry)
+    db.kv_set('.pending_cooccurrence', {'sessions': existing_sessions})
+
+    print(f"Saved {len(retrieved)} memories to pending co-occurrence ({len(existing_sessions)} session(s) queued).")
     return len(retrieved)
 
 
 def process_pending_cooccurrence() -> int:
     """
-    v2.16: Process pending co-occurrence file from previous session.
+    v2.16: Process pending co-occurrence data from previous session(s).
     Call this at session START (when there's time).
+
+    v2.17: Handles multiple queued sessions.
+    v3.0: Reads from DB KV store instead of file.
     """
-    if not PENDING_COOCCURRENCE_FILE.exists():
+    db = get_db()
+
+    raw = db.kv_get('.pending_cooccurrence')
+    if not raw:
         return 0
 
-    try:
-        pending_data = json.loads(PENDING_COOCCURRENCE_FILE.read_text(encoding='utf-8'))
-    except (json.JSONDecodeError, KeyError) as e:
-        print(f"Could not load pending co-occurrence: {e}")
-        PENDING_COOCCURRENCE_FILE.unlink(missing_ok=True)
+    pending = json.loads(raw) if isinstance(raw, str) else raw
+
+    # Handle both formats
+    if 'sessions' in pending:
+        sessions = pending['sessions']
+    elif 'retrieved' in pending:
+        sessions = [pending]
+    else:
+        db.kv_set('.pending_cooccurrence', None)
         return 0
 
-    retrieved = pending_data.get('retrieved', [])
+    import psycopg2.extras
+    total_pairs = 0
+    total_memories = 0
 
-    if len(retrieved) < 2:
-        PENDING_COOCCURRENCE_FILE.unlink(missing_ok=True)
-        return 0
+    for session_data in sessions:
+        retrieved = session_data.get('retrieved', [])
+        if len(retrieved) < 2:
+            continue
 
-    print(f"Processing {len(retrieved)} pending memories from previous session...")
+        total_memories += len(retrieved)
+        print(f"Processing {len(retrieved)} pending memories from session {session_data.get('session_id', '?')[:19]}...")
 
-    pairs_updated = 0
-
-    for i, mem_id_1 in enumerate(retrieved):
-        for mem_id_2 in retrieved[i + 1:]:
-            for memory_id, other_id in [(mem_id_1, mem_id_2), (mem_id_2, mem_id_1)]:
-                for directory in ALL_DIRS:
-                    if not directory.exists():
-                        continue
-                    for filepath in directory.glob(f"*-{memory_id}.md"):
-                        metadata, content = parse_memory_file(filepath)
-
-                        co_occurrences = metadata.get('co_occurrences', {})
-                        co_occurrences[other_id] = co_occurrences.get(other_id, 0) + 1
-                        metadata['co_occurrences'] = co_occurrences
-
-                        write_memory_file(filepath, metadata, content)
+        pairs_updated = 0
+        with db._conn() as conn:
+            with conn.cursor() as cur:
+                for i, id1 in enumerate(retrieved):
+                    for id2 in retrieved[i + 1:]:
+                        for memory_id, other_id in [(id1, id2), (id2, id1)]:
+                            cur.execute(f"""
+                                INSERT INTO {db._table('co_occurrences')} (memory_id, other_id, count)
+                                VALUES (%s, %s, 1)
+                                ON CONFLICT (memory_id, other_id)
+                                DO UPDATE SET count = {db._table('co_occurrences')}.count + 1
+                            """, (memory_id, other_id))
                         pairs_updated += 1
-                        break
 
-    PENDING_COOCCURRENCE_FILE.unlink(missing_ok=True)
+        total_pairs += pairs_updated
 
-    print(f"Processed co-occurrences: {len(retrieved)} memories, {pairs_updated // 2} pairs updated")
-    return pairs_updated // 2
+    # Clear pending data
+    db.kv_set('.pending_cooccurrence', None)
+
+    print(f"Processed co-occurrences: {len(sessions)} session(s), {total_memories} memories, {total_pairs} pairs updated")
+    return total_pairs
 
 
 # --- V3.0 Edge Provenance System (credit: SpindriftMend PR #5) ---
-
-def _get_edges_file() -> Path:
-    """Path to v3.0 edges with provenance."""
-    return MEMORY_ROOT / ".edges_v3.json"
-
-
-def _load_edges_v3() -> dict[tuple[str, str], dict]:
-    """Load v3.0 edges with full provenance."""
-    edges_file = _get_edges_file()
-    if not edges_file.exists():
-        return {}
-
-    try:
-        with open(edges_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        return {tuple(k.split('|')): v for k, v in data.items()}
-    except (json.JSONDecodeError, KeyError):
-        return {}
-
-
-def _save_edges_v3(edges: dict[tuple[str, str], dict]):
-    """Save v3.0 edges with provenance to disk."""
-    edges_file = _get_edges_file()
-    data = {'|'.join(k): v for k, v in edges.items()}
-    with open(edges_file, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2)
-
 
 def _create_observation(
     source_type: str,
@@ -365,43 +346,49 @@ def add_observation(
     Add an observation to an edge and recompute belief.
     Creates edge if it doesn't exist.
     """
-    edges = _load_edges_v3()
+    db = get_db()
     pair = tuple(sorted([id1, id2]))
 
-    if pair not in edges:
-        edges[pair] = {
-            'observations': [],
-            'belief': 0.0,
-            'last_updated': datetime.now(timezone.utc).isoformat()
-        }
+    # Get existing edge or create new
+    existing = db.get_edge(pair[0], pair[1])
+    new_belief = (existing.get('belief', 0.0) if existing else 0.0) + weight
 
-    obs = _create_observation(
+    db.upsert_edge(
+        pair[0], pair[1],
+        belief=new_belief,
+        platform_context=existing.get('platform_context', {}) if existing else {},
+        activity_context=existing.get('activity_context', {}) if existing else {},
+        topic_context=existing.get('topic_context', {}) if existing else {},
+    )
+    db.add_observation(
+        pair[0], pair[1],
         source_type=source_type,
         weight=weight,
         trust_tier=trust_tier,
-        **source_kwargs
+        **source_kwargs,
     )
-    edges[pair]['observations'].append(obs)
 
-    edges[pair]['belief'] = aggregate_belief(edges[pair]['observations'])
-    edges[pair]['last_updated'] = datetime.now(timezone.utc).isoformat()
-
-    _save_edges_v3(edges)
-
-    return edges[pair]
+    # Return edge data in the format callers expect
+    updated = db.get_edge(pair[0], pair[1])
+    return updated if updated else {'belief': new_belief, 'last_updated': datetime.now(timezone.utc).isoformat()}
 
 
 def migrate_to_v3():
-    """Migrate legacy in-file co-occurrences to v3.0 edges format."""
-    edges_file = _get_edges_file()
+    """
+    Migrate legacy in-file co-occurrences to v3.0 edges format (DB).
+    One-time migration utility. Reads from files, writes to DB.
+    """
+    db = get_db()
 
-    if edges_file.exists():
-        print("v3.0 edges file already exists. Skipping migration.")
+    # Check if edges already exist in DB
+    stats = db.edge_stats()
+    if stats.get('total_edges', 0) > 0:
+        print(f"DB already has {stats['total_edges']} edges. Skipping migration.")
         return
 
-    edges = {}
     migration_time = datetime.now(timezone.utc).isoformat()
     migrated_pairs = set()
+    edges_migrated = 0
 
     for directory in ALL_DIRS:
         if not directory.exists():
@@ -418,29 +405,22 @@ def migrate_to_v3():
                 if pair in migrated_pairs:
                     continue
 
-                edges[pair] = {
-                    'observations': [
-                        {
-                            'id': str(uuid.uuid4()),
-                            'observed_at': migration_time,
-                            'source': {
-                                'type': 'legacy_migration',
-                                'session_id': None,
-                                'agent': get_agent_name(),
-                                'note': f'Migrated from v2.x count={count}'
-                            },
-                            'weight': float(count),
-                            'trust_tier': 'self'
-                        }
-                    ],
-                    'belief': float(count),
-                    'last_updated': migration_time
-                }
+                db.upsert_edge(
+                    pair[0], pair[1],
+                    belief=float(count),
+                )
+                db.add_observation(
+                    pair[0], pair[1],
+                    source_type='legacy_migration',
+                    agent=get_agent_name(),
+                    weight=float(count),
+                    trust_tier='self',
+                )
                 migrated_pairs.add(pair)
+                edges_migrated += 1
 
-    if edges:
-        _save_edges_v3(edges)
-        print(f"Migrated {len(edges)} edges to v3.0 format.")
+    if edges_migrated:
+        print(f"Migrated {edges_migrated} edges to DB.")
     else:
         print("No co-occurrences found to migrate.")
 
@@ -449,23 +429,16 @@ def migrate_to_v3():
 
 def _get_recall_count(memory_id: str) -> int:
     """Get the recall_count for a memory by ID. Returns 0 if not found."""
-    for directory in ALL_DIRS:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob(f"*-{memory_id}.md"):
-            metadata, _ = parse_memory_file(filepath)
-            return metadata.get('recall_count', 0)
-    return 0
+    row = get_db().get_memory(memory_id)
+    return row.get('recall_count', 0) if row else 0
 
 
 def _get_memory_metadata(memory_id: str) -> Optional[dict]:
     """Get metadata for a memory by ID."""
-    for directory in ALL_DIRS:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob(f"*-{memory_id}.md"):
-            metadata, _ = parse_memory_file(filepath)
-            return metadata
+    row = get_db().get_memory(memory_id)
+    if row:
+        meta, _ = db_to_file_metadata(row)
+        return meta
     return None
 
 
@@ -499,6 +472,8 @@ def decay_pair_cooccurrences() -> tuple[int, int]:
     """
     Apply soft decay to co-occurrence pairs that weren't reinforced this session.
     Credit: SpindriftMend (PR #2), FadeMem (v2.8 access weighting)
+
+    Uses the co_occurrences DB table (v2 legacy counter pairs).
     """
     retrieved = session_state.get_retrieved_list()
     reinforced_pairs = set()
@@ -506,26 +481,23 @@ def decay_pair_cooccurrences() -> tuple[int, int]:
         for id2 in retrieved[i + 1:]:
             reinforced_pairs.add(tuple(sorted([id1, id2])))
 
+    db = get_db()
+    import psycopg2.extras
+
     pairs_decayed = 0
     pairs_pruned = 0
 
-    for directory in ALL_DIRS:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            memory_id = metadata.get('id')
-            if not memory_id:
-                continue
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Load all co-occurrence pairs
+            cur.execute(f"SELECT memory_id, other_id, count FROM {db._table('co_occurrences')}")
+            all_pairs = cur.fetchall()
 
-            co_occurrences = metadata.get('co_occurrences', {})
-            if not co_occurrences:
-                continue
-
-            updated = False
-            to_remove = []
-
-            for other_id, count in list(co_occurrences.items()):
+        with conn.cursor() as cur:
+            for row in all_pairs:
+                memory_id = row['memory_id']
+                other_id = row['other_id']
+                count = row['count']
                 pair = tuple(sorted([memory_id, other_id]))
 
                 if pair not in reinforced_pairs:
@@ -533,20 +505,20 @@ def decay_pair_cooccurrences() -> tuple[int, int]:
                     new_count = count - effective_decay
 
                     if new_count <= 0:
-                        to_remove.append(other_id)
+                        cur.execute(f"""
+                            DELETE FROM {db._table('co_occurrences')}
+                            WHERE memory_id = %s AND other_id = %s
+                        """, (memory_id, other_id))
                         pairs_pruned += 1
                     else:
-                        co_occurrences[other_id] = new_count
+                        cur.execute(f"""
+                            UPDATE {db._table('co_occurrences')}
+                            SET count = %s
+                            WHERE memory_id = %s AND other_id = %s
+                        """, (new_count, memory_id, other_id))
                         pairs_decayed += 1
-                    updated = True
 
-            for other_id in to_remove:
-                del co_occurrences[other_id]
-
-            if updated:
-                metadata['co_occurrences'] = co_occurrences
-                write_memory_file(filepath, metadata, content)
-
+    # Each pair has two rows (bidirectional), so divide by 2
     decayed = pairs_decayed // 2
     pruned = pairs_pruned // 2
 
@@ -570,16 +542,21 @@ def decay_pair_cooccurrences() -> tuple[int, int]:
 
 def _build_metadata_cache() -> dict[str, dict]:
     """Pre-load all memory metadata for fast lookup."""
-    cache = {}
-    for directory in ALL_DIRS:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, _ = parse_memory_file(filepath)
-            memory_id = metadata.get('id')
-            if memory_id:
-                cache[memory_id] = metadata
-    return cache
+    db = get_db()
+    import psycopg2.extras
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT id, type, recall_count, emotional_weight, sessions_since_recall,
+                       tags, entities, extra_metadata, retrieval_outcomes, retrieval_success_rate,
+                       topic_context, contact_context, platform_context, source
+                FROM {db._table('memories')}
+            """)
+            cache = {}
+            for row in cur.fetchall():
+                meta, _ = db_to_file_metadata(dict(row))
+                cache[row['id']] = meta
+            return cache
 
 
 def _calculate_effective_decay_cached(
@@ -666,7 +643,7 @@ def _has_dimension_overlap(
 
 def decay_pair_cooccurrences_v3() -> tuple[int, int]:
     """
-    Apply soft decay to edges in edges_v3.json.
+    Apply soft decay to edges in edges_v3 DB table.
     v5.0: Dimensional decay — edges outside the session's active context
     get dramatically reduced decay (INACTIVE_CONTEXT_FACTOR).
 
@@ -678,10 +655,20 @@ def decay_pair_cooccurrences_v3() -> tuple[int, int]:
         for id2 in retrieved[i + 1:]:
             reinforced_pairs.add(tuple(sorted([id1, id2])))
 
-    edges = _load_edges_v3()
-    if not edges:
+    db = get_db()
+
+    # Load all edges from DB
+    raw_edges = db.get_all_edges()
+    if not raw_edges:
         print("Pair decay (v3): 0 decayed, 0 pruned (no edges)")
         return 0, 0
+
+    # Convert to tuple-keyed dict for processing
+    edges = {}
+    for key_str, edge_data in raw_edges.items():
+        parts = key_str.split('|')
+        if len(parts) == 2:
+            edges[tuple(parts)] = edge_data
 
     metadata_cache = _build_metadata_cache()
 
@@ -696,8 +683,6 @@ def decay_pair_cooccurrences_v3() -> tuple[int, int]:
     edges_decayed = 0
     edges_pruned = 0
     edges_protected = 0  # v5.0: edges that got reduced decay
-    to_remove = []
-    now = datetime.now(timezone.utc).isoformat()
 
     for pair_key, edge_data in edges.items():
         normalized = tuple(sorted(pair_key))
@@ -720,17 +705,14 @@ def decay_pair_cooccurrences_v3() -> tuple[int, int]:
             new_belief = old_belief - base_decay
 
             if new_belief <= 0:
-                to_remove.append(pair_key)
                 edges_pruned += 1
             else:
-                edge_data['belief'] = new_belief
-                edge_data['last_updated'] = now
                 edges_decayed += 1
 
-    for pair_key in to_remove:
-        del edges[pair_key]
-
-    _save_edges_v3(edges)
+    # Apply decay and pruning in DB in batch
+    exclude = [list(p) for p in reinforced_pairs]
+    db.batch_decay_edges(PAIR_DECAY_RATE, exclude_pairs=exclude if exclude else None)
+    db.prune_weak_edges(threshold=0.01)
 
     log_decay_event(edges_decayed, edges_pruned)
 

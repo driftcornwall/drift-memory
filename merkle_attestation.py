@@ -6,9 +6,11 @@ Originally by SpindriftMend, adapted for DriftCornwall's memory system.
 Generates cryptographic proofs that memories existed at a point in time.
 Publishes daily root hashes to GitHub for verifiable history.
 
+All data is read from and written to PostgreSQL. No file I/O.
+
 Usage:
     python merkle_attestation.py generate     # Generate today's attestation
-    python merkle_attestation.py verify FILE  # Verify a memory was in an attestation
+    python merkle_attestation.py verify ID    # Verify a memory was in an attestation
     python merkle_attestation.py history      # Show attestation history
     python merkle_attestation.py publish      # Publish to GitHub
 
@@ -22,29 +24,18 @@ Why this matters:
 import hashlib
 import json
 import os
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-MEMORY_DIR = Path(__file__).parent
-ACTIVE_DIR = MEMORY_DIR / "active"
-CORE_DIR = MEMORY_DIR / "core"
-ATTESTATIONS_FILE = MEMORY_DIR / "attestations.json"        # Lightweight history (no file_hashes)
-LATEST_FILE = MEMORY_DIR / "latest_attestation.json"         # Full attestation with file_hashes (for verification)
+from db_adapter import get_db
 
 # GitHub config - reads from credentials file, NOT from memory files
 GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
 REPO_OWNER = "driftcornwall"
 REPO_NAME = "drift-memory"
 CREDENTIALS_FILE = Path.home() / ".config" / "github" / "drift-credentials.json"
-
-
-def compute_file_hash(file_path: Path) -> str:
-    """SHA-256 hash of a file's contents."""
-    with open(file_path, 'rb') as f:
-        return hashlib.sha256(f.read()).hexdigest()
 
 
 def build_merkle_tree(hashes: list[str]) -> tuple[str, list[list[str]]]:
@@ -133,6 +124,47 @@ def verify_merkle_proof(leaf_hash: str, proof: list[dict], root: str) -> bool:
     return current == root
 
 
+def _generate_hashes_from_db() -> dict:
+    """
+    DB hash generation.
+
+    Instead of reading 1000+ files, query DB for content and hash
+    a deterministic representation of each memory.
+    Returns dict of {relative_path_style_key: sha256_hex}.
+    """
+    import psycopg2.extras
+
+    db = get_db()
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT id, type, content, tags, emotional_weight,
+                       recall_count, sessions_since_recall, created
+                FROM {db._table('memories')}
+                WHERE type IN ('core', 'active')
+                ORDER BY id
+            """)
+            rows = cur.fetchall()
+
+    file_hashes = {}
+    for row in rows:
+        # Build a deterministic representation for hashing
+        # Use sorted JSON of key fields so hash is reproducible
+        hash_input = json.dumps({
+            'id': row['id'],
+            'type': row['type'],
+            'content': row['content'] or '',
+            'tags': sorted(row.get('tags') or []),
+        }, sort_keys=True).encode('utf-8')
+        mem_hash = hashlib.sha256(hash_input).hexdigest()
+
+        # Use type/id.md as the key to mirror file-based paths
+        type_dir = row['type'] if row['type'] in ('core', 'active') else 'active'
+        file_hashes[f"{type_dir}/{row['id']}.md"] = mem_hash
+
+    return file_hashes
+
+
 def generate_attestation(chain: bool = False) -> dict:
     """
     Generate attestation for current memory state.
@@ -140,17 +172,8 @@ def generate_attestation(chain: bool = False) -> dict:
     Args:
         chain: If True, include previous_root and chain_depth (v2.0 chain linking)
     """
-    # Collect all memory files
-    memory_files = []
-    for directory in [CORE_DIR, ACTIVE_DIR]:
-        if directory.exists():
-            memory_files.extend(directory.glob("*.md"))
-
-    # Hash each file
-    file_hashes = {}
-    for path in memory_files:
-        relative_path = path.relative_to(MEMORY_DIR)
-        file_hashes[str(relative_path)] = compute_file_hash(path)
+    # Generate hashes from DB
+    file_hashes = _generate_hashes_from_db()
 
     # Build merkle tree
     hash_list = list(file_hashes.values())
@@ -181,54 +204,66 @@ def generate_attestation(chain: bool = False) -> dict:
 
 
 def load_attestations() -> list[dict]:
-    """Load lightweight attestation history (no file_hashes)."""
-    if ATTESTATIONS_FILE.exists():
-        try:
-            with open(ATTESTATIONS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            pass
+    """Load lightweight attestation history (no file_hashes) from DB."""
+    import psycopg2.extras
+
+    db = get_db()
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT data FROM {db._table('attestations')}
+                WHERE type = 'merkle' ORDER BY timestamp
+            """)
+            rows = cur.fetchall()
+            if rows:
+                return [r['data'] for r in rows]
     return []
 
 
 def load_latest_attestation() -> Optional[dict]:
-    """Load the latest full attestation (with file_hashes) for verification."""
-    if LATEST_FILE.exists():
-        try:
-            with open(LATEST_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            pass
-    # Fallback: try last entry in history
-    history = load_attestations()
-    return history[-1] if history else None
+    """Load the latest full attestation (with file_hashes) from DB."""
+    import psycopg2.extras
+
+    db = get_db()
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT data FROM {db._table('attestations')}
+                WHERE type = 'merkle' ORDER BY timestamp DESC LIMIT 1
+            """)
+            row = cur.fetchone()
+            if row:
+                return row['data']
+    return None
 
 
 def save_attestation(attestation: dict) -> None:
     """
-    Save attestation to both latest (full) and history (lightweight).
+    Save attestation to DB.
 
-    - latest_attestation.json: Full with file_hashes (overwritten each time)
-    - attestations.json: Lightweight history (appended, no file_hashes)
+    Stores the full attestation (with file_hashes) to the attestations table.
+    Skips if a merkle attestation with the same root already exists.
     """
-    # Save full attestation as latest (for verification at next session start)
-    with open(LATEST_FILE, 'w', encoding='utf-8') as f:
-        json.dump(attestation, f, indent=2)
+    import psycopg2.extras
 
-    # Append lightweight version to history (no file_hashes to prevent bloat)
-    lightweight = {k: v for k, v in attestation.items() if k not in ('file_hashes', '_tree_depth')}
+    db = get_db()
 
-    history = load_attestations()
+    # Check for duplicate root in DB
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT id FROM {db._table('attestations')}
+                WHERE type = 'merkle' AND hash = %s
+                LIMIT 1
+            """, (attestation['merkle_root'],))
+            if cur.fetchone():
+                print(f"Attestation already exists for root {attestation['merkle_root'][:16]}...")
+                return
 
-    # Don't duplicate if same root already exists
-    for existing in history:
-        if existing.get("merkle_root") == attestation["merkle_root"]:
-            return
-
-    history.append(lightweight)
-
-    with open(ATTESTATIONS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(history, f, indent=2)
+    # Write to DB
+    db.store_attestation(
+        'merkle', attestation['merkle_root'], attestation
+    )
 
     chain_info = f" | chain depth: {attestation.get('chain_depth', '?')}" if attestation.get('chain_depth') else ""
     print(f"Saved attestation: {attestation['merkle_root'][:16]}... ({attestation['memory_count']} memories{chain_info})")
@@ -256,16 +291,8 @@ def verify_integrity() -> dict:
             "message": "No attestation found (first session or attestation missing)"
         }
 
-    # Recompute current state
-    memory_files = []
-    for directory in [CORE_DIR, ACTIVE_DIR]:
-        if directory.exists():
-            memory_files.extend(directory.glob("*.md"))
-
-    file_hashes = {}
-    for path in memory_files:
-        relative_path = path.relative_to(MEMORY_DIR)
-        file_hashes[str(relative_path)] = compute_file_hash(path)
+    # Recompute current state from DB
+    file_hashes = _generate_hashes_from_db()
 
     hash_list = list(file_hashes.values())
     current_root, _ = build_merkle_tree(hash_list)
@@ -283,7 +310,7 @@ def verify_integrity() -> dict:
     }
 
     if not verified:
-        # Find which files changed
+        # Find which memories changed
         old_hashes = latest.get("file_hashes", {})
         changed = []
         for path, hash_val in file_hashes.items():
@@ -309,12 +336,9 @@ def publish_to_github(attestation: dict) -> bool:
     token = None
 
     if CREDENTIALS_FILE.exists():
-        try:
-            with open(CREDENTIALS_FILE, 'r', encoding='utf-8') as f:
-                creds = json.load(f)
-                token = creds.get("token") or creds.get("github_token")
-        except (json.JSONDecodeError, KeyError):
-            pass
+        with open(CREDENTIALS_FILE, 'r', encoding='utf-8') as f:
+            creds = json.load(f)
+            token = creds.get("token") or creds.get("github_token")
 
     if not token:
         token = os.getenv(GITHUB_TOKEN_ENV)
@@ -423,33 +447,68 @@ def cmd_verify_integrity():
     print(json.dumps(result))
 
 
-def cmd_verify(file_path: str):
-    """Verify a file was in an attestation."""
-    path = Path(file_path)
-    if not path.exists():
-        print(f"File not found: {file_path}")
+def cmd_verify(memory_id: str):
+    """Verify a memory (by ID) was in an attestation."""
+    import psycopg2.extras
+
+    db = get_db()
+
+    # Look up the memory from DB
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT id, type, content, tags
+                FROM {db._table('memories')}
+                WHERE id = %s
+            """, (memory_id,))
+            row = cur.fetchone()
+
+    if not row:
+        print(f"Memory not found in DB: {memory_id}")
         return
 
-    file_hash = compute_file_hash(path)
-    print(f"File hash: {file_hash}")
+    # Compute the hash the same way _generate_hashes_from_db does
+    hash_input = json.dumps({
+        'id': row['id'],
+        'type': row['type'],
+        'content': row['content'] or '',
+        'tags': sorted(row.get('tags') or []),
+    }, sort_keys=True).encode('utf-8')
+    mem_hash = hashlib.sha256(hash_input).hexdigest()
 
-    history = load_attestations()
-    if not history:
+    type_dir = row['type'] if row['type'] in ('core', 'active') else 'active'
+    mem_key = f"{type_dir}/{row['id']}.md"
+
+    print(f"Memory: {memory_id} ({row['type']})")
+    print(f"Hash:   {mem_hash}")
+
+    # Load all attestations from DB and check file_hashes
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT data FROM {db._table('attestations')}
+                WHERE type = 'merkle' ORDER BY timestamp
+            """)
+            att_rows = cur.fetchall()
+
+    if not att_rows:
         print("No attestations found.")
         return
 
-    # Check each attestation
     found_in = []
-    for att in history:
-        if file_hash in att.get("file_hashes", {}).values():
+    for att_row in att_rows:
+        att = att_row['data']
+        att_file_hashes = att.get("file_hashes", {})
+        # Check by key match or by hash value match
+        if att_file_hashes.get(mem_key) == mem_hash or mem_hash in att_file_hashes.values():
             found_in.append(att["timestamp"])
 
     if found_in:
-        print(f"\nFile found in {len(found_in)} attestation(s):")
+        print(f"\nMemory found in {len(found_in)} attestation(s):")
         for ts in found_in:
             print(f"  - {ts}")
     else:
-        print("\nFile not found in any attestation (may have been modified or is new).")
+        print("\nMemory not found in any attestation (may have been modified or is new).")
 
 
 def cmd_history():
@@ -500,5 +559,5 @@ if __name__ == "__main__":
         cmd_publish()
     else:
         print(f"Unknown command: {command}")
-        print("Commands: generate, generate-chain, verify-integrity, verify FILE, history, publish")
+        print("Commands: generate, generate-chain, verify-integrity, verify MEMORY_ID, history, publish")
         sys.exit(1)

@@ -24,15 +24,11 @@ Credit: 5W framework discussion with Lex (2026-02-05)
 
 import json
 import re
-from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
 from collections import defaultdict
 
-MEMORY_ROOT = Path(__file__).parent
-CORE_DIR = MEMORY_ROOT / "core"
-ACTIVE_DIR = MEMORY_ROOT / "active"
-ARCHIVE_DIR = MEMORY_ROOT / "archive"
+from db_adapter import get_db, db_to_file_metadata
 
 # Topic definitions: topic_name -> (keywords, weight_boost)
 # Keywords are matched case-insensitively against memory content
@@ -109,42 +105,6 @@ TOPIC_DEFINITIONS = {
 MIN_MATCHES = 2
 
 
-def parse_memory_file(filepath: Path) -> tuple[dict, str]:
-    """Parse a memory file into metadata and content."""
-    try:
-        text = filepath.read_text(encoding='utf-8')
-    except Exception:
-        return {}, ""
-
-    if not text.startswith('---'):
-        return {}, text
-
-    parts = text.split('---', 2)
-    if len(parts) < 3:
-        return {}, text
-
-    import yaml
-    try:
-        metadata = yaml.safe_load(parts[1]) or {}
-    except Exception:
-        metadata = {}
-
-    content = parts[2].strip()
-    return metadata, content
-
-
-def write_memory_file(filepath: Path, metadata: dict, content: str):
-    """Write metadata and content back to a memory file."""
-    import yaml
-
-    yaml_str = yaml.dump(metadata, default_flow_style=False, allow_unicode=True, sort_keys=False)
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write('---\n')
-        f.write(yaml_str)
-        f.write('---\n\n')
-        f.write(content)
-
-
 def classify_content(content: str, include_scores: bool = False) -> list[str] | dict[str, int]:
     """
     Classify content into topics based on keyword matches.
@@ -170,74 +130,68 @@ def classify_content(content: str, include_scores: bool = False) -> list[str] | 
     return list(scores.keys())
 
 
+def _get_memory_content(memory_id: str) -> tuple[dict, str]:
+    """Fetch a memory from DB and return (metadata, full_content_for_classification)."""
+    db = get_db()
+    row = db.get_memory(memory_id)
+    if not row:
+        return {}, ""
+    metadata, content = db_to_file_metadata(row)
+    tags = metadata.get('tags', [])
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(',')]
+    full_content = content + ' ' + ' '.join(tags)
+    return metadata, full_content
+
+
 def classify_memory(memory_id: str) -> list[str]:
     """Classify a memory by ID and return its topics."""
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob(f"*-{memory_id}.md"):
-            metadata, content = parse_memory_file(filepath)
-            # Include tags in classification
-            tags = metadata.get('tags', [])
-            if isinstance(tags, str):
-                tags = [t.strip() for t in tags.split(',')]
-            full_content = content + ' ' + ' '.join(tags)
-            return classify_content(full_content)
-    return []
+    metadata, full_content = _get_memory_content(memory_id)
+    if not full_content:
+        return []
+    return classify_content(full_content)
 
 
 def get_memory_topics(memory_id: str) -> list[str]:
     """Get topics for a memory, checking metadata first then classifying."""
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob(f"*-{memory_id}.md"):
-            metadata, content = parse_memory_file(filepath)
-            # Check if already tagged
-            if 'topic_context' in metadata:
-                return metadata['topic_context']
-            # Otherwise classify
-            tags = metadata.get('tags', [])
-            if isinstance(tags, str):
-                tags = [t.strip() for t in tags.split(',')]
-            full_content = content + ' ' + ' '.join(tags)
-            return classify_content(full_content)
-    return []
+    metadata, full_content = _get_memory_content(memory_id)
+    if not metadata:
+        return []
+    if 'topic_context' in metadata and metadata['topic_context']:
+        return metadata['topic_context']
+    if not full_content:
+        return []
+    return classify_content(full_content)
 
 
 def backfill_topic_context():
     """
     Backfill topic_context into all existing memories.
     """
+    db = get_db()
+    all_memories = db.list_memories()
     updated = 0
     skipped = 0
 
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
+    for row in all_memories:
+        metadata, content = db_to_file_metadata(row)
+        memory_id = metadata.get('id')
+        if not memory_id:
             continue
 
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
+        if metadata.get('topic_context'):
+            skipped += 1
+            continue
 
-            if not metadata.get('id'):
-                continue
+        tags = metadata.get('tags', [])
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.split(',')]
+        full_content = content + ' ' + ' '.join(tags)
+        topics = classify_content(full_content)
 
-            # Skip if already has topic_context
-            if 'topic_context' in metadata:
-                skipped += 1
-                continue
-
-            # Classify
-            tags = metadata.get('tags', [])
-            if isinstance(tags, str):
-                tags = [t.strip() for t in tags.split(',')]
-            full_content = content + ' ' + ' '.join(tags)
-            topics = classify_content(full_content)
-
-            if topics:
-                metadata['topic_context'] = topics
-                write_memory_file(filepath, metadata, content)
-                updated += 1
+        if topics:
+            db.update_memory(memory_id, {'topic_context': topics})
+            updated += 1
 
     print(f"Backfill complete: {updated} memories updated, {skipped} already tagged")
     return updated
@@ -245,37 +199,32 @@ def backfill_topic_context():
 
 def backfill_edges():
     """
-    Backfill topic_context into existing .edges_v3.json edges.
+    Backfill topic_context into existing edges.
 
     For each edge, looks at both memories' topics and adds intersection
     as the edge's topic_context (topics they share).
     """
-    edges_file = MEMORY_ROOT / ".edges_v3.json"
-    if not edges_file.exists():
-        print("No .edges_v3.json found.")
+    db = get_db()
+    edges_raw = db.get_all_edges()
+    if not edges_raw:
+        print("No edges found.")
         return 0
 
-    # Load edges
-    with open(edges_file, 'r', encoding='utf-8') as f:
-        edges_raw = json.load(f)
-
-    # Build topic cache for all memories
+    all_memories = db.list_memories()
     topic_cache = {}
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
+    for row in all_memories:
+        metadata, content = db_to_file_metadata(row)
+        memory_id = metadata.get('id')
+        if not memory_id:
             continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            memory_id = metadata.get('id')
-            if memory_id:
-                if 'topic_context' in metadata:
-                    topic_cache[memory_id] = metadata['topic_context']
-                else:
-                    tags = metadata.get('tags', [])
-                    if isinstance(tags, str):
-                        tags = [t.strip() for t in tags.split(',')]
-                    full_content = content + ' ' + ' '.join(tags)
-                    topic_cache[memory_id] = classify_content(full_content)
+        if metadata.get('topic_context'):
+            topic_cache[memory_id] = metadata['topic_context']
+        else:
+            tags = metadata.get('tags', [])
+            if isinstance(tags, str):
+                tags = [t.strip() for t in tags.split(',')]
+            full_content = content + ' ' + ' '.join(tags)
+            topic_cache[memory_id] = classify_content(full_content)
 
     updated = 0
     for pair_key, edge_data in edges_raw.items():
@@ -287,9 +236,7 @@ def backfill_edges():
         topics1 = set(topic_cache.get(id1, []))
         topics2 = set(topic_cache.get(id2, []))
 
-        # Edge gets topics that both memories share
         shared_topics = list(topics1 & topics2)
-        # Also include union for broader context
         all_topics = list(topics1 | topics2)
 
         if all_topics:
@@ -300,43 +247,36 @@ def backfill_edges():
                 }
                 updated += 1
 
-    # Save
-    with open(edges_file, 'w', encoding='utf-8') as f:
-        json.dump(edges_raw, f, indent=2)
-
-    print(f"Edge backfill complete: {updated} edges updated")
+    print(f"Edge backfill complete: {updated} edges annotated")
     return updated
 
 
 def get_topic_stats() -> dict:
     """Get statistics on topic distribution."""
+    db = get_db()
+    all_memories = db.list_memories()
     stats = defaultdict(lambda: {'count': 0, 'memories': []})
     total = 0
 
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
+    for row in all_memories:
+        metadata, content = db_to_file_metadata(row)
+        memory_id = metadata.get('id')
+        if not memory_id:
             continue
 
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            memory_id = metadata.get('id')
-            if not memory_id:
-                continue
+        total += 1
+        topics = metadata.get('topic_context', [])
+        if not topics:
+            tags = metadata.get('tags', [])
+            if isinstance(tags, str):
+                tags = [t.strip() for t in tags.split(',')]
+            full_content = content + ' ' + ' '.join(tags)
+            topics = classify_content(full_content)
 
-            total += 1
-            topics = metadata.get('topic_context', [])
-            if not topics:
-                # Classify on the fly
-                tags = metadata.get('tags', [])
-                if isinstance(tags, str):
-                    tags = [t.strip() for t in tags.split(',')]
-                full_content = content + ' ' + ' '.join(tags)
-                topics = classify_content(full_content)
-
-            for topic in topics:
-                stats[topic]['count'] += 1
-                if len(stats[topic]['memories']) < 3:
-                    stats[topic]['memories'].append(memory_id)
+        for topic in topics:
+            stats[topic]['count'] += 1
+            if len(stats[topic]['memories']) < 3:
+                stats[topic]['memories'].append(memory_id)
 
     return {'total': total, 'by_topic': dict(stats)}
 
@@ -375,12 +315,10 @@ def get_topic_matrix() -> dict:
     Build topic co-occurrence matrix from edges.
     Shows which topics appear together in edges.
     """
-    edges_file = MEMORY_ROOT / ".edges_v3.json"
-    if not edges_file.exists():
+    db = get_db()
+    edges_raw = db.get_all_edges()
+    if not edges_raw:
         return {}
-
-    with open(edges_file, 'r', encoding='utf-8') as f:
-        edges_raw = json.load(f)
 
     matrix = defaultdict(lambda: defaultdict(int))
 

@@ -44,49 +44,86 @@ if __name__ == '__main__':
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 MEMORY_ROOT = Path(__file__).parent
-CONTEXT_DIR = MEMORY_ROOT / "context"
-EDGES_FILE = MEMORY_ROOT / ".edges_v3.json"
 SESSION_HOURS = 4  # approximate hours per session
+
+# DB path for memorydatabase
+_DB_ROOT = Path(__file__).parent.parent.parent / "memorydatabase" / "database"
+
+
+def _get_schema() -> str:
+    """Determine schema from project path."""
+    return 'spin' if 'Moltbook2' in str(MEMORY_ROOT) else 'drift'
+
+
+def _get_db():
+    """Get a MemoryDB instance. Raises if unavailable — DB is required."""
+    import sys as _sys
+    db_root = str(_DB_ROOT)
+    if db_root not in _sys.path:
+        _sys.path.insert(0, db_root)
+    from db import MemoryDB
+    return MemoryDB(schema=_get_schema())
 
 
 # --- Graph I/O ---
 
-def _ensure_context_dir():
-    CONTEXT_DIR.mkdir(exist_ok=True)
 
-
-def _save_graph(filename: str, data: dict):
-    _ensure_context_dir()
-    (CONTEXT_DIR / filename).write_text(json.dumps(data, indent=2), encoding='utf-8')
+def _save_graph(filename: str, data: dict, dimension: str = None, sub_view: str = None):
+    """Save graph to DB. DB is the only store."""
+    if dimension is not None:
+        db = _get_db()
+        db.upsert_context_graph(
+            dimension, sub_view or '',
+            data.get('edges', {}),
+            data.get('hubs', []),
+            data.get('stats', {}),
+        )
 
 
 def load_graph(dimension: str, sub_view: str = None) -> dict:
-    """Load a context graph from disk."""
-    name = f"{dimension}_{sub_view}.json" if sub_view else f"{dimension}.json"
-    path = CONTEXT_DIR / name
-    if not path.exists():
-        return {}
-    return json.loads(path.read_text(encoding='utf-8'))
+    """Load a context graph from DB. DB-only, no file fallback."""
+    db = _get_db()
+    row = db.get_context_graph(dimension, sub_view or '')
+    if row and row.get('edges'):
+        return {
+            'meta': {
+                'dimension': dimension,
+                'sub_view': sub_view,
+                'last_rebuilt': str(row.get('last_rebuilt', '')),
+                'edge_count': row.get('edge_count', 0),
+                'node_count': row.get('node_count', 0),
+            },
+            'edges': row['edges'],
+            'hubs': row.get('hubs', []),
+            'stats': row.get('stats', {}),
+        }
+    return {}
 
 
 def _load_l0() -> dict:
-    if not EDGES_FILE.exists():
-        return {}
-    return json.loads(EDGES_FILE.read_text(encoding='utf-8'))
+    """Load L0 edges from DB. DB-only, no file fallback."""
+    db = _get_db()
+    edges = db.get_all_edges()
+    return edges if edges else {}
 
 
 def _build_metadata_cache() -> dict:
-    """Build memory_id -> metadata lookup from all memory files."""
-    from memory_common import ALL_DIRS, parse_memory_file
+    """Build memory_id -> metadata lookup from DB."""
+    from db_adapter import get_db as _get_adapter_db, db_to_file_metadata
+    db = _get_adapter_db()
+    import psycopg2.extras
     cache = {}
-    for d in ALL_DIRS:
-        if not d.exists():
-            continue
-        for fp in d.glob("*.md"):
-            meta, content = parse_memory_file(fp)
-            mid = meta.get('id')
-            if mid:
-                cache[mid] = meta
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT * FROM {db._table('memories')}
+                WHERE type IN ('core', 'active')
+            """)
+            for row in cur.fetchall():
+                meta, _ = db_to_file_metadata(dict(row))
+                mid = meta.get('id')
+                if mid:
+                    cache[mid] = meta
     return cache
 
 
@@ -336,7 +373,6 @@ def rebuild_all(verbose: bool = False) -> dict:
         return {'graphs_created': 0, 'total_l0_edges': 0, 'bridges': 0}
 
     cache = _build_metadata_cache()
-    _ensure_context_dir()
 
     from topic_context import TOPIC_DEFINITIONS
     from activity_context import ACTIVITY_TYPES
@@ -354,7 +390,7 @@ def rebuild_all(verbose: bool = False) -> dict:
     # WHO
     who = _project_who(l0, cache)
     g = _make_graph('who', None, who)
-    _save_graph('who.json', g)
+    _save_graph('who.json', g, dimension='who')
     w_graphs['who'] = g
     created += 1
     if verbose:
@@ -363,7 +399,7 @@ def rebuild_all(verbose: bool = False) -> dict:
     # WHAT aggregate + sub-views
     what = _project_what(l0, cache)
     g = _make_graph('what', None, what)
-    _save_graph('what.json', g)
+    _save_graph('what.json', g, dimension='what')
     w_graphs['what'] = g
     created += 1
     if verbose:
@@ -372,7 +408,7 @@ def rebuild_all(verbose: bool = False) -> dict:
         te = _project_what(l0, cache, topic=topic)
         if te:
             tg = _make_graph('what', topic, te)
-            _save_graph(f'what_{topic}.json', tg)
+            _save_graph(f'what_{topic}.json', tg, dimension='what', sub_view=topic)
             created += 1
             if verbose:
                 print(f"    WHAT/{topic}: {len(te)} edges")
@@ -380,7 +416,7 @@ def rebuild_all(verbose: bool = False) -> dict:
     # WHY aggregate + sub-views
     why = _project_why(l0)
     g = _make_graph('why', None, why)
-    _save_graph('why.json', g)
+    _save_graph('why.json', g, dimension='why')
     w_graphs['why'] = g
     created += 1
     if verbose:
@@ -389,7 +425,7 @@ def rebuild_all(verbose: bool = False) -> dict:
         ae = _project_why(l0, activity=act)
         if ae:
             ag = _make_graph('why', act, ae)
-            _save_graph(f'why_{act}.json', ag)
+            _save_graph(f'why_{act}.json', ag, dimension='why', sub_view=act)
             created += 1
             if verbose:
                 print(f"    WHY/{act}: {len(ae)} edges")
@@ -397,7 +433,7 @@ def rebuild_all(verbose: bool = False) -> dict:
     # WHERE aggregate + sub-views
     where = _project_where(l0)
     g = _make_graph('where', None, where)
-    _save_graph('where.json', g)
+    _save_graph('where.json', g, dimension='where')
     w_graphs['where'] = g
     created += 1
     if verbose:
@@ -406,25 +442,25 @@ def rebuild_all(verbose: bool = False) -> dict:
         pe = _project_where(l0, platform=plat)
         if pe:
             pg = _make_graph('where', plat, pe)
-            _save_graph(f'where_{plat}.json', pg)
+            _save_graph(f'where_{plat}.json', pg, dimension='where', sub_view=plat)
             created += 1
             if verbose:
                 print(f"    WHERE/{plat}: {len(pe)} edges")
 
     # WHEN (hot=3, warm=7, cool=21 sessions)
-    for name, sessions in [('hot', 3), ('warm', 7), ('cool', 21)]:
+    for wname, sessions in [('hot', 3), ('warm', 7), ('cool', 21)]:
         we = _project_when(l0, window_sessions=sessions)
-        wg = _make_graph('when', name, we)
-        _save_graph(f'when_{name}.json', wg)
-        w_graphs[f'when_{name}'] = wg
+        wg = _make_graph('when', wname, we)
+        _save_graph(f'when_{wname}.json', wg, dimension='when', sub_view=wname)
+        w_graphs[f'when_{wname}'] = wg
         created += 1
         if verbose:
-            print(f"  WHEN/{name}: {len(we)} edges")
+            print(f"  WHEN/{wname}: {len(we)} edges")
 
     # BRIDGES aggregate
     bridges = _detect_bridges(w_graphs)
     bg = _make_graph('bridges', None, bridges)
-    _save_graph('bridges.json', bg)
+    _save_graph('bridges.json', bg, dimension='bridges')
     created += 1
     if verbose:
         print(f"  BRIDGES: {len(bridges)} cross-dimensional edges")
@@ -432,27 +468,27 @@ def rebuild_all(verbose: bool = False) -> dict:
     # BRIDGES sub-views: dimension pair intersections
     main_dims = ['who', 'what', 'why', 'where']
     for i, da in enumerate(main_dims):
-        for db in main_dims[i+1:]:
-            if da not in w_graphs or db not in w_graphs:
+        for _db in main_dims[i+1:]:
+            if da not in w_graphs or _db not in w_graphs:
                 continue
             shared_keys = set(w_graphs[da].get('edges', {}).keys()) & \
-                          set(w_graphs[db].get('edges', {}).keys())
+                          set(w_graphs[_db].get('edges', {}).keys())
             if shared_keys:
                 pair_edges = {}
                 for ek in shared_keys:
                     ea = w_graphs[da]['edges'][ek]
-                    eb = w_graphs[db]['edges'][ek]
+                    eb = w_graphs[_db]['edges'][ek]
                     pair_edges[ek] = {
-                        'dimensions': [da, db],
+                        'dimensions': [da, _db],
                         'dimension_count': 2,
                         'bridge_score': round(2 / len(main_dims), 3),
-                        'beliefs': {da: ea.get('belief', 0), db: eb.get('belief', 0)},
+                        'beliefs': {da: ea.get('belief', 0), _db: eb.get('belief', 0)},
                     }
-                pg = _make_graph('bridges', f'{da}_{db}', pair_edges)
-                _save_graph(f'bridges_{da}_{db}.json', pg)
+                pg = _make_graph('bridges', f'{da}_{_db}', pair_edges)
+                _save_graph(f'bridges_{da}_{_db}.json', pg, dimension='bridges', sub_view=f'{da}_{_db}')
                 created += 1
                 if verbose:
-                    print(f"    BRIDGES/{da}x{db}: {len(pair_edges)} shared edges")
+                    print(f"    BRIDGES/{da}x{_db}: {len(pair_edges)} shared edges")
 
     return {
         'graphs_created': created,
@@ -553,60 +589,49 @@ def discover_bridges(dim_a: str, dim_b: str,
 
 def get_session_dimensions() -> dict:
     """
-    Collect active W-dimensions from current session state files.
+    Collect active W-dimensions from current session state.
     Used by Phase 2 dimensional decay to know which contexts are active.
+    DB-only — reads session state and memory metadata from PostgreSQL.
     """
+    from db_adapter import get_db as _get_adapter_db, db_to_file_metadata
+    db = _get_adapter_db()
     dims = {}
 
-    # WHERE: .session_platforms.json
-    pf = MEMORY_ROOT / ".session_platforms.json"
-    if pf.exists():
-        try:
-            dims['where'] = json.loads(pf.read_text(encoding='utf-8')).get('platforms', [])
-        except Exception:
-            pass
+    # WHERE: session platforms from DB KV
+    pf_raw = db.kv_get('.session_platforms')
+    if pf_raw:
+        pf_data = json.loads(pf_raw) if isinstance(pf_raw, str) else pf_raw
+        dims['where'] = pf_data.get('platforms', [])
 
-    # WHY: .session_activity.json
-    af = MEMORY_ROOT / ".session_activity.json"
-    if af.exists():
-        try:
-            data = json.loads(af.read_text(encoding='utf-8'))
-            acts = []
-            if data.get('dominant'):
-                acts.append(data['dominant'])
-            acts.extend(data.get('secondary', []))
-            dims['why'] = acts
-        except Exception:
-            pass
+    # WHY: session activity from DB KV
+    af_raw = db.kv_get('.session_activity')
+    if af_raw:
+        af_data = json.loads(af_raw) if isinstance(af_raw, str) else af_raw
+        acts = []
+        if af_data.get('dominant'):
+            acts.append(af_data['dominant'])
+        acts.extend(af_data.get('secondary', []))
+        dims['why'] = acts
 
-    # WHO: .session_contacts.json
-    cf = MEMORY_ROOT / ".session_contacts.json"
-    if cf.exists():
-        try:
-            dims['who'] = json.loads(cf.read_text(encoding='utf-8')).get('contacts', [])
-        except Exception:
-            pass
+    # WHO: session contacts from DB KV
+    cf_raw = db.kv_get('.session_contacts')
+    if cf_raw:
+        cf_data = json.loads(cf_raw) if isinstance(cf_raw, str) else cf_raw
+        dims['who'] = cf_data.get('contacts', [])
 
     # WHAT: inferred from recalled memories' topic_context
-    sf = MEMORY_ROOT / ".session_state.json"
-    if sf.exists():
-        try:
-            state = json.loads(sf.read_text(encoding='utf-8'))
-            recalled = state.get('retrieved', [])
-            if recalled:
-                from memory_common import ALL_DIRS, parse_memory_file
-                topics = set()
-                for mid in recalled:
-                    for d in ALL_DIRS:
-                        if not d.exists():
-                            continue
-                        for fp in d.glob(f"*-{mid}.md"):
-                            meta, _ = parse_memory_file(fp)
-                            topics.update(meta.get('topic_context', []))
-                            break
-                dims['what'] = list(topics)
-        except Exception:
-            pass
+    ss_raw = db.kv_get('.session_state')
+    if ss_raw:
+        state = json.loads(ss_raw) if isinstance(ss_raw, str) else ss_raw
+        recalled = state.get('retrieved', [])
+        if recalled:
+            topics = set()
+            for mid in recalled:
+                row = db.get_memory(mid)
+                if row:
+                    meta, _ = db_to_file_metadata(row)
+                    topics.update(meta.get('topic_context', []))
+            dims['what'] = list(topics)
 
     return dims
 
@@ -629,7 +654,8 @@ def enhance_what(limit: int = 30, verbose: bool = False) -> dict:
     Returns:
         Dict with {scanned, classified, topics_assigned, skipped}
     """
-    from memory_common import ALL_DIRS, parse_memory_file, write_memory_file
+    from db_adapter import get_db as _get_adapter_db, db_to_file_metadata
+    import psycopg2.extras
 
     try:
         from gemma_bridge import classify_topics, _ollama_available
@@ -640,37 +666,38 @@ def enhance_what(limit: int = 30, verbose: bool = False) -> dict:
 
     stats = {"scanned": 0, "classified": 0, "topics_assigned": [], "skipped": 0}
 
-    # Find memories without topic_context
+    # Find memories without topic_context from DB
+    db = _get_adapter_db()
     candidates = []
-    for d in ALL_DIRS:
-        if not d.exists():
-            continue
-        for fp in d.glob("*.md"):
-            meta, content = parse_memory_file(fp)
-            mid = meta.get('id')
-            if not mid or not content:
-                continue
-            tc = meta.get('topic_context', [])
-            if not tc and len(content) > 50:
-                candidates.append((fp, meta, content))
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT * FROM {db._table('memories')}
+                WHERE type IN ('core', 'active')
+                AND (topic_context IS NULL OR array_length(topic_context, 1) IS NULL)
+            """)
+            for row in cur.fetchall():
+                meta, content = db_to_file_metadata(dict(row))
+                mid = meta.get('id')
+                if mid and content and len(content) > 50:
+                    candidates.append((mid, meta, content))
 
     if verbose:
         print(f"Found {len(candidates)} memories without topic_context")
 
-    for fp, meta, content in candidates[:limit]:
+    for mid, meta, content in candidates[:limit]:
         stats["scanned"] += 1
         topics = classify_topics(content)
 
         if topics:
             stats["classified"] += 1
-            meta['topic_context'] = topics
-            write_memory_file(fp, meta, content)
+            db.update_memory(mid, topic_context=topics)
             stats["topics_assigned"].append({
-                "id": meta.get('id', fp.stem),
+                "id": mid,
                 "topics": topics,
             })
             if verbose:
-                print(f"  {meta.get('id', fp.stem)}: {', '.join(topics)}")
+                print(f"  {mid}: {', '.join(topics)}")
         else:
             stats["skipped"] += 1
 

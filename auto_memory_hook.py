@@ -32,7 +32,6 @@ from typing import Optional
 
 # Memory paths
 MEMORY_DIR = Path(__file__).parent
-SHORT_TERM_FILE = MEMORY_DIR / "short_term_buffer.json"
 SALIENCE_KEYWORDS = [
     # Emotional/Important
     "error", "failed", "success", "important", "critical", "warning",
@@ -47,19 +46,24 @@ SALIENCE_KEYWORDS = [
 
 
 def load_short_term() -> dict:
-    """Load short-term buffer."""
-    if SHORT_TERM_FILE.exists():
-        try:
-            return json.loads(SHORT_TERM_FILE.read_text())
-        except:
-            pass
+    """Load short-term buffer from DB KV store."""
+    try:
+        from db_adapter import get_db
+        db = get_db()
+        raw = db.kv_get('.short_term_buffer')
+        if raw:
+            return json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        pass
     return {"items": [], "last_updated": None}
 
 
 def save_short_term(data: dict):
-    """Save short-term buffer."""
+    """Save short-term buffer to DB KV store."""
     data["last_updated"] = datetime.now().isoformat()
-    SHORT_TERM_FILE.write_text(json.dumps(data, indent=2))
+    from db_adapter import get_db
+    db = get_db()
+    db.kv_set('.short_term_buffer', data)
 
 
 def compute_salience(content: str) -> float:

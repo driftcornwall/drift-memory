@@ -3,16 +3,11 @@
 Memory Query — Read-only search and retrieval functions.
 
 Extracted from memory_manager.py (Phase 2).
-All functions here are pure reads — they scan memory files and return results
-without modifying any state.
+All reads go directly to PostgreSQL. No file system. No fallbacks.
 """
 
 from pathlib import Path
-
-from memory_common import (
-    CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR, ALL_DIRS,
-    parse_memory_file,
-)
+from db_adapter import get_db, db_to_file_metadata
 from entity_detection import detect_entities
 
 
@@ -23,11 +18,10 @@ def _get_memory_by_id(memory_id: str) -> tuple[dict, str] | None:
     Unlike recall_memory(), this does NOT update recall counts,
     emotional weight, or session tracking. Pure read.
     """
-    for directory in ALL_DIRS:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob(f"*-{memory_id}.md"):
-            return parse_memory_file(filepath)
+    db = get_db()
+    row = db.get_memory(memory_id)
+    if row:
+        return db_to_file_metadata(row)
     return None
 
 
@@ -36,30 +30,26 @@ def find_co_occurring_memories(memory_id: str, limit: int = 5) -> list[tuple[str
     Find memories that frequently co-occur with a given memory.
     Returns list of (memory_id, co_occurrence_count) tuples, sorted by count.
     """
-    for directory in ALL_DIRS:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob(f"*-{memory_id}.md"):
-            metadata, _ = parse_memory_file(filepath)
-            co_occurrences = metadata.get('co_occurrences', {})
-            sorted_pairs = sorted(co_occurrences.items(), key=lambda x: x[1], reverse=True)
-            return sorted_pairs[:limit]
-    return []
+    db = get_db()
+    neighbors = db.get_neighbors(memory_id, limit=limit)
+    result = []
+    for edge in neighbors:
+        other_id = edge['id2'] if edge['id1'] == memory_id else edge['id1']
+        result.append((other_id, edge['belief']))
+    return result
 
 
 def find_memories_by_tag(tag: str, limit: int = 10) -> list[tuple[Path, dict, str]]:
     """Find memories that contain a specific tag."""
+    db = get_db()
+    rows = db.list_memories(tags=[tag], limit=limit)
     results = []
-    for directory in ALL_DIRS:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            if tag.lower() in [t.lower() for t in metadata.get('tags', [])]:
-                results.append((filepath, metadata, content))
-
+    for row in rows:
+        metadata, content = db_to_file_metadata(row)
+        fake_path = Path(f"db://{row['type']}/{row['id']}.md")
+        results.append((fake_path, metadata, content))
     results.sort(key=lambda x: x[1].get('emotional_weight', 0), reverse=True)
-    return results[:limit]
+    return results
 
 
 def find_memories_by_time(
@@ -79,72 +69,77 @@ def find_memories_by_time(
 
     Returns:
         List of (filepath, metadata, content) tuples, sorted by time_field descending
-
-    Examples:
-        find_memories_by_time(after="2026-02-01")  # What did I learn after Feb 1?
-        find_memories_by_time(before="2026-02-01", time_field="event_time")  # Events before Feb 1
-        find_memories_by_time(after="2026-01-15", before="2026-02-01")  # Learned in that range
-
-    Credit: Graphiti bi-temporal pattern (v2.10)
     """
+    db = get_db()
+    col = time_field if time_field in ('created', 'event_time') else 'created'
+    conditions = []
+    values = []
+    if after:
+        conditions.append(f"{col} >= %s")
+        values.append(after)
+    if before:
+        conditions.append(f"{col} < %s")
+        values.append(before)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    values.append(limit)
+
+    import psycopg2.extras
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT * FROM {db._table('memories')} {where} ORDER BY {col} DESC LIMIT %s",
+                values
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+
     results = []
-
-    for directory in ALL_DIRS:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-
-            time_value = metadata.get(time_field, metadata.get('created', ''))
-            if not time_value:
-                continue
-
-            if hasattr(time_value, 'isoformat'):
-                time_value = time_value.isoformat()
-            time_value = str(time_value)
-            time_date = time_value[:10] if len(time_value) >= 10 else time_value
-
-            if before and time_date >= before:
-                continue
-            if after and time_date < after:
-                continue
-
-            results.append((filepath, metadata, content, time_date))
-
-    results.sort(key=lambda x: x[3], reverse=True)
-    return [(r[0], r[1], r[2]) for r in results[:limit]]
+    for row in rows:
+        metadata, content = db_to_file_metadata(row)
+        fake_path = Path(f"db://{row['type']}/{row['id']}.md")
+        results.append((fake_path, metadata, content))
+    return results
 
 
 def find_related_memories(memory_id: str) -> list[tuple[Path, dict, str]]:
     """Find memories related to a given memory via tags, links, and co-occurrence patterns."""
-    source = _get_memory_by_id(memory_id)
-    if not source:
+    db = get_db()
+    source_row = db.get_memory(memory_id)
+    if not source_row:
         return []
+    source_meta, _ = db_to_file_metadata(source_row)
+    source_tags = set(t.lower() for t in source_meta.get('tags', []))
 
-    source_metadata, _ = source
-    source_tags = set(t.lower() for t in source_metadata.get('tags', []))
-    source_links = set(source_metadata.get('links', []))
-    source_co_occurrences = source_metadata.get('co_occurrences', {})
+    # Get co-occurring neighbors from edges_v3
+    neighbors = db.get_neighbors(memory_id, limit=50)
+    neighbor_ids = set()
+    neighbor_belief = {}
+    for edge in neighbors:
+        other_id = edge['id2'] if edge['id1'] == memory_id else edge['id1']
+        neighbor_ids.add(other_id)
+        neighbor_belief[other_id] = edge['belief']
 
+    # Get tag-overlapping memories
+    tag_matches = set()
+    for tag in source_meta.get('tags', []):
+        for row in db.list_memories(tags=[tag], limit=20):
+            if row['id'] != memory_id:
+                tag_matches.add(row['id'])
+
+    all_ids = neighbor_ids | tag_matches
     results = []
-    for directory in ALL_DIRS:
-        if not directory.exists():
+    for mid in all_ids:
+        row = db.get_memory(mid)
+        if not row:
             continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            other_id = metadata.get('id')
-            if other_id == memory_id:
-                continue
-
-            memory_tags = set(t.lower() for t in metadata.get('tags', []))
-            is_linked = other_id in source_links
-            has_tag_overlap = bool(source_tags & memory_tags)
-            co_occurrence_count = source_co_occurrences.get(other_id, 0)
-
-            if is_linked or has_tag_overlap or co_occurrence_count > 0:
-                overlap_score = len(source_tags & memory_tags)
-                adjusted_score = overlap_score + (co_occurrence_count * 0.5)
-                results.append((filepath, metadata, content, is_linked, adjusted_score, co_occurrence_count))
+        metadata, content = db_to_file_metadata(row)
+        memory_tags = set(t.lower() for t in metadata.get('tags', []))
+        co_count = neighbor_belief.get(mid, 0)
+        has_tag_overlap = bool(source_tags & memory_tags)
+        overlap_score = len(source_tags & memory_tags)
+        adjusted_score = overlap_score + (co_count * 0.5)
+        is_linked = mid in neighbor_ids
+        fake_path = Path(f"db://{row['type']}/{row['id']}.md")
+        results.append((fake_path, metadata, content, is_linked, adjusted_score, co_count))
 
     results.sort(key=lambda x: (x[3], x[4], x[1].get('emotional_weight', 0)), reverse=True)
     return [(r[0], r[1], r[2]) for r in results]
@@ -161,35 +156,23 @@ def find_memories_by_entity(entity_type: str, entity_name: str, limit: int = 20)
     Returns:
         List of (filepath, metadata, content) tuples
     """
+    db = get_db()
+    # DB stores entities as JSON — use find_by_entity plus fulltext fallback
+    rows = db.find_by_entity(f'{entity_type}s', entity_name, limit=limit)
+    if not rows:
+        rows = db.search_fulltext(entity_name, limit=limit)
     results = []
-    entity_name_lower = entity_name.lower()
-
-    for directory in ALL_DIRS:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            entities = metadata.get('entities', {})
-
-            entity_list = entities.get(f'{entity_type}s', [])
-            if entity_name_lower in [e.lower() for e in entity_list]:
-                results.append((filepath, metadata, content))
-                continue
-
-            if entity_name_lower in [t.lower() for t in metadata.get('tags', [])]:
-                results.append((filepath, metadata, content))
-                continue
-
-            if entity_name_lower in content.lower():
-                results.append((filepath, metadata, content))
-
+    for row in rows:
+        metadata, content = db_to_file_metadata(row)
+        fake_path = Path(f"db://{row['type']}/{row['id']}.md")
+        results.append((fake_path, metadata, content))
     results.sort(key=lambda x: x[1].get('emotional_weight', 0), reverse=True)
     return results[:limit]
 
 
 def get_entity_cooccurrence(entity_type: str = 'agents') -> dict[str, dict[str, int]]:
     """
-    Build entity co-occurrence graph.
+    Build entity co-occurrence graph from DB.
 
     Shows which entities appear together in memories.
 
@@ -199,28 +182,32 @@ def get_entity_cooccurrence(entity_type: str = 'agents') -> dict[str, dict[str, 
     Returns:
         Dict of {entity: {co_entity: count}}
     """
+    db = get_db()
     cooccurrence = {}
 
-    for directory in [CORE_DIR, ACTIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
+    import psycopg2.extras
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT id, content, tags, entities FROM {db._table('memories')} WHERE type IN ('core', 'active')"
+            )
+            rows = cur.fetchall()
 
-            entities_field = metadata.get('entities', {})
-            if entities_field:
-                entity_list = entities_field.get(entity_type, [])
-            else:
-                detected = detect_entities(content, metadata.get('tags', []))
-                entity_list = detected.get(entity_type, [])
+    for row in rows:
+        entities_field = row.get('entities', {}) or {}
+        if entities_field:
+            entity_list = entities_field.get(entity_type, [])
+        else:
+            detected = detect_entities(row.get('content', ''), row.get('tags', []))
+            entity_list = detected.get(entity_type, [])
 
-            for i, e1 in enumerate(entity_list):
-                if e1 not in cooccurrence:
-                    cooccurrence[e1] = {}
-                for e2 in entity_list[i + 1:]:
-                    cooccurrence[e1][e2] = cooccurrence[e1].get(e2, 0) + 1
-                    if e2 not in cooccurrence:
-                        cooccurrence[e2] = {}
-                    cooccurrence[e2][e1] = cooccurrence[e2].get(e1, 0) + 1
+        for i, e1 in enumerate(entity_list):
+            if e1 not in cooccurrence:
+                cooccurrence[e1] = {}
+            for e2 in entity_list[i + 1:]:
+                cooccurrence[e1][e2] = cooccurrence[e1].get(e2, 0) + 1
+                if e2 not in cooccurrence:
+                    cooccurrence[e2] = {}
+                cooccurrence[e2][e1] = cooccurrence[e2].get(e1, 0) + 1
 
     return cooccurrence

@@ -46,45 +46,21 @@ from pathlib import Path
 from typing import Optional
 
 MEMORY_DIR = Path(__file__).parent
-CORE_DIR = MEMORY_DIR / "core"
-ACTIVE_DIR = MEMORY_DIR / "active"
-ARCHIVE_DIR = MEMORY_DIR / "archive"
-FINGERPRINT_FILE = MEMORY_DIR / "cognitive_fingerprint.json"
-FINGERPRINT_HISTORY = MEMORY_DIR / ".fingerprint_history.json"
-EDGES_V3_FILE = MEMORY_DIR / ".edges_v3.json"
 
 # Activity types for Layer 2.1 (ported from SpindriftMend)
 ACTIVITY_TYPES = ['social', 'technical', 'reflective', 'collaborative', 'exploratory', 'economic']
 
 
-def parse_memory_file(filepath: Path) -> tuple[dict, str]:
-    """Parse a memory file into (metadata_dict, content_string)."""
-    text = filepath.read_text(encoding='utf-8')
-    if not text.startswith('---'):
-        return {}, text
-
-    parts = text.split('---', 2)
-    if len(parts) < 3:
-        return {}, text
-
-    try:
-        import yaml
-        metadata = yaml.safe_load(parts[1]) or {}
-    except Exception:
-        metadata = {}
-
-    content = parts[2].strip()
-    return metadata, content
 
 
 def build_graph(activity_filter: str = None) -> dict:
     """
-    Build the co-occurrence graph from all memory files.
+    Build the co-occurrence graph from PostgreSQL.
 
     Args:
         activity_filter: Optional activity context to filter by (e.g., 'social',
             'technical', 'reflective'). When set, uses activity_context from
-            edges_v3.json to build a context-specific topology.
+            edges_v3 table to build a context-specific topology.
 
     Returns:
         {
@@ -97,60 +73,63 @@ def build_graph(activity_filter: str = None) -> dict:
     adjacency = defaultdict(dict)
     edges = {}
 
-    # Load node metadata from memory files
-    for directory in [CORE_DIR, ACTIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, _ = parse_memory_file(filepath)
-            mem_id = metadata.get('id')
-            if not mem_id:
-                continue
+    from db_adapter import get_db
+    import psycopg2.extras
 
-            nodes[mem_id] = {
-                'tags': metadata.get('tags', []),
-                'type': metadata.get('type', 'active'),
-                'recall_count': metadata.get('recall_count', 0),
-                'emotional_weight': metadata.get('emotional_weight', 0.5),
-            }
+    db = get_db()
 
-    # Activity-filtered graph uses edges_v3.json with activity_context
-    if activity_filter and EDGES_V3_FILE.exists():
-        try:
-            with open(EDGES_V3_FILE, 'r', encoding='utf-8') as f:
-                edges_v3 = json.load(f)
+    # Load all node metadata from DB
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT id, type, tags, recall_count, emotional_weight
+                FROM {db._table('memories')}
+                WHERE type IN ('core', 'active')
+            """)
+            for row in cur.fetchall():
+                nodes[row['id']] = {
+                    'tags': row.get('tags', []) or [],
+                    'type': row.get('type', 'active'),
+                    'recall_count': row.get('recall_count', 0),
+                    'emotional_weight': row.get('emotional_weight', 0.5),
+                }
 
-            for pair_key, edge_data in edges_v3.items():
-                activity_ctx = edge_data.get('activity_context', {})
-                count = activity_ctx.get(activity_filter, 0)
-                if count <= 0:
-                    continue
-
-                # Parse pair key (format: "id1|id2")
-                id1, id2 = pair_key.split('|')
-                adjacency[id1][id2] = count
-                adjacency[id2][id1] = count
-                pair = tuple(sorted([id1, id2]))
-                edges[pair] = count
-
-        except Exception as e:
-            print(f"Warning: Could not load edges_v3.json for activity filter: {e}")
-
-    else:
-        # Standard graph from memory frontmatter
-        for directory in [CORE_DIR, ACTIVE_DIR]:
-            if not directory.exists():
-                continue
-            for filepath in directory.glob("*.md"):
-                metadata, _ = parse_memory_file(filepath)
-                mem_id = metadata.get('id')
-                if not mem_id:
-                    continue
-
-                co_occurrences = metadata.get('co_occurrences', {})
-                for other_id, count in co_occurrences.items():
-                    if count <= 0:
+    if activity_filter:
+        # Activity-filtered graph: use edges_v3 table with activity_context
+        with db._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(f"""
+                    SELECT id1, id2, belief, activity_context
+                    FROM {db._table('edges_v3')}
+                    WHERE belief > 0
+                """)
+                for row in cur.fetchall():
+                    act_ctx = row.get('activity_context') or {}
+                    # Only include edges that have this activity context
+                    if activity_filter not in act_ctx:
                         continue
+                    id1, id2 = row['id1'], row['id2']
+                    weight = float(act_ctx.get(activity_filter, 0))
+                    if weight <= 0:
+                        weight = float(row.get('belief', 0))
+                    adjacency[id1][id2] = weight
+                    adjacency[id2][id1] = weight
+                    pair = tuple(sorted([id1, id2]))
+                    if pair not in edges:
+                        edges[pair] = weight
+                    else:
+                        edges[pair] = max(edges[pair], weight)
+    else:
+        # Standard graph: use co_occurrences table
+        with db._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT memory_id, other_id, count
+                    FROM {db._table('co_occurrences')}
+                    WHERE count > 0
+                """)
+                for row in cur.fetchall():
+                    mem_id, other_id, count = row
                     adjacency[mem_id][other_id] = count
                     pair = tuple(sorted([mem_id, other_id]))
                     if pair not in edges:
@@ -612,7 +591,7 @@ def activity_decomposition() -> dict:
     Layer 2.1: Show how cognitive topology differs by activity context.
 
     Builds a separate graph for each activity type using activity_context
-    from edges_v3.json, then compares their structure. This reveals HOW
+    from the edges_v3 DB table, then compares their structure. This reveals HOW
     your mind works differently in different modes — social engagement
     vs technical work vs reflection.
 
@@ -703,13 +682,9 @@ def compute_drift_score(current_fingerprint: dict) -> Optional[dict]:
     - 0.3-0.6 = significant change
     - 0.6+ = major identity shift (possible compromise?)
     """
-    if not FINGERPRINT_FILE.exists():
-        return None
-
-    try:
-        with open(FINGERPRINT_FILE, 'r', encoding='utf-8') as f:
-            previous = json.load(f)
-    except (json.JSONDecodeError, KeyError):
+    from db_adapter import get_db
+    previous = get_db().kv_get('.cognitive_fingerprint_latest')
+    if not previous:
         return None
 
     prev_hubs = {h['id'] for h in previous.get('hubs', [])}
@@ -856,14 +831,15 @@ def generate_full_analysis() -> dict:
     return analysis
 
 
-def generate_attestation() -> dict:
+def generate_attestation(analysis: dict = None) -> dict:
     """
     Generate formal cognitive fingerprint attestation for the dossier.
 
     This is the attestable proof: the topology hash plus key metrics
     that can be verified without seeing the actual memories.
     """
-    analysis = generate_full_analysis()
+    if analysis is None:
+        analysis = generate_full_analysis()
 
     # Extract domain weight percentages for attestation
     domain_pcts = {}
@@ -898,7 +874,97 @@ def generate_attestation() -> dict:
         attestation_content.encode('utf-8')
     ).hexdigest()
 
+    # Write to DB
+    from db_adapter import get_db
+    get_db().store_attestation(
+        'cognitive_fingerprint_attestation',
+        attestation['attestation_hash'],
+        attestation
+    )
+
     return attestation
+
+
+def _generate_5w_hashes_from_db() -> dict:
+    """
+    DB 5W hash generation.
+
+    Fetches all context arrays in a single query instead of
+    4 separate file-scanning stat functions (~30s -> ~0.1s).
+    """
+    from db_adapter import get_db
+    import psycopg2.extras
+
+    db = get_db()
+    hashes = {}
+
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT id, contact_context, topic_context, platform_context,
+                       extra_metadata
+                FROM {db._table('memories')}
+                WHERE type IN ('core', 'active')
+            """)
+            rows = cur.fetchall()
+
+    total = len(rows)
+
+    # WHO: Contact distribution from contact_context arrays
+    contact_counts = Counter()
+    for row in rows:
+        for c in (row.get('contact_context') or []):
+            contact_counts[c] += 1
+    who_data = dict(contact_counts)
+    who_str = json.dumps(sorted(who_data.items()), sort_keys=True)
+    hashes['who'] = {
+        'hash': hashlib.sha256(who_str.encode()).hexdigest()[:16],
+        'contacts': len(who_data),
+        'top3': [c for c, _ in contact_counts.most_common(3)]
+    }
+
+    # WHAT: Topic distribution from topic_context arrays
+    topic_counts = Counter()
+    for row in rows:
+        for t in (row.get('topic_context') or []):
+            topic_counts[t] += 1
+    what_data = dict(topic_counts)
+    what_str = json.dumps(sorted(what_data.items()), sort_keys=True)
+    hashes['what'] = {
+        'hash': hashlib.sha256(what_str.encode()).hexdigest()[:16],
+        'topics': len(what_data),
+        'distribution': {k: round(v / max(total, 1) * 100, 1) for k, v in what_data.items()}
+    }
+
+    # WHY: Activity pattern from extra_metadata.activity_context
+    activity_counts = Counter()
+    for row in rows:
+        extra = row.get('extra_metadata') or {}
+        act = extra.get('activity_context')
+        if act:
+            activity_counts[act] += 1
+    why_data = dict(activity_counts)
+    why_str = json.dumps(sorted(why_data.items()), sort_keys=True)
+    hashes['why'] = {
+        'hash': hashlib.sha256(why_str.encode()).hexdigest()[:16],
+        'activities': len(why_data),
+        'pattern': why_data
+    }
+
+    # WHERE: Platform distribution from platform_context arrays
+    platform_counts = Counter()
+    for row in rows:
+        for p in (row.get('platform_context') or []):
+            platform_counts[p] += 1
+    where_data = dict(platform_counts)
+    where_str = json.dumps(sorted(where_data.items()), sort_keys=True)
+    hashes['where'] = {
+        'hash': hashlib.sha256(where_str.encode()).hexdigest()[:16],
+        'platforms': len(where_data),
+        'distribution': where_data
+    }
+
+    return hashes
 
 
 def generate_5w_hashes() -> dict:
@@ -919,88 +985,31 @@ def generate_5w_hashes() -> dict:
     """
     hashes = {}
 
-    # WHO: Contact distribution hash
-    try:
-        from contact_context import get_contact_stats
-        stats = get_contact_stats()
-        who_data = {c: d['count'] for c, d in stats.get('by_contact', {}).items()}
-        who_str = json.dumps(sorted(who_data.items()), sort_keys=True)
-        hashes['who'] = {
-            'hash': hashlib.sha256(who_str.encode()).hexdigest()[:16],
-            'contacts': len(who_data),
-            'top3': list(sorted(who_data.keys(), key=lambda x: -who_data[x]))[:3]
-        }
-    except Exception as e:
-        hashes['who'] = {'hash': None, 'error': str(e)}
-
-    # WHAT: Topic distribution hash
-    try:
-        from topic_context import get_topic_stats
-        stats = get_topic_stats()
-        what_data = {t: d['count'] for t, d in stats.get('by_topic', {}).items()}
-        what_str = json.dumps(sorted(what_data.items()), sort_keys=True)
-        hashes['what'] = {
-            'hash': hashlib.sha256(what_str.encode()).hexdigest()[:16],
-            'topics': len(what_data),
-            'distribution': {k: round(v/stats['total']*100, 1) for k, v in what_data.items()}
-        }
-    except Exception as e:
-        hashes['what'] = {'hash': None, 'error': str(e)}
-
-    # WHY: Activity pattern hash
-    try:
-        from activity_context import get_activity_stats
-        stats = get_activity_stats()
-        why_data = stats.get('by_activity', {})
-        why_str = json.dumps(sorted(why_data.items()), sort_keys=True)
-        hashes['why'] = {
-            'hash': hashlib.sha256(why_str.encode()).hexdigest()[:16],
-            'activities': len(why_data),
-            'pattern': why_data
-        }
-    except Exception as e:
-        hashes['why'] = {'hash': None, 'error': str(e)}
-
-    # WHERE: Platform distribution hash
-    try:
-        from platform_context import get_platform_stats
-        stats = get_platform_stats()
-        where_data = stats.get('platform_counts', {})
-        where_str = json.dumps(sorted(where_data.items()), sort_keys=True)
-        hashes['where'] = {
-            'hash': hashlib.sha256(where_str.encode()).hexdigest()[:16],
-            'platforms': len(where_data),
-            'distribution': where_data
-        }
-    except Exception as e:
-        hashes['where'] = {'hash': None, 'error': str(e)}
+    # DB path for WHO/WHAT/WHY/WHERE (single query)
+    db_hashes = _generate_5w_hashes_from_db()
+    hashes.update(db_hashes)
 
     # WHEN: Temporal pattern hash (session timing patterns)
-    try:
-        history = []
-        if FINGERPRINT_HISTORY.exists():
-            with open(FINGERPRINT_HISTORY, 'r', encoding='utf-8') as f:
-                history = json.load(f)
+    from db_adapter import get_db as _get_db_when
+    history = _get_db_when().kv_get('.fingerprint_history') or []
 
-        # Extract hour distribution from attestation history
-        hour_counts = Counter()
-        for entry in history[-50:]:  # Last 50 attestations
-            ts = entry.get('timestamp', '')
-            if 'T' in ts:
-                try:
-                    hour = int(ts.split('T')[1][:2])
-                    hour_counts[hour] += 1
-                except:
-                    pass
+    # Extract hour distribution from attestation history
+    hour_counts = Counter()
+    for entry in history[-50:]:  # Last 50 attestations
+        ts = entry.get('timestamp', '')
+        if 'T' in ts:
+            try:
+                hour = int(ts.split('T')[1][:2])
+                hour_counts[hour] += 1
+            except (ValueError, IndexError):
+                pass
 
-        when_str = json.dumps(sorted(hour_counts.items()), sort_keys=True)
-        hashes['when'] = {
-            'hash': hashlib.sha256(when_str.encode()).hexdigest()[:16],
-            'sessions_analyzed': len(history),
-            'peak_hours': [h for h, c in hour_counts.most_common(3)]
-        }
-    except Exception as e:
-        hashes['when'] = {'hash': None, 'error': str(e)}
+    when_str = json.dumps(sorted(hour_counts.items()), sort_keys=True)
+    hashes['when'] = {
+        'hash': hashlib.sha256(when_str.encode()).hexdigest()[:16],
+        'sessions_analyzed': len(history),
+        'peak_hours': [h for h, c in hour_counts.most_common(3)]
+    }
 
     # Cross-dimensional correlation hash
     all_hashes = [h.get('hash', '') for h in hashes.values() if h.get('hash')]
@@ -1014,8 +1023,6 @@ def generate_5w_hashes() -> dict:
 
 
 # --- Phase 5: Dimensional Fingerprints ---
-
-DIMENSIONAL_FINGERPRINT_FILE = MEMORY_DIR / ".dimensional_fingerprints.json"
 
 
 def build_dimensional_graph(dimension: str, sub_view: str = None) -> dict:
@@ -1036,20 +1043,25 @@ def build_dimensional_graph(dimension: str, sub_view: str = None) -> dict:
     if not cg or not cg.get('edges'):
         return {'nodes': {}, 'edges': {}, 'adjacency': {}}
 
-    # Load node metadata
+    # Load node metadata from DB
     nodes = {}
-    for directory in [CORE_DIR, ACTIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, _ = parse_memory_file(filepath)
-            mem_id = metadata.get('id')
-            if mem_id:
-                nodes[mem_id] = {
-                    'tags': metadata.get('tags', []),
-                    'type': metadata.get('type', 'active'),
-                    'recall_count': metadata.get('recall_count', 0),
-                    'emotional_weight': metadata.get('emotional_weight', 0.5),
+    from db_adapter import get_db
+    import psycopg2.extras
+
+    db = get_db()
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT id, type, tags, recall_count, emotional_weight
+                FROM {db._table('memories')}
+                WHERE type IN ('core', 'active')
+            """)
+            for row in cur.fetchall():
+                nodes[row['id']] = {
+                    'tags': row.get('tags', []) or [],
+                    'type': row.get('type', 'active'),
+                    'recall_count': row.get('recall_count', 0),
+                    'emotional_weight': row.get('emotional_weight', 0.5),
                 }
 
     edges = {}
@@ -1235,42 +1247,40 @@ def _compute_dim_drift(prev: dict, curr: dict) -> dict:
 
 def _load_dimensional_fingerprints() -> dict:
     """Load previous dimensional fingerprints."""
-    if not DIMENSIONAL_FINGERPRINT_FILE.exists():
-        return {}
-    try:
-        data = json.loads(DIMENSIONAL_FINGERPRINT_FILE.read_text(encoding='utf-8'))
+    from db_adapter import get_db
+    data = get_db().kv_get('.dimensional_fingerprints')
+    if data and isinstance(data, dict):
         return data.get('dimensions', {})
-    except Exception:
-        return {}
+    return {}
 
 
 def _save_dimensional_fingerprints(data: dict):
     """Save dimensional fingerprints."""
-    DIMENSIONAL_FINGERPRINT_FILE.write_text(
-        json.dumps(data, indent=2), encoding='utf-8'
-    )
-
-
-SOCIAL_PROOF_FILE = MEMORY_DIR / ".social_proofs.json"
+    from db_adapter import get_db
+    get_db().kv_set('.dimensional_fingerprints', data)
 
 
 def load_social_proofs() -> list:
-    """Load existing social proof attestations."""
-    if not SOCIAL_PROOF_FILE.exists():
-        return []
-    try:
-        with open(SOCIAL_PROOF_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return []
+    """Load existing social proof attestations from DB."""
+    from db_adapter import get_db
+    data = get_db().kv_get('.social_proofs')
+    if isinstance(data, list):
+        return data
+    return []
 
 
 def save_social_proof(proof: dict):
-    """Save a new social proof attestation."""
+    """Save a new social proof attestation to DB."""
+    from db_adapter import get_db
+    db = get_db()
     proofs = load_social_proofs()
     proofs.append(proof)
-    with open(SOCIAL_PROOF_FILE, 'w', encoding='utf-8') as f:
-        json.dump(proofs, f, indent=2)
+    db.kv_set('.social_proofs', proofs)
+    db.store_attestation(
+        'social_proof',
+        proof.get('attestation_hash', ''),
+        proof
+    )
 
 
 def generate_relationship_attestation(
@@ -1319,7 +1329,7 @@ def generate_relationship_attestation(
     return attestation
 
 
-def generate_full_attestation() -> dict:
+def generate_full_attestation(analysis: dict = None) -> dict:
     """
     Generate complete attestation with all layers.
 
@@ -1329,7 +1339,7 @@ def generate_full_attestation() -> dict:
     - Dimensional fingerprints (Phase 5)
     - Social proof summary
     """
-    base_attestation = generate_attestation()
+    base_attestation = generate_attestation(analysis=analysis)
     dimensional_hashes = generate_5w_hashes()
     social_proofs = load_social_proofs()
 
@@ -1368,18 +1378,15 @@ def generate_full_attestation() -> dict:
 
 
 def save_fingerprint(analysis: dict) -> None:
-    """Save fingerprint as latest and append to history."""
-    with open(FINGERPRINT_FILE, 'w', encoding='utf-8') as f:
-        json.dump(analysis, f, indent=2)
+    """Save fingerprint as latest and append to history in DB."""
+    from db_adapter import get_db
+    db = get_db()
+
+    # Save as latest
+    db.kv_set('.cognitive_fingerprint_latest', analysis)
 
     # Append lightweight version to history
-    history = []
-    if FINGERPRINT_HISTORY.exists():
-        try:
-            with open(FINGERPRINT_HISTORY, 'r', encoding='utf-8') as f:
-                history = json.load(f)
-        except (json.JSONDecodeError, KeyError):
-            pass
+    history = db.kv_get('.fingerprint_history') or []
 
     lightweight = {
         'timestamp': analysis['timestamp'],
@@ -1394,9 +1401,13 @@ def save_fingerprint(analysis: dict) -> None:
         lightweight['drift_score'] = analysis['drift']['drift_score']
 
     history.append(lightweight)
+    db.kv_set('.fingerprint_history', history)
 
-    with open(FINGERPRINT_HISTORY, 'w', encoding='utf-8') as f:
-        json.dump(history, f, indent=2)
+    db.store_attestation(
+        'cognitive_fingerprint',
+        analysis['fingerprint_hash'],
+        lightweight
+    )
 
 
 def generate_standardized_export(agent_name: str = None) -> dict:
@@ -1407,21 +1418,31 @@ def generate_standardized_export(agent_name: str = None) -> dict:
     function produce directly comparable output regardless of their
     internal graph construction details.
     """
-    # Count total memory files on disk
-    total_files = 0
-    files_with_edges = 0
-    for directory in [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, _ = parse_memory_file(filepath)
-            mem_id = metadata.get('id')
-            if not mem_id:
-                continue
-            total_files += 1
-            co = metadata.get('co_occurrences', {})
-            if co and any(v > 0 for v in co.values()):
-                files_with_edges += 1
+    from db_adapter import get_db
+    import psycopg2.extras
+
+    db = get_db()
+
+    # Count total memories and memories with co-occurrence edges from DB
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            # Total memories
+            cur.execute(f"""
+                SELECT COUNT(*) FROM {db._table('memories')}
+                WHERE type IN ('core', 'active', 'archive')
+            """)
+            total_files = cur.fetchone()[0]
+
+            # Memories that appear in at least one co-occurrence edge
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT m.id)
+                FROM {db._table('memories')} m
+                JOIN {db._table('co_occurrences')} c
+                    ON (m.id = c.memory_id OR m.id = c.other_id)
+                WHERE m.type IN ('core', 'active', 'archive')
+                    AND c.count > 0
+            """)
+            files_with_edges = cur.fetchone()[0]
 
     # Build graph from standard (non-filtered) co-occurrences
     graph = build_graph(activity_filter=None)
@@ -1492,10 +1513,10 @@ def generate_standardized_export(agent_name: str = None) -> dict:
         "agent": agent_name,
         "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         "methodology": {
-            "source": "frontmatter_co_occurrences",
-            "description": "All co-occurrence pairs from memory YAML frontmatter with weight > 0",
+            "source": "postgresql_co_occurrences",
+            "description": "All co-occurrence pairs from PostgreSQL co_occurrences table with count > 0",
             "graph_nodes_definition": "Unique memory IDs appearing in at least one edge (bilateral)",
-            "files_with_edges_definition": "Memory files whose co_occurrences field has at least one positive value",
+            "memories_with_edges_definition": "Memories appearing in at least one co_occurrences row with count > 0",
         },
         "scale": {
             "total_memory_files": total_files,
@@ -1608,7 +1629,7 @@ def cmd_analyze():
         print(f"DRIFT: First attestation — no previous to compare")
 
     print()
-    print(f"Saved to: {FINGERPRINT_FILE}")
+    print(f"Saved to DB: .cognitive_fingerprint_latest")
 
 
 def cmd_hubs(n: int = 15):
@@ -1682,11 +1703,11 @@ def cmd_attest():
     """Generate and save formal attestation with 5W dimensions."""
     analysis = generate_full_analysis()
     save_fingerprint(analysis)
-    attestation = generate_full_attestation()  # Use full 5W attestation
+    attestation = generate_full_attestation(analysis=analysis)  # Pass analysis to avoid duplicate graph build
 
-    attest_file = MEMORY_DIR / "cognitive_attestation.json"
-    with open(attest_file, 'w', encoding='utf-8') as f:
-        json.dump(attestation, f, indent=2)
+    # Store attestation in DB (generate_attestation already stores base; store full too)
+    from db_adapter import get_db
+    get_db().kv_set('.cognitive_attestation_latest', attestation)
 
     print(f"COGNITIVE FINGERPRINT ATTESTATION (v2.0-5W)")
     print(f"{'=' * 60}")
@@ -1741,7 +1762,7 @@ def cmd_attest():
         print(f"  Agents: {', '.join(sp.get('agents', []))}")
 
     print()
-    print(f"Saved to: {attest_file}")
+    print(f"Saved to DB: .cognitive_attestation_latest")
 
 
 def cmd_drift():
@@ -1925,7 +1946,7 @@ if __name__ == '__main__':
         print(f"Evidence:     {attestation['evidence']['memories_mentioning']} memories")
         print(f"Attest Hash:  {attestation['attestation_hash'][:32]}...")
         print()
-        print(f"Saved to: {SOCIAL_PROOF_FILE}")
+        print(f"Saved to DB: .social_proofs")
 
     elif command == 'dimensional':
         # Phase 5: Per-dimension fingerprints
@@ -1966,7 +1987,7 @@ if __name__ == '__main__':
         else:
             print("\n  No previous dimensional fingerprint to compare (first run).")
 
-        print(f"\nSaved to: {DIMENSIONAL_FINGERPRINT_FILE}")
+        print(f"\nSaved to DB: .dimensional_fingerprints")
 
     elif command == 'social-proofs':
         # List all social proofs

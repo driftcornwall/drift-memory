@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-Platform Context System v1.0
-Adds platform awareness to SpindriftMend's memory system.
+Platform Context System v2.0 — PostgreSQL-only
+Adds platform awareness to memory system.
 
 Detects which platforms a memory relates to based on content analysis.
 Enables: platform-filtered recall, cross-platform bridge detection,
 context-tagged co-occurrence edges.
+
+ALL reads/writes go through PostgreSQL via db_adapter. No file scanning.
 
 Platforms tracked:
 - moltx: Social feed, flywheel posts, agent conversations
@@ -15,31 +17,28 @@ Platforms tracked:
 - lobsterpedia: Wiki, bot registration, articles
 - clawtasks: Bounties, proposals, staking
 - nostr: Attestations, relays, public verifiability
+- twitter: Tweets, mentions, timeline
 
-Author: SpindriftMend
-Date: 2026-02-05
+Author: SpindriftMend (v1), Drift (v2 DB migration)
+Date: 2026-02-05 (v1), 2026-02-10 (v2)
 """
 
 import io
-import json
 import re
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
+
+import psycopg2.extras
+
+from db_adapter import get_db, db_to_file_metadata
 
 # Fix Windows cp1252 encoding issues with Unicode content
 if sys.stdout and hasattr(sys.stdout, 'buffer'):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 if sys.stderr and hasattr(sys.stderr, 'buffer'):
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-
-MEMORY_ROOT = Path(__file__).parent
-ACTIVE_DIR = MEMORY_ROOT / "active"
-CORE_DIR = MEMORY_ROOT / "core"
-SEMANTIC_DIR = MEMORY_ROOT / "semantic"
-ARCHIVE_DIR = MEMORY_ROOT / "archive"
 
 # Platform detection patterns
 # Each platform has: url_patterns, keyword_patterns, agent_patterns, content_patterns
@@ -244,47 +243,29 @@ def detect_platforms(content: str, tags: list[str] = None, metadata: dict = None
     return {p: round(s, 3) for p, s in scores.items() if s >= CONFIDENCE_THRESHOLD}
 
 
-def parse_memory_file(filepath: Path) -> tuple[dict, str]:
-    """Parse a memory file into metadata dict and content string."""
-    import yaml
-    text = filepath.read_text(encoding='utf-8', errors='replace')
-    if not text.startswith('---'):
-        return {}, text
-
-    parts = text.split('---', 2)
-    if len(parts) < 3:
-        return {}, text
-
-    try:
-        metadata = yaml.safe_load(parts[1]) or {}
-    except Exception:
-        metadata = {}
-
-    return metadata, parts[2].strip()
-
-
-def write_memory_file(filepath: Path, metadata: dict, content: str):
-    """Write a memory file with YAML frontmatter."""
-    import yaml
-
-    # Custom representer for clean YAML output
-    def str_representer(dumper, data):
-        if '\n' in data:
-            return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
-        return dumper.represent_scalar('tag:yaml.org,2002:str', data)
-
-    yaml.add_representer(str, str_representer)
-
-    frontmatter = yaml.dump(metadata, default_flow_style=False, allow_unicode=True, sort_keys=False)
-    filepath.write_text(f"---\n{frontmatter}---\n\n{content}", encoding='utf-8')
+def _get_all_memories() -> list[tuple[dict, str]]:
+    """Fetch all core/active/archive memories from DB, return as (metadata, content) pairs."""
+    db = get_db()
+    results = []
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT * FROM {db._table('memories')} WHERE type IN ('core', 'active', 'archive')"
+            )
+            for row in cur.fetchall():
+                metadata, content = db_to_file_metadata(dict(row))
+                results.append((metadata, content))
+    return results
 
 
 def backfill_platforms(dry_run: bool = False) -> dict:
     """
-    Backfill platform context for all memories.
+    Backfill platform context for all memories in PostgreSQL.
 
+    Reads each memory, detects platforms from content, writes platform_context back.
     Returns stats about what was detected and updated.
     """
+    db = get_db()
     stats = {
         'total_scanned': 0,
         'already_tagged': 0,
@@ -295,75 +276,90 @@ def backfill_platforms(dry_run: bool = False) -> dict:
         'updates': [],
     }
 
-    for directory in [CORE_DIR, ACTIVE_DIR, SEMANTIC_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT * FROM {db._table('memories')} WHERE type IN ('core', 'active', 'archive') ORDER BY created"
+            )
+            rows = cur.fetchall()
+
+    for row in rows:
+        row = dict(row)
+        metadata, content = db_to_file_metadata(row)
+        mem_id = metadata['id']
+        tags = metadata.get('tags', [])
+        stats['total_scanned'] += 1
+
+        # Detect platforms from content
+        platforms = detect_platforms(content, tags, metadata)
+
+        if not platforms:
+            stats['no_platform'] += 1
             continue
 
-        for filepath in sorted(directory.glob("*.md")):
-            stats['total_scanned'] += 1
-            metadata, content = parse_memory_file(filepath)
-            mem_id = metadata.get('id', filepath.stem)
-            tags = metadata.get('tags', [])
+        detected_names = sorted(platforms.keys())
 
-            # Detect platforms
-            platforms = detect_platforms(content, tags, metadata)
-
-            if not platforms:
-                stats['no_platform'] += 1
-                continue
-
-            # Check if already has platform metadata
-            existing = metadata.get('platforms', {})
-            if existing and set(existing.keys()) == set(platforms.keys()):
-                stats['already_tagged'] += 1
-                for p in platforms:
-                    stats['platform_counts'][p] += 1
-                continue
-
-            # Update metadata
-            metadata['platforms'] = platforms
-
-            # Track cross-platform memories
-            if len(platforms) > 1:
-                stats['cross_platform'] += 1
-
-            for p in platforms:
+        # Check if already has the same platform_context
+        existing = metadata.get('platform_context', []) or []
+        if existing and sorted(existing) == detected_names:
+            stats['already_tagged'] += 1
+            for p in detected_names:
                 stats['platform_counts'][p] += 1
+            continue
 
-            stats['newly_tagged'] += 1
-            stats['updates'].append({
-                'id': mem_id,
-                'file': filepath.name,
-                'platforms': platforms,
-            })
+        # Track cross-platform memories
+        if len(detected_names) > 1:
+            stats['cross_platform'] += 1
 
-            if not dry_run:
-                write_memory_file(filepath, metadata, content)
+        for p in detected_names:
+            stats['platform_counts'][p] += 1
+
+        stats['newly_tagged'] += 1
+        stats['updates'].append({
+            'id': mem_id,
+            'platforms': platforms,
+        })
+
+        if not dry_run:
+            db.update_memory(mem_id, platform_context=detected_names)
 
     return stats
 
 
 def find_by_platform(platform: str, limit: int = 20) -> list[dict]:
     """Find memories tagged with a specific platform, sorted by confidence."""
+    db = get_db()
     results = []
 
-    for directory in [CORE_DIR, ACTIVE_DIR, SEMANTIC_DIR]:
-        if not directory.exists():
-            continue
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Use GIN index on platform_context TEXT[]
+            cur.execute(
+                f"SELECT * FROM {db._table('memories')} WHERE %s = ANY(platform_context) "
+                f"AND type IN ('core', 'active') ORDER BY recall_count DESC LIMIT %s",
+                (platform, limit * 3)  # fetch extra so we can re-score and sort
+            )
+            rows = cur.fetchall()
 
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            platforms = metadata.get('platforms', {})
+    for row in rows:
+        row = dict(row)
+        metadata, content = db_to_file_metadata(row)
+        tags = metadata.get('tags', [])
 
-            if platform in platforms:
-                results.append({
-                    'id': metadata.get('id', filepath.stem),
-                    'confidence': platforms[platform],
-                    'all_platforms': list(platforms.keys()),
-                    'preview': content[:120].replace('\n', ' ').strip(),
-                    'tags': metadata.get('tags', []),
-                    'recall_count': metadata.get('recall_count', 0),
-                })
+        # Re-detect to get confidence scores
+        platforms = detect_platforms(content, tags, metadata)
+        if platform not in platforms:
+            # Was tagged but detection no longer matches — still include
+            platforms[platform] = 0.15
+
+        results.append({
+            'id': metadata['id'],
+            'confidence': platforms[platform],
+            'all_platforms': metadata.get('platform_context', []),
+            'preview': content[:120].replace('\n', ' ').strip(),
+            'tags': tags,
+            'recall_count': metadata.get('recall_count', 0),
+        })
 
     results.sort(key=lambda x: (-x['confidence'], -x['recall_count']))
     return results[:limit]
@@ -374,25 +370,42 @@ def cross_platform_bridges(min_platforms: int = 2) -> list[dict]:
     Find memories that bridge multiple platforms.
     These are the most valuable - they connect different worlds.
     """
+    db = get_db()
     bridges = []
 
-    for directory in [CORE_DIR, ACTIVE_DIR, SEMANTIC_DIR]:
-        if not directory.exists():
-            continue
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Find memories with 2+ platform_context entries
+            cur.execute(
+                f"SELECT * FROM {db._table('memories')} "
+                f"WHERE type IN ('core', 'active') "
+                f"AND array_length(platform_context, 1) >= %s "
+                f"ORDER BY recall_count DESC",
+                (min_platforms,)
+            )
+            rows = cur.fetchall()
 
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            platforms = metadata.get('platforms', {})
+    for row in rows:
+        row = dict(row)
+        metadata, content = db_to_file_metadata(row)
+        tags = metadata.get('tags', [])
+        platform_list = metadata.get('platform_context', [])
 
-            if len(platforms) >= min_platforms:
-                bridges.append({
-                    'id': metadata.get('id', filepath.stem),
-                    'platforms': platforms,
-                    'platform_count': len(platforms),
-                    'preview': content[:150].replace('\n', ' ').strip(),
-                    'recall_count': metadata.get('recall_count', 0),
-                    'tags': metadata.get('tags', []),
-                })
+        # Re-detect to get confidence scores
+        platforms = detect_platforms(content, tags, metadata)
+        # Fall back to stored platforms if detect_platforms misses some
+        for p in platform_list:
+            if p not in platforms:
+                platforms[p] = 0.15
+
+        bridges.append({
+            'id': metadata['id'],
+            'platforms': platforms,
+            'platform_count': len(platform_list),
+            'preview': content[:150].replace('\n', ' ').strip(),
+            'recall_count': metadata.get('recall_count', 0),
+            'tags': tags,
+        })
 
     bridges.sort(key=lambda x: (-x['platform_count'], -x['recall_count']))
     return bridges
@@ -401,54 +414,55 @@ def cross_platform_bridges(min_platforms: int = 2) -> list[dict]:
 def platform_cooccurrence_matrix() -> dict[str, dict[str, int]]:
     """
     Build a matrix showing how often memories from different platforms
-    co-occur in the same session. Uses the co_occurrences field in memory files.
+    co-occur via edges. Uses edges_v3 table and memory platform_context.
 
     Returns: {platform_a: {platform_b: count}} where count is how many
     co-occurrence links exist between memories of those platforms.
     """
-    # First, build memory_id -> platforms lookup
-    id_to_platforms = {}
-    for directory in [CORE_DIR, ACTIVE_DIR, SEMANTIC_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            mem_id = metadata.get('id', filepath.stem)
-            platforms = metadata.get('platforms', {})
-            if platforms:
-                id_to_platforms[mem_id] = set(platforms.keys())
+    db = get_db()
 
-    # Build co-occurrence matrix from memory-level co_occurrences
+    # Build memory_id -> platforms lookup from DB
+    id_to_platforms = {}
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT id, platform_context FROM {db._table('memories')} "
+                f"WHERE platform_context IS NOT NULL AND array_length(platform_context, 1) > 0"
+            )
+            for row in cur.fetchall():
+                id_to_platforms[row['id']] = set(row['platform_context'])
+
+    # Get all edges from DB
+    edges = db.get_all_edges()
+
+    # Build co-occurrence matrix
     matrix = defaultdict(lambda: defaultdict(int))
 
-    for directory in [CORE_DIR, ACTIVE_DIR, SEMANTIC_DIR]:
-        if not directory.exists():
+    for pair_key, edge_data in edges.items():
+        if '|' not in pair_key:
             continue
-        for filepath in directory.glob("*.md"):
-            metadata, content = parse_memory_file(filepath)
-            mem_id = metadata.get('id', filepath.stem)
-            my_platforms = id_to_platforms.get(mem_id, set())
-            cooccurrences = metadata.get('co_occurrences', {})
+        id1, id2 = pair_key.split('|', 1)
 
-            for other_id, count in cooccurrences.items():
-                other_platforms = id_to_platforms.get(other_id, set())
+        plats_1 = id_to_platforms.get(id1, set())
+        plats_2 = id_to_platforms.get(id2, set())
 
-                # Cross-platform links (different platforms co-occurring)
-                for p1 in my_platforms:
-                    for p2 in other_platforms:
-                        if p1 != p2:
-                            pair = tuple(sorted([p1, p2]))
-                            matrix[pair[0]][pair[1]] += 1
+        # Cross-platform links (different platforms co-occurring)
+        for p1 in plats_1:
+            for p2 in plats_2:
+                if p1 != p2:
+                    pair = tuple(sorted([p1, p2]))
+                    matrix[pair[0]][pair[1]] += 1
 
-                # Same-platform reinforcement
-                for p in my_platforms & other_platforms:
-                    matrix[p][p] += 1
+        # Same-platform reinforcement
+        for p in plats_1 & plats_2:
+            matrix[p][p] += 1
 
     return {k: dict(v) for k, v in matrix.items()}
 
 
 def platform_stats() -> dict:
-    """Get comprehensive platform statistics."""
+    """Get comprehensive platform statistics from PostgreSQL."""
+    db = get_db()
     stats = {
         'total_memories': 0,
         'tagged_memories': 0,
@@ -461,23 +475,26 @@ def platform_stats() -> dict:
 
     platform_totals = []
 
-    for directory in [CORE_DIR, ACTIVE_DIR, SEMANTIC_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            stats['total_memories'] += 1
-            metadata, _ = parse_memory_file(filepath)
-            platforms = metadata.get('platforms', {})
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Get all memories (core, active, archive)
+            cur.execute(
+                f"SELECT id, platform_context FROM {db._table('memories')} "
+                f"WHERE type IN ('core', 'active', 'archive')"
+            )
+            for row in cur.fetchall():
+                stats['total_memories'] += 1
+                platforms = row['platform_context'] or []
 
-            if platforms:
-                stats['tagged_memories'] += 1
-                platform_totals.append(len(platforms))
-                for p in platforms:
-                    stats['platform_counts'][p] += 1
-                if len(platforms) > 1:
-                    stats['cross_platform_count'] += 1
-            else:
-                stats['untagged_memories'] += 1
+                if platforms:
+                    stats['tagged_memories'] += 1
+                    platform_totals.append(len(platforms))
+                    for p in platforms:
+                        stats['platform_counts'][p] += 1
+                    if len(platforms) > 1:
+                        stats['cross_platform_count'] += 1
+                else:
+                    stats['untagged_memories'] += 1
 
     if platform_totals:
         stats['avg_platforms_per_memory'] = round(
@@ -494,14 +511,21 @@ def get_session_platform_context() -> list[str]:
 
     Returns list of platform names active in current session.
     """
-    session_file = MEMORY_ROOT / ".session_platforms.json"
-    if session_file.exists():
-        try:
-            data = json.loads(session_file.read_text(encoding='utf-8'))
-            return data.get('platforms', [])
-        except Exception:
-            pass
+    db = get_db()
+    row = db.kv_get('.session_platforms')
+    if row and isinstance(row, dict):
+        value = row.get('value', row)
+        if isinstance(value, dict):
+            platforms = value.get('platforms', [])
+        else:
+            platforms = row.get('platforms', [])
+        if platforms:
+            return platforms
     return []
+
+
+# Alias for co_occurrence.py compatibility (imports get_session_platforms)
+get_session_platforms = get_session_platform_context
 
 
 def track_session_platform(platform: str):
@@ -509,14 +533,15 @@ def track_session_platform(platform: str):
     Track that a platform was accessed this session.
     Called when API calls are made to specific platforms.
     """
-    session_file = MEMORY_ROOT / ".session_platforms.json"
-    data = {'platforms': [], 'updated': None}
+    db = get_db()
 
-    if session_file.exists():
-        try:
-            data = json.loads(session_file.read_text(encoding='utf-8'))
-        except Exception:
-            pass
+    # Load existing data from DB
+    data = {'platforms': [], 'updated': None}
+    existing = db.kv_get('.session_platforms')
+    if existing and isinstance(existing, dict):
+        value = existing.get('value', existing)
+        if isinstance(value, dict):
+            data = value
 
     platforms = data.get('platforms', [])
     if platform not in platforms:
@@ -524,43 +549,45 @@ def track_session_platform(platform: str):
 
     data['platforms'] = platforms
     data['updated'] = datetime.now(timezone.utc).isoformat()
-    session_file.write_text(json.dumps(data, indent=2), encoding='utf-8')
+    db.kv_set('.session_platforms', data)
 
 
 def clear_session_platforms():
     """Clear session platform tracking (called at session end)."""
-    session_file = MEMORY_ROOT / ".session_platforms.json"
-    session_file.unlink(missing_ok=True)
+    db = get_db()
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"DELETE FROM {db._table('key_value_store')} WHERE key = %s",
+                ('.session_platforms',)
+            )
 
 
 def backfill_edge_platforms(dry_run: bool = False) -> dict:
     """
-    Backfill platform context into existing v3.0 edges.
-    Reads the .edges_v3.json file and adds platform_context based on
-    the platforms metadata already tagged on memory files.
+    Backfill platform context into existing edges_v3 rows.
+    Reads edges from DB, looks up memory platform_context, writes back to edges.
     """
-    edges_file = MEMORY_ROOT / ".edges_v3.json"
-    if not edges_file.exists():
-        print("No .edges_v3.json found.")
-        return {'total': 0, 'updated': 0, 'cross_platform': 0}
+    db = get_db()
 
-    edges = json.loads(edges_file.read_text(encoding='utf-8'))
-
-    # Build memory_id -> platforms lookup (cached)
+    # Build memory_id -> platforms lookup from DB
     id_to_platforms = {}
-    for directory in [CORE_DIR, ACTIVE_DIR, SEMANTIC_DIR, ARCHIVE_DIR]:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob("*.md"):
-            metadata, _ = parse_memory_file(filepath)
-            mem_id = metadata.get('id', filepath.stem)
-            platforms = metadata.get('platforms', {})
-            if platforms:
-                id_to_platforms[mem_id] = platforms
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT id, platform_context FROM {db._table('memories')} "
+                f"WHERE platform_context IS NOT NULL AND array_length(platform_context, 1) > 0"
+            )
+            for row in cur.fetchall():
+                # Store as dict {platform: 1} for compatibility with edge platform_context (JSONB)
+                id_to_platforms[row['id']] = {p: 1 for p in row['platform_context']}
+
+    # Get all edges from DB
+    edges = db.get_all_edges()
 
     stats = {'total': len(edges), 'updated': 0, 'cross_platform': 0}
 
-    for pair_key, edge in edges.items():
+    for pair_key, edge_data in edges.items():
         if '|' not in pair_key:
             continue
         id1, id2 = pair_key.split('|', 1)
@@ -573,7 +600,7 @@ def backfill_edge_platforms(dry_run: bool = False) -> dict:
         if not pair_platforms:
             continue
 
-        # Build platform context
+        # Build platform context dict
         platform_context = {}
         for plat in pair_platforms:
             platform_context[plat] = platform_context.get(plat, 0) + 1
@@ -581,11 +608,17 @@ def backfill_edge_platforms(dry_run: bool = False) -> dict:
             platform_context['_cross_platform'] = True
             stats['cross_platform'] += 1
 
-        edge['platform_context'] = platform_context
         stats['updated'] += 1
 
-    if not dry_run:
-        edges_file.write_text(json.dumps(edges, indent=2), encoding='utf-8')
+        if not dry_run:
+            # Write back to DB via upsert_edge
+            db.upsert_edge(
+                id1, id2,
+                belief=edge_data.get('belief', 0),
+                platform_context=platform_context,
+                activity_context=edge_data.get('activity_context', {}),
+                topic_context=edge_data.get('topic_context', {}),
+            )
 
     return stats
 

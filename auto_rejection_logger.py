@@ -24,15 +24,13 @@ from datetime import datetime, timezone
 from typing import Dict, List, Tuple, Optional
 
 MEMORY_DIR = Path(__file__).parent
-REJECTION_LOG = MEMORY_DIR / ".rejection_log.json"
-SESSION_FILE = MEMORY_DIR / ".session_state.json"
-SESSION_PLATFORMS_FILE = MEMORY_DIR / ".session_platforms.json"
 
 
 def _get_session_context() -> Dict:
     """
     Get current session context for dimensional rejection logging.
     Returns: {activity, platforms, active_memories}
+    DB KV backed — reads from '.session_platforms' and '.session_state'.
     """
     context = {
         "activity": None,
@@ -49,19 +47,24 @@ def _get_session_context() -> Dict:
     except Exception:
         pass
 
-    # Get session platforms
+    # Get session platforms from DB KV
     try:
-        if SESSION_PLATFORMS_FILE.exists():
-            data = json.loads(SESSION_PLATFORMS_FILE.read_text(encoding='utf-8'))
+        from db_adapter import get_db as _get_db_ctx
+        db = _get_db_ctx()
+        raw = db.kv_get('.session_platforms')
+        if raw:
+            data = json.loads(raw) if isinstance(raw, str) else raw
             context["platforms"] = data.get("platforms", [])
     except Exception:
         pass
 
-    # Get recently active memories (what I was thinking about)
+    # Get recently active memories from DB KV
     try:
-        if SESSION_FILE.exists():
-            data = json.loads(SESSION_FILE.read_text(encoding='utf-8'))
-            # Get last 5 recalled memories as context
+        from db_adapter import get_db as _get_db_ss
+        db = _get_db_ss()
+        raw = db.kv_get('.session_state')
+        if raw:
+            data = json.loads(raw) if isinstance(raw, str) else raw
             retrieved = data.get("retrieved", [])
             context["active_memories"] = retrieved[-5:] if retrieved else []
     except Exception:
@@ -236,21 +239,13 @@ def classify_rejection(content: str, author: str, platform: str) -> Optional[Dic
 
 
 def log_rejections(rejections: List[Dict]) -> int:
-    """Log a batch of rejections to the rejection log. Returns count logged."""
+    """Log a batch of rejections to the DB. Returns count logged."""
     if not rejections:
         return 0
 
     try:
         # Get session context for dimensional linking
         session_context = _get_session_context()
-
-        # Load existing log
-        data = {"rejections": [], "stats": {}}
-        if REJECTION_LOG.exists():
-            try:
-                data = json.loads(REJECTION_LOG.read_text(encoding='utf-8'))
-            except:
-                pass
 
         # Add timestamp and session context to each rejection
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -264,17 +259,9 @@ def log_rejections(rejections: List[Dict]) -> int:
             if session_context.get("active_memories"):
                 r["thinking_about"] = session_context["active_memories"]
 
-        # Append rejections
-        data["rejections"].extend(rejections)
-
-        # Update stats
-        stats = data.get("stats", {})
-        stats["total"] = len(data["rejections"])
-        stats["last_updated"] = timestamp
-        data["stats"] = stats
-
-        # Write back
-        REJECTION_LOG.write_text(json.dumps(data, indent=2), encoding='utf-8')
+        # Write to DB via rejection_log module
+        from rejection_log import log_batch_rejections
+        log_batch_rejections(rejections)
 
         return len(rejections)
     except Exception as e:
