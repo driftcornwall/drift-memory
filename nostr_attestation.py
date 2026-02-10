@@ -480,9 +480,18 @@ if __name__ == "__main__":
         cmd_verify(sys.argv[2])
     elif command == "history":
         cmd_history()
+    elif command == "latest-link":
+        history = load_history()
+        for entry in reversed(history):
+            link = entry.get("nostr_link", "")
+            if link:
+                print(link)
+                break
+        else:
+            print("")
     elif command == "identity":
         cmd_identity()
     else:
         print(f"Unknown command: {command}")
-        print("Commands: publish, publish-dossier, needs-publish, verify EVENT_ID, history, identity")
+        print("Commands: publish, publish-dossier, needs-publish, verify EVENT_ID, history, latest-link, identity")
         sys.exit(1)

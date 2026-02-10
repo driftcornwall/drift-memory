@@ -118,10 +118,15 @@ def collect_vitals():
         m["fingerprint_edges"] = 0
         m["identity_drift"] = 0.0
 
-    # --- SESSION RECALLS ---
+    # --- SESSION RECALLS (granular by source) ---
     session = _load_json(".session_state.json", {})
     retrieved = session.get('retrieved', [])
     m["session_recalls"] = len(retrieved) if isinstance(retrieved, list) else 0
+    by_source = session.get('recalls_by_source', {})
+    m["recalls_manual"] = len(by_source.get('manual', []))
+    m["recalls_start_priming"] = len(by_source.get('start_priming', []))
+    m["recalls_thought_priming"] = len(by_source.get('thought_priming', []))
+    m["recalls_prompt_priming"] = len(by_source.get('prompt_priming', []))
 
     # --- SOCIAL ---
     replies_data = _load_json("social/my_replies.json", {})
@@ -235,7 +240,11 @@ def get_trends(window=10):
     if len(log) < 2:
         return []
 
-    recent = log[-window:] if len(log) >= window else log
+    # Dedupe by session boundary so trends reflect real changes
+    session_snapshots = _dedupe_by_session(log)
+    if len(session_snapshots) < 2:
+        return []
+    recent = session_snapshots[-window:] if len(session_snapshots) >= window else session_snapshots
     latest = recent[-1]["metrics"]
     trends = []
 
@@ -281,6 +290,24 @@ def get_trends(window=10):
     return trends
 
 
+def _dedupe_by_session(log):
+    """Pick one snapshot per session (last entry before a >1hr gap or end of log)."""
+    if not log:
+        return []
+    sessions = []
+    for i, entry in enumerate(log):
+        ts = datetime.fromisoformat(entry["timestamp"])
+        is_last = (i == len(log) - 1)
+        if not is_last:
+            next_ts = datetime.fromisoformat(log[i + 1]["timestamp"])
+            gap_hours = (next_ts - ts).total_seconds() / 3600
+            if gap_hours >= 1.0:
+                sessions.append(entry)
+        else:
+            sessions.append(entry)
+    return sessions
+
+
 def check_alerts():
     log = load_vitals_log()
     alerts = []
@@ -294,7 +321,9 @@ def check_alerts():
         })
         return alerts
 
-    recent = log[-STALL_THRESHOLD:]
+    # Dedupe: one snapshot per session boundary (not just last N entries)
+    session_snapshots = _dedupe_by_session(log)
+    recent = session_snapshots[-STALL_THRESHOLD:] if len(session_snapshots) >= STALL_THRESHOLD else session_snapshots
     metrics_to_watch = {
         "rejection_count": (True, "warn", "Taste fingerprint not building"),
         "lesson_count": (True, "warn", "No new lessons being extracted"),
@@ -331,7 +360,7 @@ def check_alerts():
                     "values": tail
                 })
 
-    # Session recalls = 0 streak
+    # Session recalls = 0 streak (use session-deduped data)
     recall_values = [s["metrics"].get("session_recalls", 0) for s in recent]
     zero_streak = sum(1 for v in reversed(recall_values) if v == 0)
     if zero_streak >= 3:
@@ -341,6 +370,24 @@ def check_alerts():
             "message": f"Session recalls 0 for {zero_streak} sessions (graph not building)",
             "values": recall_values
         })
+
+    # Per-path recall health (check latest snapshot only)
+    if log:
+        latest_m = log[-1].get("metrics", {})
+        paths = {
+            "manual": latest_m.get("recalls_manual", 0),
+            "start_priming": latest_m.get("recalls_start_priming", 0),
+            "thought_priming": latest_m.get("recalls_thought_priming", 0),
+            "prompt_priming": latest_m.get("recalls_prompt_priming", 0),
+        }
+        dead_paths = [p for p, v in paths.items() if v == 0]
+        if len(dead_paths) == 4 and latest_m.get("session_recalls", 0) == 0:
+            alerts.append({
+                "metric": "recall_paths",
+                "severity": "warn",
+                "message": "All 4 recall paths at 0 this session",
+                "values": list(paths.values())
+            })
 
     # Co-occurrence pair collapse
     pair_values = [s["metrics"].get("cooccurrence_pairs", 0) for s in log[-5:]]
@@ -435,6 +482,7 @@ def format_snapshot(snapshot, compact=False):
         "LEARNING",
         f"  Lessons: {m.get('lesson_count', '?')}",
         f"  Session recalls: {m.get('session_recalls', '?')}",
+        f"    Manual: {m.get('recalls_manual', 0)} | Start: {m.get('recalls_start_priming', 0)} | Thought: {m.get('recalls_thought_priming', 0)} | Prompt: {m.get('recalls_prompt_priming', 0)}",
         "",
         "SOCIAL",
         f"  Contacts: {m.get('social_contacts', '?')}",

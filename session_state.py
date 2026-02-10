@@ -23,12 +23,16 @@ SESSION_TIMEOUT_HOURS = 4
 
 # Module-level state
 _session_retrieved: set[str] = set()
+_recalls_by_source: dict[str, list[str]] = {}
 _session_loaded: bool = False
+
+# Valid recall sources
+RECALL_SOURCES = ("manual", "start_priming", "thought_priming", "prompt_priming")
 
 
 def load() -> None:
     """Load session state from file. Idempotent — only loads once per process."""
-    global _session_retrieved, _session_loaded
+    global _session_retrieved, _recalls_by_source, _session_loaded
 
     if _session_loaded:
         return
@@ -78,8 +82,10 @@ def load() -> None:
             SESSION_FILE.unlink(missing_ok=True)
         else:
             _session_retrieved = set(data.get('retrieved', []))
+            _recalls_by_source = data.get('recalls_by_source', {})
     except (json.JSONDecodeError, KeyError, ValueError):
         _session_retrieved = set()
+        _recalls_by_source = {}
 
 
 def save() -> None:
@@ -95,6 +101,7 @@ def save() -> None:
     data = {
         'started': started,
         'retrieved': list(_session_retrieved),
+        'recalls_by_source': _recalls_by_source,
         'last_updated': datetime.now(timezone.utc).isoformat()
     }
     SESSION_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
@@ -106,10 +113,15 @@ def get_retrieved() -> set[str]:
     return _session_retrieved.copy()
 
 
-def add_retrieved(memory_id: str) -> None:
-    """Add a memory ID to the session's retrieved set and persist."""
+def add_retrieved(memory_id: str, source: str = "manual") -> None:
+    """Add a memory ID to the session's retrieved set with source tracking."""
     load()
     _session_retrieved.add(memory_id)
+    if source in RECALL_SOURCES:
+        if source not in _recalls_by_source:
+            _recalls_by_source[source] = []
+        if memory_id not in _recalls_by_source[source]:
+            _recalls_by_source[source].append(memory_id)
 
 
 def get_retrieved_list() -> list[str]:
@@ -118,9 +130,16 @@ def get_retrieved_list() -> list[str]:
     return list(_session_retrieved)
 
 
+def get_recalls_by_source() -> dict[str, list[str]]:
+    """Get recall counts keyed by source."""
+    load()
+    return {s: list(ids) for s, ids in _recalls_by_source.items()}
+
+
 def clear() -> None:
     """Clear session state and delete state file."""
-    global _session_retrieved, _session_loaded
+    global _session_retrieved, _session_loaded, _recalls_by_source
     _session_retrieved = set()
+    _recalls_by_source = {}
     _session_loaded = False
     SESSION_FILE.unlink(missing_ok=True)

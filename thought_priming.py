@@ -329,7 +329,7 @@ def prime_from_thought(transcript_path: str, memory_dir: Path = None) -> str:
         except Exception:
             # Fallback to subprocess
             subprocess.run(
-                ["python", str(memory_dir / "memory_manager.py"), "register-recall"] + recall_ids,
+                ["python", str(memory_dir / "memory_manager.py"), "register-recall", "--source", "thought_priming"] + recall_ids,
                 capture_output=True, text=True, timeout=2, cwd=str(memory_dir)
             )
     except Exception:
