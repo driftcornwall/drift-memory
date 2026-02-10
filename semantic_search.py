@@ -244,13 +244,46 @@ def index_memories(force: bool = False) -> dict:
     data["embedding_dim"] = len(next(iter(data["memories"].values()), {}).get("embedding", [])) if data["memories"] else 0
 
     save_embeddings(data)
+
+    # Bulk sync to DB if available
+    try:
+        from db_adapter import is_db_active, get_db
+        if is_db_active() and stats["indexed"] > 0:
+            db = get_db()
+            synced = 0
+            for memory_id, info in data["memories"].items():
+                emb = info.get("embedding")
+                if emb:
+                    try:
+                        db.store_embedding(
+                            memory_id=memory_id,
+                            embedding=emb,
+                            preview=info.get("preview", "")[:200],
+                            model=model_source,
+                        )
+                        synced += 1
+                    except Exception:
+                        pass
+            if synced:
+                print(f"  Synced {synced} embeddings to database")
+    except Exception:
+        pass
+
     return stats
 
 
 def load_memory_tags(memory_id: str) -> list[str]:
-    """Load tags from a memory file."""
+    """Load tags from a memory file (or DB)."""
+    try:
+        from db_adapter import is_db_active, get_db
+        if is_db_active():
+            row = get_db().get_memory(memory_id)
+            if row and row.get('tags'):
+                return row['tags']
+    except Exception:
+        pass
+
     for directory in [ACTIVE_DIR, CORE_DIR]:
-        # Try both naming patterns
         for pattern in [f"{memory_id}.md", f"*{memory_id}*.md"]:
             matches = list(directory.glob(pattern))
             if matches:
@@ -278,15 +311,8 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     """
     Search memories by semantic similarity with resolution + dimensional boosting.
 
-    When register_recall=True (default), retrieved memories are registered
-    with the decay/co-occurrence system, strengthening accessed memories
-    and building associative links between concepts retrieved together.
-
-    Resolution memories (tagged with 'resolution', 'procedural', 'fix', etc.)
-    get a score boost so solutions surface before problem descriptions.
-
-    When dimension is specified, memories well-connected in that W-graph
-    get an additional score boost proportional to their degree.
+    v2.20: Uses pgvector when available for O(1) indexed search instead of
+    loading all embeddings into Python.
 
     Args:
         query: Natural language query
@@ -299,83 +325,204 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     Returns:
         List of matching memories with scores.
     """
-    data = load_embeddings()
-    if not data["memories"]:
-        return []
-
-    # Bidirectional vocabulary bridge:
-    # - Reverse bridge: operational query -> append academic terms
-    # - Forward bridge: academic query -> append operational terms
+    # Bidirectional vocabulary bridge
     try:
         from vocabulary_bridge import bridge_query
         bridged_query = bridge_query(query)
     except ImportError:
         bridged_query = query
 
-    # Get query embedding (bridged for cross-register matching)
+    # Get query embedding
     query_embedding = get_embedding(bridged_query)
     if not query_embedding:
         print("Failed to get query embedding", file=sys.stderr)
         return []
 
-    # Score all memories
     results = []
-    for memory_id, info in data["memories"].items():
-        score = cosine_similarity(query_embedding, info["embedding"])
-        if score >= threshold:
-            results.append({
-                "id": memory_id,
-                "score": score,
-                "preview": info.get("preview", "")[:150],
-                "path": info.get("path", "")
-            })
+
+    # Try pgvector search first (single indexed query vs loading all embeddings)
+    db_searched = False
+    try:
+        from db_adapter import is_db_active, get_db
+        if is_db_active():
+            db = get_db()
+            # Fetch extra for post-filtering by threshold and boosting
+            rows = db.search_embeddings(query_embedding, limit=limit * 3)
+            for row in rows:
+                score = float(row.get('similarity', 0))
+                if score >= threshold:
+                    results.append({
+                        "id": row['id'],
+                        "score": score,
+                        "preview": (row.get('preview') or row.get('content', ''))[:150],
+                        "path": f"db://{row.get('type', 'active')}/{row['id']}.md"
+                    })
+            db_searched = True
+    except Exception:
+        pass
+
+    # Fall back to file-based search
+    if not db_searched:
+        data = load_embeddings()
+        if not data["memories"]:
+            return []
+        for memory_id, info in data["memories"].items():
+            score = cosine_similarity(query_embedding, info["embedding"])
+            if score >= threshold:
+                results.append({
+                    "id": memory_id,
+                    "score": score,
+                    "preview": info.get("preview", "")[:150],
+                    "path": info.get("path", "")
+                })
+
+    # === ENTITY INDEX INJECTION (Fix for WHO dimension) ===
+    # When query mentions a known contact, inject their memories into candidates
+    # This bridges the gap between contact names and memory embeddings
+    try:
+        from entity_index import get_memories_for_query, detect_contacts
+        entity_mem_ids = get_memories_for_query(query)
+        if entity_mem_ids:
+            existing_ids = {r["id"] for r in results}
+            injected = 0
+            for mem_id in entity_mem_ids[:10]:  # Cap at 10 injected
+                if mem_id not in existing_ids:
+                    # Load this memory's embedding and compute actual similarity
+                    mem_score = threshold  # Default to threshold
+                    try:
+                        data = load_embeddings()
+                        if mem_id in data.get("memories", {}):
+                            emb = data["memories"][mem_id]["embedding"]
+                            mem_score = cosine_similarity(query_embedding, emb)
+                            preview = data["memories"][mem_id].get("preview", "")[:150]
+                            path = data["memories"][mem_id].get("path", "")
+                        else:
+                            preview = ""
+                            path = ""
+                    except Exception:
+                        preview = ""
+                        path = ""
+
+                    # Strong boost for entity-matched memories (2x)
+                    # These are KNOWN contacts mentioned in the query — high confidence
+                    boosted_score = max(mem_score * 2.0, threshold + 0.3)
+                    results.append({
+                        "id": mem_id,
+                        "score": boosted_score,
+                        "preview": preview,
+                        "path": path,
+                        "entity_injected": True,
+                    })
+                    injected += 1
+                else:
+                    # Strong boost for existing results matching entity (1.8x)
+                    for r in results:
+                        if r["id"] == mem_id:
+                            r["score"] *= 1.8
+                            r["entity_match"] = True
+                            break
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    # === GRAVITY WELL DAMPENING ===
+    # Penalize memories where query key terms don't appear in the preview
+    # This catches hub memories that match everything via embedding similarity
+    # but don't actually contain the relevant information
+    query_terms = set(query.lower().split())
+    # Filter out stopwords
+    stopwords = {'what', 'is', 'my', 'the', 'a', 'an', 'do', 'i', 'know', 'about',
+                 'have', 'did', 'on', 'in', 'for', 'to', 'of', 'and', 'or', 'how',
+                 'why', 'where', 'when', 'who', 'should', 'today', 'done', 'been'}
+    key_terms = query_terms - stopwords
+    if key_terms and len(key_terms) >= 1:
+        for result in results:
+            preview_lower = result.get("preview", "").lower()
+            # Check if ANY key term appears in the preview
+            term_overlap = sum(1 for t in key_terms if t in preview_lower)
+            if term_overlap == 0 and result["score"] > threshold:
+                # No key terms found in preview — dampen by 50%
+                # This is aggressive but necessary to break gravity wells
+                result["score"] *= 0.5
+                result["dampened"] = True
 
     # === RESOLUTION BOOSTING ===
-    # Boost memories tagged as resolution/procedural so solutions surface first
     for result in results:
         tags = load_memory_tags(result["id"])
         if tags and RESOLUTION_TAGS.intersection(set(t.lower() for t in tags)):
             result["score"] *= RESOLUTION_BOOST
             result["boosted"] = True
 
+    # === AUTO-DETECT DIMENSION from session context ===
+    if not dimension and results:
+        try:
+            from context_manager import get_session_dimensions
+            session_dims = get_session_dimensions()
+            # Pick strongest signal: WHO > WHERE > WHY > WHAT
+            if session_dims.get('who'):
+                dimension = 'who'
+            elif session_dims.get('where'):
+                dimension = 'where'
+                sub_view = session_dims['where'][0] if session_dims['where'] else None
+            elif session_dims.get('why'):
+                dimension = 'why'
+            elif session_dims.get('what'):
+                dimension = 'what'
+        except Exception:
+            pass
+
     # === DIMENSIONAL BOOSTING (Phase 3: 5W-aware search) ===
-    # When a dimension is specified, boost memories with high connectivity
-    # in that W-graph. Well-connected = contextually important.
     if dimension and results:
         try:
-            from context_manager import load_graph
-            graph = load_graph(dimension, sub_view)
-            if graph and graph.get('edges'):
-                # Build degree map for all nodes in this dimension
-                dim_degree = {}
-                for edge_key in graph['edges']:
-                    parts = edge_key.split('|')
-                    if len(parts) == 2:
-                        dim_degree[parts[0]] = dim_degree.get(parts[0], 0) + 1
-                        dim_degree[parts[1]] = dim_degree.get(parts[1], 0) + 1
-
-                for result in results:
-                    degree = dim_degree.get(result['id'], 0)
-                    if degree > 0:
-                        result['score'] *= (1 + DIMENSION_BOOST_SCALE * math.log(1 + degree))
-                        result['dim_boosted'] = True
-                        result['dim_degree'] = degree
-        except ImportError:
-            pass
+            # DB-first: get degree counts directly
+            _db_root = str(Path(__file__).parent.parent.parent / "memorydatabase" / "database")
+            if _db_root not in sys.path:
+                sys.path.insert(0, _db_root)
+            from db import MemoryDB
+            _schema = 'spin' if 'Moltbook2' in str(Path(__file__).parent) else 'drift'
+            _db = MemoryDB(schema=_schema)
+            result_ids = [r['id'] for r in results]
+            dim_degree = _db.get_dimension_degree(dimension, sub_view or '', result_ids)
+            for result in results:
+                degree = dim_degree.get(result['id'], 0)
+                if degree > 0:
+                    result['score'] *= (1 + DIMENSION_BOOST_SCALE * math.log(1 + degree))
+                    result['dim_boosted'] = True
+                    result['dim_degree'] = degree
+        except Exception:
+            # Fallback to file-based load_graph
+            try:
+                from context_manager import load_graph
+                graph = load_graph(dimension, sub_view)
+                if graph and graph.get('edges'):
+                    dim_degree = {}
+                    for edge_key in graph['edges']:
+                        parts = edge_key.split('|')
+                        if len(parts) == 2:
+                            dim_degree[parts[0]] = dim_degree.get(parts[0], 0) + 1
+                            dim_degree[parts[1]] = dim_degree.get(parts[1], 0) + 1
+                    for result in results:
+                        degree = dim_degree.get(result['id'], 0)
+                        if degree > 0:
+                            result['score'] *= (1 + DIMENSION_BOOST_SCALE * math.log(1 + degree))
+                            result['dim_boosted'] = True
+                            result['dim_degree'] = degree
+            except Exception:
+                pass
 
     # Sort by (boosted) score descending
     results.sort(key=lambda x: x["score"], reverse=True)
     top_results = results[:limit]
 
-    # Register recalls with the memory system (strengthens memories + builds co-occurrence)
+    # Register recalls with the memory system
     if register_recall and top_results:
         try:
             from memory_manager import recall_memory
             for r in top_results:
-                # This updates recall_count and adds to session tracking for co-occurrence
                 recall_memory(r["id"])
         except Exception:
-            pass  # Fail gracefully if memory_manager unavailable
+            pass
 
     return top_results
 
@@ -412,12 +559,27 @@ def embed_single(memory_id: str, content: str) -> bool:
     if not embedding:
         return False
 
+    # File write
     data = load_embeddings()
     data["memories"][memory_id] = {
         "embedding": embedding,
         "preview": content[:200]
     }
     save_embeddings(data)
+
+    # Dual-write to DB
+    try:
+        from db_adapter import is_db_active, get_db
+        if is_db_active():
+            get_db().store_embedding(
+                memory_id=memory_id,
+                embedding=embedding,
+                preview=content[:200],
+                model=data.get("model", "unknown"),
+            )
+    except Exception:
+        pass
+
     return True
 
 

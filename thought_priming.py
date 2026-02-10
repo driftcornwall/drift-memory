@@ -166,13 +166,10 @@ def extract_last_thinking_block(transcript_path: str) -> Optional[str]:
 # SEMANTIC SEARCH
 # =============================================================================
 
-SEARCH_SERVER_URL = "http://127.0.0.1:8082"
-
-
 def search_memories(query: str, memory_dir: Path, limit: int = 2) -> list[dict]:
     """
-    Run semantic search against memories.
-    Tries persistent search server first (~200ms), falls back to subprocess (~3s).
+    Run semantic search against memories via subprocess.
+    Uses pgvector-backed semantic_search.py directly (no dead search server).
 
     Returns list of {id, score, preview} dicts.
     """
@@ -191,27 +188,12 @@ def search_memories(query: str, memory_dir: Path, limit: int = 2) -> list[dict]:
         if len(query) < 20:
             return []
 
-        # Try persistent search server first (sub-second)
-        try:
-            import urllib.request
-            req = urllib.request.Request(
-                f"{SEARCH_SERVER_URL}/search",
-                data=json.dumps({"query": query, "limit": limit, "threshold": 0.65}).encode(),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                data = json.loads(resp.read())
-                return data.get("results", [])
-        except Exception:
-            pass  # Server not running — fall back to subprocess
-
-        # Fallback: subprocess (slower, ~3s on Windows)
+        # Direct subprocess to semantic_search.py (pgvector-backed)
         result = subprocess.run(
             ["python", str(memory_dir / "semantic_search.py"), "search", query, "--limit", str(limit)],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=8,
             cwd=str(memory_dir)
         )
 
@@ -227,7 +209,7 @@ def search_memories(query: str, memory_dir: Path, limit: int = 2) -> list[dict]:
                     memories.append(current)
                 try:
                     score = float(line[1:line.index(']')])
-                    mem_id = line[line.index(']')+1:].strip()
+                    mem_id = line[line.index(']')+1:].strip().split()[0]  # Strip [tag] suffixes
                     current = {"id": mem_id, "score": score, "preview": ""}
                 except:
                     continue
@@ -316,22 +298,10 @@ def prime_from_thought(transcript_path: str, memory_dir: Path = None) -> str:
     # to the memory graph — they surface memories but don't build edges.
     try:
         recall_ids = [m["id"] for m in new_memories]
-        # Try search server first (fast)
-        try:
-            import urllib.request
-            req = urllib.request.Request(
-                f"{SEARCH_SERVER_URL}/recall",
-                data=json.dumps({"ids": recall_ids}).encode(),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            urllib.request.urlopen(req, timeout=2)
-        except Exception:
-            # Fallback to subprocess
-            subprocess.run(
-                ["python", str(memory_dir / "memory_manager.py"), "register-recall", "--source", "thought_priming"] + recall_ids,
-                capture_output=True, text=True, timeout=2, cwd=str(memory_dir)
-            )
+        subprocess.run(
+            ["python", str(memory_dir / "memory_manager.py"), "register-recall", "--source", "thought_priming"] + recall_ids,
+            capture_output=True, text=True, timeout=3, cwd=str(memory_dir)
+        )
     except Exception:
         pass  # Never block conversation for recall registration
 
