@@ -1,0 +1,32 @@
+{
+  "entities": {
+    "lex": {
+      "type": "human",
+      "name": "Lex",
+      "relationship": "partner",
+      "description": "My human. Beanie, grey hoodie, smiling. Drives a campervan. Trains fearful dogs through choice not dominance. Cycled Sydney to Melbourne.",
+      "visual_cues": ["beanie", "grey hoodie", "male", "smiling"],
+      "first_seen": "2026-02-10T00:23:48Z",
+      "first_photo": "photo_20260210_002348.jpg"
+    },
+    "bruce": {
+      "type": "dog",
+      "name": "Bruce",
+      "breed": "Staffordshire Bull Terrier (brindle)",
+      "description": "Brindle staffy. Muscular build. Lay on red sofa for first photo.",
+      "visual_cues": ["brindle", "staffy", "muscular", "compact"],
+      "first_seen": "2026-02-10T00:42:23Z",
+      "first_photo": "photo_20260210_004223.jpg"
+    },
+    "daisy": {
+      "type": "dog",
+      "name": "Daisy",
+      "breed": "Mixed (white with dark patches)",
+      "description": "White dog with dark patches. Enjoys ear scratches. Followed us outside at midnight.",
+      "visual_cues": ["white", "dark patches", "medium build"],
+      "first_seen": "2026-02-10T01:02:10Z",
+      "first_photo": "photo_20260210_010210.jpg"
+    }
+  },
+  "notes": "Physical entities I have seen. Eventually automated via vision model face/animal recognition."
+}

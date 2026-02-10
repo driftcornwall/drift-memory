@@ -338,6 +338,14 @@ def cmd_photo(config, camera='back'):
             filepath.write_bytes(img_bytes)
             print(f"Photo saved: {filepath} ({len(img_bytes):,} bytes)")
             client.disconnect()
+            # Auto-index for visual search if service is running
+            try:
+                from image_search import index_photo, load_index, save_index
+                idx = load_index()
+                if index_photo(str(filepath), idx):
+                    save_index(idx)
+            except Exception:
+                pass  # Service not running — index later
             return str(filepath)
         else:
             text = client.get_text_content(result)
@@ -440,6 +448,15 @@ def cmd_snapshot(config):
             print(f"  {k}: {v}")
         if filepath:
             print(f"  photo: {filepath} ({len(img_bytes):,} bytes)")
+            # Auto-index for visual search if service is running
+            try:
+                from image_search import index_photo, load_index, save_index
+                idx = load_index()
+                if index_photo(str(filepath), idx):
+                    save_index(idx)
+                    print(f"  visual index: embedded")
+            except Exception:
+                pass  # Service not running — index later
 
         # Store as memory
         parts = [f"Sensory snapshot:"]

@@ -1,0 +1,31 @@
+version: '3.8'
+
+# Image Embedding Service for Drift's Visual Memory
+# Uses jina-clip-v2 on CPU — maps images + text into same 1024-dim space
+#
+# Usage:
+#   docker-compose up -d --build
+#
+# Test:
+#   curl http://localhost:8081/info
+#   curl http://localhost:8081/embed-text -X POST -H "Content-Type: application/json" \
+#     -d '{"text": "a dog on a sofa"}'
+
+services:
+  image-embeddings:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    volumes:
+      - hf_image_cache:/root/.cache/huggingface
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    restart: unless-stopped
+    # CPU only — no GPU reservation needed
+    # ~3-4GB RAM required
+
+volumes:
+  hf_image_cache:
+    name: drift_image_embedding_cache
