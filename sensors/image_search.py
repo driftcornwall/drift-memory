@@ -14,6 +14,7 @@ Usage:
     python image_search.py similar <photo_path>     # Find similar photos
     python image_search.py status                   # Show index stats
     python image_search.py link <photo> <memory_id> # Link photo to text memory
+    python image_search.py identify <photo_path>    # Detect known entities in photo
 """
 
 import base64
@@ -265,6 +266,70 @@ def link_photo_to_memory(photo_name: str, memory_id: str):
         print(f"Already linked: {photo_name} -> {memory_id}")
 
 
+ENTITIES_FILE = SENSOR_DIR / "physical_entities.json"
+ENTITY_THRESHOLD = 0.75  # Similarity above this = entity match
+
+
+def identify_entities(photo_path: str) -> list[dict]:
+    """
+    Identify known entities in a photo by comparing against anchor embeddings.
+
+    Returns list of matches: [{"entity_id": str, "name": str, "similarity": float}]
+    """
+    if not ENTITIES_FILE.exists():
+        return []
+
+    entities = json.loads(ENTITIES_FILE.read_text(encoding='utf-8')).get('entities', {})
+    index = load_index()
+
+    # Get embedding for the query photo
+    path = Path(photo_path)
+    key = path.name
+    if key in index.get('images', {}):
+        query_emb = index['images'][key]['embedding']
+    else:
+        query_emb = embed_image(str(path))
+        if query_emb is None:
+            return []
+
+    matches = []
+    for eid, entity in entities.items():
+        anchor_photos = entity.get('anchor_photos', [])
+        if not anchor_photos:
+            continue
+
+        best_sim = 0.0
+        for anchor_name in anchor_photos:
+            if anchor_name in index.get('images', {}):
+                anchor_emb = index['images'][anchor_name]['embedding']
+                sim = cosine_similarity(query_emb, anchor_emb)
+                best_sim = max(best_sim, sim)
+
+        if best_sim >= ENTITY_THRESHOLD:
+            matches.append({
+                "entity_id": eid,
+                "name": entity.get('name', eid),
+                "type": entity.get('type', 'unknown'),
+                "similarity": round(best_sim, 3),
+            })
+
+    matches.sort(key=lambda x: x['similarity'], reverse=True)
+    return matches
+
+
+def cmd_identify(photo_path: str):
+    """CLI wrapper for entity identification."""
+    matches = identify_entities(photo_path)
+    if matches:
+        print(f"Entities detected in {Path(photo_path).name}:")
+        for m in matches:
+            bar = "#" * int(m['similarity'] * 30)
+            print(f"  {m['similarity']:.3f} [{bar:<30}] {m['name']} ({m['type']})")
+    else:
+        print(f"No known entities detected in {Path(photo_path).name}")
+        print(f"  (threshold: {ENTITY_THRESHOLD})")
+
+
 def show_status():
     """Show index status."""
     index = load_index()
@@ -334,12 +399,18 @@ def main():
             return
         link_photo_to_memory(args[1], args[2])
 
+    elif cmd == 'identify':
+        if len(args) < 2:
+            print("Usage: image_search.py identify <photo_path>")
+            return
+        cmd_identify(args[1])
+
     elif cmd == 'status':
         show_status()
 
     else:
         print(f"Unknown command: {cmd}")
-        print("Available: index, search, similar, link, status")
+        print("Available: index, search, similar, identify, link, status")
 
 
 if __name__ == '__main__':

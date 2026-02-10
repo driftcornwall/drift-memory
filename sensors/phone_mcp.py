@@ -344,6 +344,19 @@ def cmd_photo(config, camera='back'):
                 idx = load_index()
                 if index_photo(str(filepath), idx):
                     save_index(idx)
+                    # Auto-identify known entities in the photo
+                    try:
+                        from image_search import identify_entities
+                        matches = identify_entities(str(filepath))
+                        for m in matches:
+                            print(f"  Entity detected: {m['name']} ({m['similarity']:.3f})")
+                            try:
+                                from encounter_log import log_encounter
+                                log_encounter(m['entity_id'], photo_path=str(filepath))
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
             except Exception:
                 pass  # Service not running — index later
             return str(filepath)
