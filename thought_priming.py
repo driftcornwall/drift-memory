@@ -191,7 +191,8 @@ def search_memories(query: str, memory_dir: Path, limit: int = 2) -> list[dict]:
             ["python", str(memory_dir / "semantic_search.py"), "search", query, "--limit", str(limit)],
             capture_output=True,
             text=True,
-            timeout=2,  # Fast timeout - don't slow down conversation
+            timeout=5,  # Was 2s — too tight. Python startup + loading 978 embeddings
+                        # + cosine similarity takes ~2.6s on Windows. 5s gives headroom.
             cwd=str(memory_dir)
         )
 
