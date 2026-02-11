@@ -64,7 +64,9 @@ TOP_NEIGHBORS = 8
 def load_memory_content():
     """Load all memory IDs, their content snippets, and tags from PostgreSQL."""
     db = get_db()
-    rows = db.list_memories(type_filter=['core', 'active'])
+    rows_core = db.list_memories(type_='core', limit=500)
+    rows_active = db.list_memories(type_='active', limit=2000)
+    rows = rows_core + rows_active
     memories = {}
     for row in rows:
         metadata, content = db_to_file_metadata(row)
