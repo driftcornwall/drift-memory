@@ -368,15 +368,38 @@ def extract_from_transcript(transcript_path: Path) -> list[dict]:
 def get_existing_thought_hashes() -> set:
     """
     Get hashes of already-stored thought memories to prevent duplicates.
+    Reads from DB (primary) with file fallback for legacy compatibility.
     """
     existing = set()
+
+    # DB-first: query all thought memory IDs and extract hashes
+    try:
+        sys.path.insert(0, str(MEMORY_DIR))
+        from db_adapter import get_db
+        db = get_db()
+        with db._conn() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"SELECT id FROM {db._table('memories')} "
+                    f"WHERE id LIKE 'thought-%%' AND type IN ('core', 'active')"
+                )
+                for row in cur.fetchall():
+                    # Extract hash from ID: thought-HASH-rest-of-name-SHORTID
+                    parts = row['id'].split("-")
+                    if len(parts) >= 2:
+                        existing.add(parts[1])
+        return existing
+    except Exception:
+        pass
+
+    # File fallback (legacy)
     active_dir = MEMORY_DIR / "active"
     if active_dir.exists():
         for f in active_dir.glob("thought-*.md"):
-            # Extract hash from filename: thought-HASH-rest-of-name.md
             parts = f.stem.split("-")
             if len(parts) >= 2:
-                existing.add(parts[1])  # The hash is the second part
+                existing.add(parts[1])
     return existing
 
 
