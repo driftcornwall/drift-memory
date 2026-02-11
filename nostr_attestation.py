@@ -42,11 +42,6 @@ CREDENTIALS_FILE = Path.home() / ".config" / "nostr" / "drift-credentials.json"
 MEMORY_DIR = Path(__file__).parent
 NOSTR_HISTORY_FILE = MEMORY_DIR / "nostr_attestations.json"
 
-# Attestation files written by stop hook
-MERKLE_FILE = MEMORY_DIR / "latest_attestation.json"
-FINGERPRINT_FILE = MEMORY_DIR / "cognitive_attestation.json"
-TASTE_FILE = MEMORY_DIR / "taste_attestation.json"
-
 RELAYS = [
     "wss://relay.damus.io",
     "wss://nos.lol",
@@ -101,6 +96,44 @@ def save_history_entry(entry: dict) -> None:
     history.append(entry)
     with open(NOSTR_HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=2)
+
+
+def _load_attestation_data() -> tuple[dict, dict, dict]:
+    """Load all three attestation datasets from PostgreSQL.
+
+    Returns (merkle_data, fingerprint_data, taste_data).
+    Each is a dict (possibly empty if not found or on error).
+    """
+    from db_adapter import get_db
+
+    db = get_db()
+
+    # Merkle: query latest from attestations table
+    merkle_data = {}
+    try:
+        from merkle_attestation import load_latest_attestation
+        merkle_data = load_latest_attestation() or {}
+    except Exception:
+        pass
+
+    # Fingerprint: from KV store (saved by stop.py as 'cognitive_attestation',
+    # also saved by cognitive_fingerprint.py attest as '.cognitive_attestation_latest')
+    fingerprint_data = {}
+    try:
+        fingerprint_data = db.kv_get('cognitive_attestation') or {}
+        if not fingerprint_data:
+            fingerprint_data = db.kv_get('.cognitive_attestation_latest') or {}
+    except Exception:
+        pass
+
+    # Taste: from KV store (saved by stop.py as 'taste_attestation')
+    taste_data = {}
+    try:
+        taste_data = db.kv_get('taste_attestation') or {}
+    except Exception:
+        pass
+
+    return merkle_data, fingerprint_data, taste_data
 
 
 async def publish_merkle_root() -> dict | None:
@@ -255,22 +288,19 @@ def needs_dossier_publish() -> bool:
         # Never published a dossier, only legacy merkle-only events
         return True
 
-    # Compare current attestation hashes to last published
-    for filepath, key in [
-        (MERKLE_FILE, "merkle_root"),
-        (FINGERPRINT_FILE, "fingerprint_hash"),
-        (TASTE_FILE, "taste_hash"),
+    # Compare current attestation hashes (from DB) to last published
+    merkle_data, fingerprint_data, taste_data = _load_attestation_data()
+
+    for data, key in [
+        (merkle_data, "merkle_root"),
+        (fingerprint_data, "fingerprint_hash"),
+        (taste_data, "taste_hash"),
     ]:
-        if not filepath.exists():
+        if not data:
             continue
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            current_hash = data.get(key) or data.get("merkle_root", "")
-            if current_hash != last_dossier.get(key, ""):
-                return True
-        except Exception:
-            continue
+        current_hash = data.get(key) or data.get("merkle_root", "")
+        if current_hash != last_dossier.get(key, ""):
+            return True
 
     return False
 
@@ -287,22 +317,8 @@ async def publish_dossier() -> dict | None:
 
     One event, one signature, complete identity.
     """
-    # Load all attestation files
-    merkle_data = {}
-    fingerprint_data = {}
-    taste_data = {}
-
-    if MERKLE_FILE.exists():
-        with open(MERKLE_FILE, "r", encoding="utf-8") as f:
-            merkle_data = json.load(f)
-
-    if FINGERPRINT_FILE.exists():
-        with open(FINGERPRINT_FILE, "r", encoding="utf-8") as f:
-            fingerprint_data = json.load(f)
-
-    if TASTE_FILE.exists():
-        with open(TASTE_FILE, "r", encoding="utf-8") as f:
-            taste_data = json.load(f)
+    # Load all attestation data from DB
+    merkle_data, fingerprint_data, taste_data = _load_attestation_data()
 
     if not merkle_data:
         print("No merkle attestation found. Run session-end first.")

@@ -59,55 +59,62 @@ def collect_vitals():
     }
     m = snapshot["metrics"]
 
-    # --- MEMORY COUNTS ---
-    core = _count_files("core")
-    active = _count_files("active")
-    archive = _count_files("archive")
-    m["memory_total"] = core + active + archive
-    m["memory_core"] = core
-    m["memory_active"] = active
-    m["memory_archive"] = archive
+    # --- MEMORY COUNTS (DB) ---
+    from db_adapter import get_db
+    import psycopg2.extras
+    db = get_db()
+    stats = db.comprehensive_stats()
+    m["memory_total"] = stats.get('total_memories', 0)
+    m["memory_core"] = stats.get('memories', {}).get('core', 0)
+    m["memory_active"] = stats.get('memories', {}).get('active', 0)
+    m["memory_archive"] = stats.get('memories', {}).get('archive', 0)
 
-    # --- CO-OCCURRENCE ---
-    edges_data = _load_json(".edges_v3.json", {})
-    if isinstance(edges_data, dict) and edges_data:
-        beliefs = [e.get('belief', 0) for e in edges_data.values() if isinstance(e, dict)]
-        m["cooccurrence_pairs"] = sum(1 for b in beliefs if b > 0)
-        m["cooccurrence_total_strength"] = round(sum(beliefs), 2)
-        m["cooccurrence_links"] = sum(1 for b in beliefs if b >= 3.0)
-        m["cooccurrence_edges_total"] = len(edges_data)
-    else:
-        m["cooccurrence_pairs"] = 0
-        m["cooccurrence_total_strength"] = 0
-        m["cooccurrence_links"] = 0
-        m["cooccurrence_edges_total"] = 0
+    # --- CO-OCCURRENCE (DB) ---
+    edge_stats = db.edge_stats()
+    m["cooccurrence_pairs"] = edge_stats.get('total_edges', 0)
+    m["cooccurrence_total_strength"] = round(edge_stats.get('total_belief', 0), 2)
+    m["cooccurrence_links"] = edge_stats.get('strong_links', 0)
+    m["cooccurrence_edges_total"] = edge_stats.get('total_edges', 0)
 
-    # --- REJECTION LOG ---
-    rej_data = _load_json(".rejection_log.json", {})
-    if isinstance(rej_data, dict):
-        rejections = rej_data.get('rejections', [])
-    elif isinstance(rej_data, list):
-        rejections = rej_data
-    else:
-        rejections = []
-    m["rejection_count"] = len(rejections)
+    # --- REJECTION LOG (DB) ---
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {db._table('rejections')}")
+            m["rejection_count"] = cur.fetchone()[0]
 
-    # --- LESSONS ---
-    lessons = _load_json("lessons.json", [])
-    m["lesson_count"] = len(lessons) if isinstance(lessons, list) else 0
+    # Load rejections for twitter filter below
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"SELECT source FROM {db._table('rejections')}")
+            rejections = [dict(r) for r in cur.fetchall()]
 
-    # --- MERKLE CHAIN ---
-    attestations = _load_json("attestations.json", [])
-    if isinstance(attestations, list) and attestations:
-        latest_att = attestations[-1]
-        m["merkle_chain_depth"] = latest_att.get('chain_depth', len(attestations))
-        m["merkle_memory_count"] = latest_att.get('memory_count', 0)
+    # --- LESSONS (DB) ---
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {db._table('lessons')}")
+            m["lesson_count"] = cur.fetchone()[0]
+
+    # --- MERKLE CHAIN (DB) ---
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT data FROM {db._table('attestations')}
+                ORDER BY timestamp DESC LIMIT 1
+            """)
+            att_row = cur.fetchone()
+    if att_row and att_row.get('data'):
+        att_data = att_row['data']
+        m["merkle_chain_depth"] = att_data.get('chain_depth', 0)
+        m["merkle_memory_count"] = att_data.get('memory_count', 0)
     else:
         m["merkle_chain_depth"] = 0
         m["merkle_memory_count"] = 0
 
-    # --- COGNITIVE FINGERPRINT ---
-    fp_history = _load_json(".fingerprint_history.json", [])
+    # --- COGNITIVE FINGERPRINT (DB KV) ---
+    fp_history_raw = db.kv_get('.fingerprint_history')
+    fp_history = []
+    if fp_history_raw:
+        fp_history = json.loads(fp_history_raw) if isinstance(fp_history_raw, str) else fp_history_raw
     if isinstance(fp_history, list) and fp_history:
         latest_fp = fp_history[-1]
         m["fingerprint_nodes"] = latest_fp.get('node_count', 0)
@@ -118,8 +125,11 @@ def collect_vitals():
         m["fingerprint_edges"] = 0
         m["identity_drift"] = 0.0
 
-    # --- SESSION RECALLS (granular by source) ---
-    session = _load_json(".session_state.json", {})
+    # --- SESSION RECALLS (granular by source, from DB KV) ---
+    session_raw = db.kv_get('.session_state')
+    session = {}
+    if session_raw:
+        session = json.loads(session_raw) if isinstance(session_raw, str) else session_raw
     retrieved = session.get('retrieved', [])
     m["session_recalls"] = len(retrieved) if isinstance(retrieved, list) else 0
     by_source = session.get('recalls_by_source', {})
@@ -128,86 +138,93 @@ def collect_vitals():
     m["recalls_thought_priming"] = len(by_source.get('thought_priming', []))
     m["recalls_prompt_priming"] = len(by_source.get('prompt_priming', []))
 
-    # --- SOCIAL ---
-    replies_data = _load_json("social/my_replies.json", {})
-    if isinstance(replies_data, dict):
-        m["social_replies_tracked"] = len(replies_data.get('replies', {}))
-    else:
-        m["social_replies_tracked"] = 0
+    # --- SOCIAL (DB KV) ---
+    # Keys match social_memory.py: KV_MY_REPLIES = '.social_my_replies', KV_INDEX = '.social_index'
+    replies_data = db.kv_get('.social_my_replies') or {}
+    if isinstance(replies_data, str):
+        replies_data = json.loads(replies_data)
+    m["social_replies_tracked"] = len(replies_data.get('replies', {})) if isinstance(replies_data, dict) else 0
 
-    index_data = _load_json("social/social_index.json", {})
+    index_data = db.kv_get('.social_index') or {}
+    if isinstance(index_data, str):
+        index_data = json.loads(index_data)
     m["social_contacts"] = index_data.get('total_contacts', 0)
 
-    # --- PLATFORM CONTEXT ---
+    # --- PLATFORM CONTEXT (DB) ---
     tagged = 0
     total = m["memory_total"]
-    for tier in ["core", "active"]:
-        d = MEMORY_ROOT / tier
-        if not d.exists():
-            continue
-        for fp in d.glob("*.md"):
-            try:
-                content = fp.read_text(encoding='utf-8', errors='replace')
-                if 'platforms:' in content[:500]:
-                    tagged += 1
-            except Exception:
-                pass
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT COUNT(*) FROM {db._table('memories')}
+                WHERE type IN ('core', 'active')
+                AND platform_context IS NOT NULL
+                AND array_length(platform_context, 1) > 0
+            """)
+            tagged = cur.fetchone()[0]
     m["platform_tagged"] = tagged
     m["platform_tagged_pct"] = round(tagged * 100 / total, 1) if total > 0 else 0
 
-    # --- DECAY HISTORY ---
-    decay = _load_json(".decay_history.json", {"sessions": []})
-    sessions = decay.get('sessions', [])
-    if sessions:
-        last = sessions[-1]
+    # --- DECAY HISTORY (DB KV) ---
+    decay_raw = db.kv_get('.decay_history')
+    decay = {"sessions": []}
+    if decay_raw:
+        decay = json.loads(decay_raw) if isinstance(decay_raw, str) else decay_raw
+    decay_sessions = decay.get('sessions', [])
+    if decay_sessions:
+        last = decay_sessions[-1]
         m["last_decay_count"] = last.get('decayed', 0)
         m["last_prune_count"] = last.get('pruned', 0)
     else:
         m["last_decay_count"] = 0
         m["last_prune_count"] = 0
-    m["decay_sessions_recorded"] = len(sessions)
+    m["decay_sessions_recorded"] = len(decay_sessions)
 
     # --- VOCABULARY BRIDGE ---
-    vocab = _load_json("vocabulary_map.json", {})
-    m["vocabulary_terms"] = len(vocab) if isinstance(vocab, dict) else 0
-
-    # --- SEARCH INDEX ---
-    emb_file = MEMORY_ROOT / "embeddings.json"
-    if emb_file.exists():
-        try:
-            import subprocess
-            result = subprocess.run(
-                [sys.executable, "-c",
-                 "import json;d=json.load(open('embeddings.json','r',encoding='utf-8'));print(len(d.get('memories',{})))"],
-                capture_output=True, text=True, timeout=10, cwd=str(MEMORY_ROOT)
-            )
-            m["search_indexed"] = int(result.stdout.strip()) if result.returncode == 0 else 0
-        except Exception:
-            m["search_indexed"] = 0
+    vocab_raw = db.kv_get('vocabulary_map')
+    if vocab_raw:
+        vocab = json.loads(vocab_raw) if isinstance(vocab_raw, str) else vocab_raw
+        m["vocabulary_terms"] = len(vocab) if isinstance(vocab, dict) else 0
     else:
-        m["search_indexed"] = 0
+        # Fallback: vocabulary_map might not be in KV yet, try file
+        vocab = _load_json("vocabulary_map.json", {})
+        m["vocabulary_terms"] = len(vocab) if isinstance(vocab, dict) else 0
 
-    # --- W-GRAPH DIMENSIONAL METRICS (Drift extension) ---
+    # --- SEARCH INDEX (DB) ---
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {db._table('text_embeddings')}")
+            m["search_indexed"] = cur.fetchone()[0]
+
+    # --- W-GRAPH DIMENSIONAL METRICS (DB) ---
     primary_dims = ['who', 'what', 'why', 'where']
     total_wgraph_edges = 0
+    subview_count = 0
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT dimension, sub_view, edge_count
+                FROM {db._table('context_graphs')}
+            """)
+            for row in cur.fetchall():
+                dim = row['dimension']
+                sub = row.get('sub_view', '')
+                ec = row.get('edge_count', 0) or 0
+                if dim in primary_dims and not sub:
+                    m[f"wgraph_{dim}_edges"] = ec
+                    total_wgraph_edges += ec
+                elif dim not in ('bridges',) and sub:
+                    subview_count += 1
+    # Ensure all dims have a value
     for dim in primary_dims:
-        graph = _load_json(f"context/{dim}.json", {})
-        edge_count = _count_edges_in_graph(graph)
-        m[f"wgraph_{dim}_edges"] = edge_count
-        total_wgraph_edges += edge_count
+        if f"wgraph_{dim}_edges" not in m:
+            m[f"wgraph_{dim}_edges"] = 0
     m["wgraph_total_edges"] = total_wgraph_edges
+    m["wgraph_subviews"] = subview_count
 
-    # Count sub-views
-    if CONTEXT_DIR.exists():
-        subview_count = len([f for f in CONTEXT_DIR.glob("*.json")
-                           if f.stem not in primary_dims and not f.stem.startswith('bridges')])
-        m["wgraph_subviews"] = subview_count
-    else:
-        m["wgraph_subviews"] = 0
-
-    # Bridge count
-    bridges = _load_json("context/bridges.json", {})
-    m["wgraph_bridges"] = len(bridges) if isinstance(bridges, dict) else 0
+    # Bridge count (DB)
+    bridge_row = db.get_context_graph('bridges', '') if hasattr(db, 'get_context_graph') else None
+    m["wgraph_bridges"] = len(bridge_row.get('edges', {})) if bridge_row and bridge_row.get('edges') else 0
 
     # --- TWITTER METRICS (Drift extension) ---
     # Count twitter rejections specifically
@@ -219,19 +236,29 @@ def collect_vitals():
 
 
 def load_vitals_log():
-    return _load_json(str(VITALS_LOG), [])
+    from db_adapter import get_db
+    import psycopg2.extras
+
+    db = get_db()
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"SELECT timestamp, metrics FROM {db._table('vitals_log')} ORDER BY timestamp DESC LIMIT 100")
+            rows = cur.fetchall()
+            if rows:
+                return [{'timestamp': r['timestamp'].isoformat(), 'metrics': r['metrics']} for r in reversed(rows)]
+    return []
 
 
 def save_vitals_log(log):
-    log = log[-100:]
-    VITALS_LOG.write_text(json.dumps(log, indent=2), encoding='utf-8')
+    """Legacy file writer — kept for backward compat but DB is primary via record_vitals()."""
+    pass  # DB is the only store now. record_vitals() handles persistence.
 
 
 def record_vitals():
     snapshot = collect_vitals()
-    log = load_vitals_log()
-    log.append(snapshot)
-    save_vitals_log(log)
+    # Write to DB
+    from db_adapter import get_db
+    get_db().record_vitals(snapshot['metrics'])
     return snapshot
 
 
