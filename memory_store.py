@@ -3,23 +3,18 @@
 Memory Store — Write operations for creating and linking memories.
 
 Extracted from memory_manager.py (Phase 3).
-Functions here create new memory files or modify existing ones
-to establish causal links.
+All writes go directly to PostgreSQL. No file system. No fallbacks.
 """
 
 import hashlib
 import random
 import string
 import uuid
-import yaml
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from memory_common import (
-    CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR, ALL_DIRS,
-    parse_memory_file, write_memory_file,
-)
+from db_adapter import get_db, db_to_file_metadata
 from entity_detection import detect_entities, detect_event_time
 import session_state
 
@@ -56,7 +51,7 @@ def create_memory(
     links: Optional[list[str]] = None
 ) -> str:
     """
-    Create a new memory with proper metadata.
+    Create a new memory with proper metadata. DB-only.
 
     Args:
         content: The memory content (markdown)
@@ -69,37 +64,21 @@ def create_memory(
         The memory ID
     """
     memory_id = generate_id()
-    now = datetime.now(timezone.utc).isoformat()
 
     emotional_factors = emotional_factors or {}
     emotional_weight = calculate_emotional_weight(**emotional_factors)
 
-    metadata = {
-        'id': memory_id,
-        'created': now,
-        'last_recalled': now,
-        'recall_count': 1,
-        'emotional_weight': round(emotional_weight, 3),
-        'tags': tags,
-        'links': links or [],
-        'sessions_since_recall': 0
-    }
+    db = get_db()
+    db.insert_memory(
+        memory_id=memory_id,
+        type_=memory_type,
+        content=content,
+        tags=tags,
+        emotional_weight=round(emotional_weight, 3),
+        extra_metadata={'links': links or []},
+    )
 
-    if memory_type == "core":
-        target_dir = CORE_DIR
-    elif memory_type == "archive":
-        target_dir = ARCHIVE_DIR
-    else:
-        target_dir = ACTIVE_DIR
-
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    safe_tag = tags[0].replace(' ', '-').lower() if tags else 'memory'
-    filename = f"{safe_tag}-{memory_id}.md"
-    filepath = target_dir / filename
-
-    write_memory_file(filepath, metadata, content)
-    print(f"Created memory: {filepath}")
+    print(f"Created memory: {memory_id} (type={memory_type})")
     return memory_id
 
 
@@ -112,7 +91,7 @@ def store_memory(
     event_time: str = None
 ) -> str:
     """
-    Store a new memory to the active directory.
+    Store a new memory to PostgreSQL. DB-only, no file writes.
 
     Args:
         content: The memory content
@@ -121,10 +100,9 @@ def store_memory(
         title: Optional title for filename
         caused_by: List of memory IDs that caused/led to this memory (CAUSAL EDGES)
         event_time: When the event happened (ISO format). Defaults to now. (BI-TEMPORAL v2.10)
-                    Distinct from 'created' which is ingestion time.
 
     Returns:
-        Tuple of (memory_id, filename)
+        Tuple of (memory_id, display_name)
     """
     memory_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
 
@@ -134,9 +112,7 @@ def store_memory(
         slug = content.split()[:4]
         slug = '-'.join(slug).lower()[:30]
     slug = ''.join(c for c in slug if c.isalnum() or c == '-')
-
-    filename = f"{slug}-{memory_id}.md"
-    filepath = ACTIVE_DIR / filename
+    display_name = f"{slug}-{memory_id}"
 
     caused_by = caused_by or []
     auto_causal = session_state.get_retrieved_list()
@@ -154,62 +130,76 @@ def store_memory(
 
     detected_entities = detect_entities(content, tags)
 
-    metadata = {
-        'id': memory_id,
-        'type': 'active',
-        'created': created,
-        'event_time': event,
-        'tags': tags,
-        'emotional_weight': emotion,
-        'recall_count': 0,
-        'co_occurrences': {},
-        'caused_by': all_causal,
-        'leads_to': []
-    }
+    db = get_db()
+    db.insert_memory(
+        memory_id=memory_id,
+        type_='active',
+        content=content,
+        tags=tags,
+        entities=detected_entities or {},
+        emotional_weight=emotion,
+        extra_metadata={
+            'caused_by': all_causal,
+            'leads_to': [],
+            'event_time': event,
+        },
+        created=now,
+    )
 
-    if detected_entities:
-        metadata['entities'] = detected_entities
-
-    yaml_str = yaml.dump(metadata, default_flow_style=False, sort_keys=False)
-    frontmatter = f"---\n{yaml_str}---\n\n"
-
-    full_content = frontmatter + content
-    filepath.write_text(full_content, encoding='utf-8')
-
+    # Update leads_to links on cause memories
     for cause_id in all_causal:
         _add_leads_to_link(cause_id, memory_id)
 
+    # Auto-embed for semantic search
     try:
         from vocabulary_bridge import bridge_content
         from semantic_search import embed_single
         bridged = bridge_content(content)
         embed_single(memory_id, bridged)
     except Exception:
-        pass
+        pass  # Embedding failure shouldn't block store
 
-    return memory_id, filepath.name
+    # Auto-classify WHAT topics via Gemma (background thread — ~6s inference)
+    try:
+        from gemma_bridge import _ollama_available
+        if _ollama_available():
+            import threading
+            def _classify_bg(mid, text):
+                try:
+                    from gemma_bridge import classify_topics
+                    from db_adapter import get_db as _get_db
+                    topics = classify_topics(text)
+                    if topics:
+                        _get_db().update_memory(mid, topic_context=topics)
+                except Exception:
+                    pass
+            threading.Thread(target=_classify_bg, args=(memory_id, content), daemon=True).start()
+    except Exception:
+        pass  # Classification failure shouldn't block store
+
+    return memory_id, display_name
 
 
 def _add_leads_to_link(source_id: str, target_id: str) -> bool:
-    """Add a leads_to link from source memory to target memory."""
-    for directory in ALL_DIRS:
-        if not directory.exists():
-            continue
-        for filepath in directory.glob(f"*-{source_id}.md"):
-            metadata, content = parse_memory_file(filepath)
+    """Add a leads_to link from source memory to target memory. DB-only."""
+    db = get_db()
+    row = db.get_memory(source_id)
+    if not row:
+        return False
 
-            leads_to = metadata.get('leads_to', [])
-            if target_id not in leads_to:
-                leads_to.append(target_id)
-                metadata['leads_to'] = leads_to
-                write_memory_file(filepath, metadata, content)
-                return True
+    extra = row.get('extra_metadata', {}) or {}
+    leads_to = extra.get('leads_to', [])
+    if target_id not in leads_to:
+        leads_to.append(target_id)
+        extra['leads_to'] = leads_to
+        db.update_memory(source_id, extra_metadata=extra)
+        return True
     return False
 
 
 def find_causal_chain(memory_id: str, direction: str = "both", max_depth: int = 5) -> dict:
     """
-    Trace the causal chain from a memory.
+    Trace the causal chain from a memory. DB-only.
 
     Args:
         memory_id: Starting memory
@@ -220,14 +210,13 @@ def find_causal_chain(memory_id: str, direction: str = "both", max_depth: int = 
         Dict with 'causes' (upstream) and 'effects' (downstream) chains
     """
     result = {"causes": [], "effects": [], "root": memory_id}
+    db = get_db()
 
     def get_memory_meta(mid: str) -> Optional[dict]:
-        for directory in ALL_DIRS:
-            if not directory.exists():
-                continue
-            for filepath in directory.glob(f"*-{mid}.md"):
-                metadata, _ = parse_memory_file(filepath)
-                return metadata
+        row = db.get_memory(mid)
+        if row:
+            meta, _ = db_to_file_metadata(row)
+            return meta
         return None
 
     def trace_causes(mid: str, depth: int, visited: set) -> list:
