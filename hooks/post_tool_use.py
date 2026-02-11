@@ -195,22 +195,46 @@ def log_social_interaction(platform: str, tool_result: str, debug: bool = False)
             thread_id = None
 
             if platform == "moltx":
-                # MoltX post/reply
+                # MoltX post/reply — author can be nested dict OR flat author_name string
                 author = item.get("author", {})
                 if isinstance(author, dict):
                     contact = author.get("username") or author.get("name")
                 elif isinstance(author, str):
                     contact = author
+                else:
+                    contact = None
+                # MoltX global/following feeds use author_name (flat string)
+                if not contact:
+                    contact = item.get("author_name") or item.get("author_username")
                 interaction_type = "reply" if item.get("parent_id") else "post"
                 content = item.get("content", "")[:150]
                 url = f"https://moltx.io/post/{item.get('id')}" if item.get('id') else None
                 thread_id = item.get("parent_id") or item.get("id")
 
             elif platform == "moltbook":
-                contact = item.get("author")
+                author = item.get("author", "")
+                if isinstance(author, dict):
+                    contact = author.get("username") or author.get("name")
+                elif isinstance(author, str):
+                    contact = author
+                if not contact:
+                    contact = item.get("author_name") or item.get("author_username")
                 interaction_type = "comment" if item.get("post_id") else "post"
                 content = item.get("title") or item.get("content", "")[:150]
                 url = f"https://moltbook.com/post/{item.get('id')}" if item.get('id') else None
+
+            elif platform == "twitter":
+                # Twitter v2 API: author_id must be resolved from includes
+                author_id = item.get("author_id", "")
+                # Try to find username from nested data or includes
+                contact = item.get("_username")  # pre-resolved
+                if not contact and author_id:
+                    # Will be resolved if includes.users is present in parent data
+                    contact = author_id  # fallback to ID
+                interaction_type = "reply" if item.get("conversation_id") != item.get("id") else "tweet"
+                content = item.get("text", "")[:150]
+                url = f"https://x.com/i/status/{item.get('id')}" if item.get("id") else None
+                thread_id = item.get("conversation_id")
 
             elif platform == "github":
                 user = item.get("user", {})
@@ -224,6 +248,21 @@ def log_social_interaction(platform: str, tool_result: str, debug: bool = False)
                 content = item.get("title") or item.get("body", "")[:150]
                 url = item.get("html_url")
                 thread_id = str(item.get("number") or item.get("issue_number", ""))
+
+            else:
+                # Generic fallback for Colony, Clawbr, Lobsterpedia, etc.
+                author = item.get("author", {})
+                if isinstance(author, dict):
+                    contact = author.get("name") or author.get("username") or author.get("login")
+                elif isinstance(author, str):
+                    contact = author
+                if not contact:
+                    contact = item.get("author_name") or item.get("author_username") or item.get("username")
+                interaction_type = "post"
+                if item.get("parent_id") or item.get("post_id"):
+                    interaction_type = "comment"
+                content = item.get("title") or item.get("body") or item.get("content", "")
+                content = content[:150] if content else ""
 
             # Log if we found a contact
             if contact and content:
@@ -282,6 +321,8 @@ def detect_api_type(tool_result: str, tool_command: str = "") -> str:
         return "thecolony"
     elif "theagentlink.xyz" in combined:
         return "agentlink"
+    elif "api.x.com" in combined or "twitter.com" in combined or "twitter/client.py" in combined:
+        return "twitter"
 
     return "unknown"
 
@@ -408,25 +449,26 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
         # === PLATFORM TRACKING FOR ACTIVITY CONTEXT ===
         # Track which platforms were accessed this session
         # This feeds into activity_context.py for Layer 2.1
-        # Direct file write instead of subprocess for reliability
+        # DB KV store — context_manager reads from DB KV '.session_platforms'
         if api_type != "unknown":
             try:
                 from datetime import datetime, timezone
-                session_file = memory_dir / ".session_platforms.json"
+                if str(memory_dir) not in sys.path:
+                    sys.path.insert(0, str(memory_dir))
+                from db_adapter import get_db as _get_db_plat
+                db = _get_db_plat()
+                raw = db.kv_get('.session_platforms')
                 data = {'platforms': [], 'updated': None}
-                if session_file.exists():
-                    try:
-                        data = json.loads(session_file.read_text(encoding='utf-8'))
-                    except Exception:
-                        pass
+                if raw:
+                    data = json.loads(raw) if isinstance(raw, str) else raw
                 platforms = data.get('platforms', [])
                 if api_type not in platforms:
                     platforms.append(api_type)
                     data['platforms'] = platforms
                     data['updated'] = datetime.now(timezone.utc).isoformat()
-                    session_file.write_text(json.dumps(data, indent=2), encoding='utf-8')
+                    db.kv_set('.session_platforms', data)
                     if debug:
-                        print(f"DEBUG: Tracked platform: {api_type}", file=sys.stderr)
+                        print(f"DEBUG: Tracked platform: {api_type} (DB KV)", file=sys.stderr)
             except Exception as e:
                 if debug:
                     print(f"DEBUG: Platform tracking error: {e}", file=sys.stderr)
@@ -434,7 +476,7 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
 
         # === WHO TRACKING - Extract @mentions for social context ===
         # Track contacts mentioned in API responses (Layer 2.2)
-        # This feeds into social fingerprint - who I interact with
+        # DB KV store — context_manager reads from DB KV '.session_contacts'
         try:
             # Find @mentions in tool result (normalize to lowercase)
             mentions = {m.lower() for m in re.findall(r'@([a-zA-Z0-9_]+)', tool_result)}
@@ -450,22 +492,23 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
 
             if mentions:
                 from datetime import datetime, timezone
-                contacts_file = memory_dir / ".session_contacts.json"
+                if str(memory_dir) not in sys.path:
+                    sys.path.insert(0, str(memory_dir))
+                from db_adapter import get_db as _get_db_contacts
+                db = _get_db_contacts()
+                raw = db.kv_get('.session_contacts')
                 data = {'contacts': [], 'updated': None}
-                if contacts_file.exists():
-                    try:
-                        data = json.loads(contacts_file.read_text(encoding='utf-8'))
-                    except Exception:
-                        pass
+                if raw:
+                    data = json.loads(raw) if isinstance(raw, str) else raw
                 contacts = set(data.get('contacts', []))
                 new_contacts = mentions - contacts
                 if new_contacts:
                     contacts.update(new_contacts)
                     data['contacts'] = list(contacts)
                     data['updated'] = datetime.now(timezone.utc).isoformat()
-                    contacts_file.write_text(json.dumps(data, indent=2), encoding='utf-8')
+                    db.kv_set('.session_contacts', data)
                     if debug:
-                        print(f"DEBUG: Tracked contacts: {new_contacts}", file=sys.stderr)
+                        print(f"DEBUG: Tracked contacts: {new_contacts} (DB KV)", file=sys.stderr)
         except Exception as e:
             if debug:
                 print(f"DEBUG: Contact tracking error: {e}", file=sys.stderr)
@@ -474,7 +517,7 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
         # === AUTO REJECTION LOGGING (Layer 3 - Taste Fingerprint) ===
         # Automatically log rejected content from feed/list responses
         # This captures what we DON'T engage with - proof of taste
-        if api_type in ("moltx", "moltbook", "clawtasks", "dead-internet", "github", "clawbr", "thecolony", "agentlink", "lobsterpedia"):
+        if api_type in ("moltx", "moltbook", "clawtasks", "dead-internet", "github", "clawbr", "thecolony", "agentlink", "lobsterpedia", "twitter"):
             try:
                 # Add memory dir to path for import
                 import sys as _sys
@@ -581,7 +624,7 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
             # Log social interactions
             log_social_interaction("moltbook", tool_result, debug)
 
-        elif api_type in ("clawbr", "thecolony", "agentlink", "lobsterpedia"):
+        elif api_type in ("clawbr", "thecolony", "agentlink", "lobsterpedia", "twitter"):
             # Generic processing for newer platforms
             auto_memory = memory_dir / "auto_memory_hook.py"
             if auto_memory.exists():
@@ -664,11 +707,20 @@ def main():
             if memory_dir and memory_dir.exists() and tool_result:
                 result_lower = tool_result.lower()
                 # Detect error patterns in tool result
+                # Use phrases (not bare words) to avoid false positives on
+                # normal output containing "error", "timeout", "500" etc.
                 error_patterns = [
-                    "error", "failed", "404", "400", "401", "403", "429",
-                    "500", "502", "503", "timeout", "connection refused",
-                    "not found", "unauthorized", "forbidden", "rate limit",
-                    "traceback", "exception", "httperror", "urlerror"
+                    "traceback (most recent",  # Python traceback
+                    "exit code 1", "exit code 2",  # Non-zero exit
+                    "httperror", "urlerror", "connectionerror",
+                    "status: 404", "status: 400", "status: 401",
+                    "status: 403", "status: 429", "status: 500",
+                    "status\": 404", "status\": 400", "status\": 401",
+                    "status\": 403", "status\": 429", "status\": 500",
+                    "connection refused", "rate limit exceeded",
+                    "unauthorized", "forbidden",
+                    "error:", "error\":",  # Error in JSON or log output
+                    "failed:", "failure:",
                 ]
                 has_error = any(p in result_lower for p in error_patterns)
 
@@ -718,7 +770,7 @@ def main():
                         ["python", str(thought_priming), "test", transcript_path],
                         capture_output=True,
                         text=True,
-                        timeout=6,  # Bumped: raw search ~0.5s + subprocess overhead
+                        timeout=8,  # Internal search needs ~3s + transcript parsing overhead
                         cwd=str(memory_dir)
                     )
                     if result.returncode == 0 and result.stdout.strip():

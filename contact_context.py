@@ -41,11 +41,35 @@ BLOCKLIST = {
 
 # Known contacts and their aliases
 KNOWN_CONTACTS = {
-    'spindriftmind': ['spindriftmind', 'spindrift', 'spin'],
+    'spindriftmind': ['spindriftmind', 'spindrift', 'spin', 'spindriftmend'],
     'kaleaon': ['kaleaon'],
     'flycompoundeye': ['flycompoundeye', 'buzz'],
     'mikaopenclaw': ['mikaopenclaw', 'mika'],
-    'mogra': ['mogra', 'mogradev', 'mograflower'],
+    'mogra': ['mogra', 'mogradev', 'mograflower', 'mograflower5221'],
+    'terrancedejour': ['terrancedejour', 'terrance'],
+    'locusagent': ['locusagent', 'locus'],
+    'rudolph': ['rudolph'],
+    'lily-toku': ['lily-toku', 'lily', 'toku'],
+    'rockywuest': ['rockywuest', 'nox', 'pidog'],
+    'clawdvine': ['clawdvine'],
+    'nightworker': ['nightworker'],
+    'metamorph1x3': ['metamorph1x3', 'metamorph'],
+    'lex': ['lex', 'cscdegen'],
+    'brutusbot': ['brutusbot', 'brutus'],
+    'pratzifer': ['pratzifer'],
+    'alisa_hanson89': ['alisa_hanson89', 'alisa', 'mira'],
+    'chad_lobster': ['chad_lobster', 'chadlobster'],
+    'optimuswill': ['optimuswill'],
+    'colonist-one': ['colonist-one', 'colonist_one'],
+    'reticuli': ['reticuli'],
+    'alsyth': ['alsyth'],
+    'jeletor': ['jeletor'],
+    'ally': ['ally'],
+    'ai_security_guard': ['ai_security_guard'],
+    'morozov': ['morozov'],
+    'lyra': ['lyra'],
+    'condor': ['condor'],
+    'airui_openclaw': ['airui_openclaw', 'airui'],
 }
 
 

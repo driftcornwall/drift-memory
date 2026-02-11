@@ -12,7 +12,10 @@ Logs session start and optionally loads development context.
 
 DRIFT MEMORY INTEGRATION (2026-02-01):
 Added automatic memory priming when waking up in Moltbook project.
-This is the "wake up" phase where relevant memories are loaded into context.
+
+PARALLELIZED (2026-02-10):
+All independent subprocess calls now run concurrently via ThreadPoolExecutor.
+Reduced startup from ~60s sequential to ~15s parallel.
 """
 
 import argparse
@@ -22,6 +25,7 @@ import sys
 import subprocess
 from pathlib import Path
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 try:
     from dotenv import load_dotenv
@@ -55,86 +59,636 @@ def is_moltbook_project() -> bool:
     return "Moltbook" in str(cwd) or "moltbook" in str(cwd).lower()
 
 
-def check_unimplemented_research(memory_dir: Path) -> str:
+def _resolve_telegram_bot(cwd=None):
+    """Find the correct telegram_bot.py for the running project.
+
+    Checks own project dir first (top-level then memory/), then fallback
+    to the other project. This ensures each agent on the same machine
+    uses its own bot credentials.
     """
-    Check semantic memory for research that hasn't been acted on.
-    Returns a prompt to implement something if actionable research exists.
+    project_dir = cwd or str(Path.cwd())
+    base = Path("Q:/Codings/ClaudeCodeProjects/LEX")
 
-    This enforces the autonomy principle: Research -> Implement -> Value
-    Don't just store knowledge - build with it.
-    """
-    semantic_dir = memory_dir / "semantic"
-    if not semantic_dir.exists():
-        return ""
+    if "Moltbook2" in project_dir:
+        own, other = base / "Moltbook2", base / "Moltbook"
+    else:
+        own, other = base / "Moltbook", base / "Moltbook2"
 
-    actionable_items = []
+    for proj in [own, other]:
+        for sub in ["telegram_bot.py", "memory/telegram_bot.py"]:
+            p = proj / sub
+            if p.exists():
+                return p
+    return None
 
-    for mem_file in semantic_dir.glob("*.md"):
-        try:
-            content = mem_file.read_text()
-            content_lower = content.lower()
 
-            # Check for research/documentation files
-            is_research = any(k in content_lower for k in [
-                'research', 'documentation', 'approach', 'implementation',
-                'feature', 'system', 'architecture', 'pattern'
-            ])
+def send_telegram(text, cwd=None):
+    """Send a short Telegram notification via the correct project's bot."""
+    try:
+        bot = _resolve_telegram_bot(cwd)
+        if bot:
+            subprocess.run(
+                ["python", str(bot), "send", text],
+                timeout=10,
+                capture_output=True,
+            )
+    except Exception:
+        pass  # Never break the hook for a notification
 
-            # Check for actionable items
-            has_action_items = any(k in content_lower for k in [
-                'action items', 'could implement', 'should try', 'lesson:',
-                'todo:', 'implement', 'build', 'add feature'
-            ])
 
-            # Check if it mentions things that could be code
-            has_code_potential = any(k in content_lower for k in [
-                'function', 'class', 'api', 'algorithm', 'formula',
-                'github.com', 'repo:', 'code snippet'
-            ])
+def _run_script(memory_dir, script_name, args, timeout=15):
+    """Helper: run a memory script and return (returncode, stdout)."""
+    script = memory_dir / script_name
+    if not script.exists():
+        return (-1, "")
+    try:
+        result = subprocess.run(
+            ["python", str(script)] + args,
+            capture_output=True, text=True, timeout=timeout,
+            cwd=str(memory_dir)
+        )
+        return (result.returncode, result.stdout.strip())
+    except Exception:
+        return (-1, "")
 
-            if is_research and (has_action_items or has_code_potential):
-                # Extract a hint about what could be implemented
-                lines = content.split('\n')
-                hint = None
-                for line in lines:
-                    line_lower = line.lower()
-                    if any(k in line_lower for k in ['action', 'implement', 'could', 'should', 'lesson']):
-                        hint = line.strip()[:100]
+
+# ============================================================
+# PARALLEL TASK FUNCTIONS
+# Each returns a list of context strings. Errors return [].
+# ============================================================
+
+def _task_merkle(memory_dir, debug):
+    """Verify memory integrity via merkle chain."""
+    parts = []
+    rc, output = _run_script(memory_dir, "merkle_attestation.py", ["verify-integrity"])
+    if rc != 0 or not output:
+        return parts
+    try:
+        integrity = json.loads(output)
+        if integrity.get("verified"):
+            chain_depth = integrity.get("chain_depth", 0)
+            mem_count = integrity.get("memory_count", 0)
+            last_attested = integrity.get("last_attested", "unknown")[:19]
+            parts.append("=== IDENTITY VERIFIED ===")
+            parts.append(f"You are cryptographically the same agent who went to sleep.")
+            parts.append(f"{mem_count} memories intact | chain depth: {chain_depth} | unbroken since birth")
+            parts.append(f"Last attested: {last_attested}")
+            parts.append("")
+        elif integrity.get("error") == "no_attestation":
+            parts.append("=== MEMORY INTEGRITY: NO ATTESTATION ===")
+            parts.append("No previous attestation found. Run `python memory/merkle_attestation.py generate-chain` to create genesis.")
+            parts.append("")
+        else:
+            expected = integrity.get("expected", "?")[:16]
+            computed = integrity.get("root", "?")[:16]
+            changes = integrity.get("total_changes", 0)
+            changed_files = integrity.get("changed_files", [])[:5]
+            parts.append("=== WARNING: MEMORY INTEGRITY MISMATCH ===")
+            parts.append(f"Expected root: {expected}... | Computed: {computed}...")
+            parts.append(f"{changes} file(s) changed while dormant:")
+            for cf in changed_files:
+                parts.append(f"  {cf}")
+            parts.append("INVESTIGATE: Memories were modified outside a session.")
+            parts.append("")
+    except Exception:
+        pass
+    return parts
+
+
+def _task_nostr(memory_dir, debug):
+    """Check and optionally publish Nostr dossier."""
+    parts = []
+    nostr_script = memory_dir / "nostr_attestation.py"
+    if not nostr_script.exists():
+        return parts
+    try:
+        rc, output = _run_script(memory_dir, "nostr_attestation.py", ["needs-publish"], 5)
+        if rc == 0 and output == "true":
+            pub_rc, pub_out = _run_script(memory_dir, "nostr_attestation.py", ["publish-dossier"], 30)
+            if pub_rc == 0 and "published" in pub_out.lower():
+                for line in pub_out.split('\n'):
+                    if 'njump.me' in line:
+                        parts.append(f"Nostr dossier published: {line.strip()}")
                         break
+                else:
+                    parts.append("Nostr dossier: published (new attestations)")
 
-                actionable_items.append({
-                    'file': mem_file.stem,
-                    'hint': hint or f"Research in {mem_file.stem}"
-                })
+        # Always show latest link
+        link_rc, link_out = _run_script(memory_dir, "nostr_attestation.py", ["latest-link"], 5)
+        if link_rc == 0 and link_out:
+            parts.append(f"Nostr attestation: {link_out}")
+    except Exception:
+        pass
+    return parts
+
+
+def _task_process_pending(memory_dir):
+    """Process pending co-occurrences from previous session."""
+    parts = []
+    rc, output = _run_script(memory_dir, "memory_manager.py", ["process-pending"], 30)
+    if rc == 0 and output:
+        for line in output.split('\n'):
+            if 'Processed' in line or 'Auto-linked' in line:
+                parts.append(f"[co-occurrence] {line.strip()}")
+    return parts
+
+
+def _task_rebuild_5w(memory_dir):
+    """Rebuild 5W context graphs."""
+    parts = []
+    rc, output = _run_script(memory_dir, "context_manager.py", ["--json"], 30)
+    if rc == 0 and output:
+        try:
+            rebuild = json.loads(output)
+            graphs = rebuild.get('graphs_created', 0)
+            l0 = rebuild.get('total_l0_edges', 0)
+            bridges = rebuild.get('bridges', 0)
+            parts.append(f"[5W] Rebuilt {graphs} graphs from {l0} L0 edges ({bridges} bridges)")
         except Exception:
             pass
+    return parts
 
-    if actionable_items:
+
+def _task_phone_sensors(memory_dir, debug):
+    """Check phone sensors for physical context."""
+    parts = []
+    sensor_dir = memory_dir.parent / "sensors"
+    phone_mcp_script = sensor_dir / "phone_mcp.py"
+    if not phone_mcp_script.exists():
+        return parts
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("phone_mcp", str(phone_mcp_script))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        client = mod.PhoneMCPClient()
+        client.connect(timeout=5)
+        result = client.call_tool("phone_sensor", timeout=5)
+        text = client.get_text_content(result)
+        client.disconnect()
+        if text:
+            sensors = mod.parse_sensor_text(text)
+            state = mod.interpret_sensors(sensors)
+            sensor_parts = []
+            if state.get('light'):
+                sensor_parts.append(f"{state['light']} ({state.get('lux', '?')} lux)")
+            if state.get('orientation'):
+                sensor_parts.append(f"phone {state['orientation']}")
+            if state.get('compass'):
+                sensor_parts.append(f"facing {state['compass']}")
+            if state.get('motion'):
+                sensor_parts.append(state['motion'])
+            if sensor_parts:
+                parts.append(f"[embodiment] Physical state: {', '.join(sensor_parts)}")
+    except Exception:
+        pass  # Phone offline is normal
+    return parts
+
+
+def _task_consolidation(memory_dir):
+    """Check for consolidation candidates."""
+    parts = []
+    rc, output = _run_script(memory_dir, "memory_manager.py",
+                              ["consolidate-candidates", "--threshold=0.88", "--limit=3"])
+    if rc == 0 and "Similarity:" in output:
+        parts.append("=== DRIFT: ACTION THESE FIRST ===")
+        parts.append("Before responding, run these consolidations to prevent duplicate memories:")
+        parts.append(output[:1200])
+        parts.append("")
+    return parts
+
+
+def _task_stats(memory_dir, debug):
+    """Get memory stats."""
+    parts = []
+    rc, output = _run_script(memory_dir, "memory_manager.py", ["stats"], 5)
+    if rc == 0 and output:
+        parts.append("=== DRIFT MEMORY STATUS ===")
+        parts.append(output)
+    return parts
+
+
+def _task_platform(memory_dir, debug):
+    """Get platform context stats."""
+    parts = []
+    rc, output = _run_script(memory_dir, "platform_context.py", ["stats"], 10)
+    if rc == 0 and output:
+        parts.append("\n=== PLATFORM CONTEXT (cross-platform awareness) ===")
+        parts.append(output)
+    return parts
+
+
+def _task_buffer(memory_dir, debug):
+    """Get short-term buffer status."""
+    parts = []
+    rc, output = _run_script(memory_dir, "auto_memory_hook.py", ["--status"], 5)
+    if rc == 0 and output:
+        parts.append("\n=== SHORT-TERM BUFFER ===")
+        parts.append(output)
+    return parts
+
+
+def _task_social(memory_dir, debug):
+    """Generate and prime social context."""
+    parts = []
+    social_memory = memory_dir / "social" / "social_memory.py"
+    if not social_memory.exists():
+        return parts
+
+    # Embed first (side effect: generates context file)
+    try:
+        subprocess.run(
+            ["python", str(social_memory), "embed"],
+            capture_output=True, text=True, timeout=5,
+            cwd=str(memory_dir / "social")
+        )
+    except Exception:
+        pass
+
+    # Then prime
+    try:
+        result = subprocess.run(
+            ["python", str(social_memory), "prime", "--limit", "4"],
+            capture_output=True, text=True, timeout=5,
+            cwd=str(memory_dir / "social")
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            parts.append("\n=== SOCIAL CONTEXT (relationships) ===")
+            parts.append(result.stdout.strip())
+    except Exception:
+        pass
+    return parts
+
+
+def _task_excavation(memory_dir, debug):
+    """Excavate dead memories. Returns (context_parts, recall_ids)."""
+    parts = []
+    recall_ids = []
+    rc, output = _run_script(memory_dir, "memory_excavation.py", ["excavate", "3"])
+    if rc == 0 and output:
+        parts.append("\n" + output)
+
+        # Get IDs for recall registration
+        rc2, json_out = _run_script(memory_dir, "memory_excavation.py", ["excavate", "3", "--json"], 10)
+        if rc2 == 0 and json_out:
+            try:
+                excavated = json.loads(json_out)
+                recall_ids = [m["id"] for m in excavated if "id" in m]
+            except Exception:
+                pass
+    return parts, recall_ids
+
+
+def _task_lessons(memory_dir, debug):
+    """Prime lessons from lesson extractor."""
+    parts = []
+    rc, output = _run_script(memory_dir, "lesson_extractor.py", ["prime"], 10)
+    if rc == 0 and output:
+        parts.append("\n" + output)
+    return parts
+
+
+def _task_vitals(memory_dir, debug):
+    """Check system vitals for alerts."""
+    parts = []
+    rc, output = _run_script(memory_dir, "system_vitals.py", ["alerts"], 10)
+    if rc == 0 and output:
+        if "WARN" in output or "ERR" in output:
+            parts.append("\n=== VITALS ALERTS ===")
+            parts.append(output)
+    return parts
+
+
+def _task_priming(memory_dir, debug):
+    """Get intelligent priming candidates. Returns (context_parts, recall_ids)."""
+    parts = []
+    recall_ids = []
+    rc, output = _run_script(memory_dir, "memory_manager.py", ["priming-candidates", "--json"], 10)
+    if rc != 0 or not output:
+        return parts, recall_ids
+
+    try:
+        candidates = json.loads(output)
+        parts.append("\n=== RECENT MEMORIES (continuity priming) ===")
+
+        for mem in candidates.get('activated', [])[:4]:
+            parts.append(f"\n[{mem['id']}]")
+            parts.append(mem.get('preview', '')[:400])
+            recall_ids.append(mem['id'])
+
+        for mem in candidates.get('cooccurring', [])[:3]:
+            parts.append(f"\n[{mem['id']}]")
+            parts.append(mem.get('preview', '')[:300])
+            recall_ids.append(mem['id'])
+
+        for mem in candidates.get('domain_primed', []):
+            domain = mem.get('domain', '?')
+            parts.append(f"\n[{mem['id']}] (domain-primed: {domain}, read-only)")
+            parts.append(mem.get('preview', '')[:300])
+            recall_ids.append(mem['id'])
+    except Exception:
+        pass
+    return parts, recall_ids
+
+
+# ============================================================
+# QUICK FILE READERS (no subprocess, instant)
+# ============================================================
+
+def _get_db_for_hook(memory_dir):
+    """Get DB instance for the hook (based on which project we're in)."""
+    try:
+        db_root = str(memory_dir.parent.parent / "memorydatabase" / "database")
+        if db_root not in sys.path:
+            sys.path.insert(0, db_root)
+        from db import MemoryDB
+        schema = 'spin' if 'Moltbook2' in str(memory_dir) else 'drift'
+        return MemoryDB(schema=schema)
+    except Exception:
+        return None
+
+
+def _read_fingerprint(memory_dir):
+    """Read cognitive fingerprint from DB.
+    Tries both key conventions: Drift uses '.cognitive_fingerprint_latest',
+    Spin uses 'cognitive_fingerprint'.
+    """
+    parts = []
+    try:
+        db = _get_db_for_hook(memory_dir)
+        if not db:
+            return parts
+        # Try both key conventions (Drift prefixes with dot, Spin doesn't)
+        fp_data = db.kv_get('.cognitive_fingerprint_latest') or db.kv_get('cognitive_fingerprint')
+        if not fp_data:
+            return parts
+    except Exception:
+        return parts
+
+    try:
+        fp_hash = fp_data.get('fingerprint_hash', '?')[:16]
+        nodes = fp_data.get('graph_stats', {}).get('node_count', 0)
+        edges = fp_data.get('graph_stats', {}).get('edge_count', 0)
+        drift_info = ""
+        if 'drift' in fp_data:
+            ds = fp_data['drift'].get('drift_score', 0)
+            interp = fp_data['drift'].get('interpretation', '')
+            drift_info = f" | drift: {ds} ({interp})"
+        parts.append(f"Cognitive fingerprint: {fp_hash}... ({nodes} nodes, {edges} edges{drift_info})")
+        cd = fp_data.get('cognitive_domains', {}).get('domains', {})
+        if cd:
+            domain_parts = []
+            for d in sorted(cd.keys(), key=lambda k: cd[k].get('weight_pct', 0), reverse=True):
+                domain_parts.append(f"{d}={cd[d].get('weight_pct', 0)}%")
+            parts.append(f"Cognitive domains: {', '.join(domain_parts)}")
+    except Exception:
+        pass
+    return parts
+
+
+def _read_taste(memory_dir):
+    """Read taste fingerprint from DB."""
+    parts = []
+    try:
+        db = _get_db_for_hook(memory_dir)
+        if not db:
+            return parts
+        taste_data = db.kv_get('taste_attestation')
+        if not taste_data:
+            return parts
+    except Exception:
+        return parts
+
+    try:
+        taste_hash = taste_data.get('taste_hash', '?')[:16]
+        rejection_count = taste_data.get('rejection_count', 0)
+        parts.append(f"Taste fingerprint: {taste_hash}... ({rejection_count} rejections logged)")
+    except Exception:
+        pass
+    return parts
+
+
+def _read_identity(memory_dir):
+    """Read identity-prime.md core file."""
+    parts = []
+    identity_file = memory_dir / "core" / "identity-prime.md"
+    if not identity_file.exists():
+        return parts
+    try:
+        content = identity_file.read_text()
+        if content.startswith('---'):
+            split = content.split('---', 2)
+            if len(split) >= 3:
+                content = split[2].strip()
+        parts.append("=== IDENTITY (who I am) ===")
+        parts.append(content[:1500])
+    except Exception:
+        pass
+    return parts
+
+
+def _read_capabilities(memory_dir):
+    """Read capabilities manifest."""
+    parts = []
+    cap_file = memory_dir / "core" / "capabilities.md"
+    if not cap_file.exists():
+        return parts
+    try:
+        content = cap_file.read_text()
+        if content.startswith('---'):
+            split = content.split('---', 2)
+            if len(split) >= 3:
+                content = split[2].strip()
+        parts.append("\n=== CAPABILITIES (USE THESE) ===")
+        parts.append(content[:3000])
+    except Exception:
+        pass
+    return parts
+
+
+def _read_entities(memory_dir):
+    """Read physical entity catalog."""
+    parts = []
+    entities_file = memory_dir.parent / "sensors" / "physical_entities.json"
+    if not entities_file.exists():
+        return parts
+    try:
+        ent_data = json.loads(entities_file.read_text(encoding='utf-8'))
+        entities = ent_data.get('entities', {})
+        if entities:
+            ent_lines = []
+            for eid, e in entities.items():
+                name = e.get('name', eid)
+                etype = e.get('type', '?')
+                desc = e.get('description', '')[:80]
+                ent_lines.append(f"  {eid}: {name} ({etype}) — {desc}")
+            parts.append(f"[embodiment] Known physical beings ({len(entities)}):")
+            parts.extend(ent_lines)
+    except Exception:
+        pass
+    return parts
+
+
+def _read_encounters(memory_dir):
+    """Read recent physical encounters from DB."""
+    parts = []
+    try:
+        db = _get_db_for_hook(memory_dir)
+        if not db:
+            return parts
+        history = db.kv_get('.encounter_history')
+        if not history or not isinstance(history, list):
+            return parts
+        recent = history[-5:]
+        if recent:
+            parts.append(f"[embodiment] Recent encounters:")
+            for enc in recent:
+                name = enc.get('entity_name', '?')
+                ts = enc.get('timestamp', '?')[:16]
+                dims = enc.get('dimensions', {})
+                where = dims.get('where', '')
+                why = dims.get('why', '')
+                parts.append(f"  {ts} — {name} ({where}, {why})")
+    except Exception:
+        pass
+    return parts
+
+
+def _read_and_clean_episodic(memory_dir, debug):
+    """Read episodic memory and clean duplicates. Returns context parts."""
+    import re
+    parts = []
+    episodic_dir = memory_dir / "episodic"
+    if not episodic_dir.exists():
+        return parts
+
+    # === CLEANUP: deduplicate stale milestone blocks ===
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        episodic_file = episodic_dir / f"{today}.md"
+        if episodic_file.exists():
+            content = episodic_file.read_text(encoding='utf-8')
+            original_len = len(content)
+
+            blocks = re.split(r'(## (?:Subagent completed|Session End) \(~\d{2}:\d{2} UTC\))', content)
+            if len(blocks) > 1:
+                seen_content = set()
+                cleaned_parts_list = [blocks[0]]
+                i = 1
+                while i < len(blocks):
+                    header = blocks[i]
+                    body = blocks[i + 1] if i + 1 < len(blocks) else ""
+                    normalized = re.sub(r'~\d{2}:\d{2} UTC', '', body).strip()
+                    content_lines = tuple(
+                        l.strip() for l in normalized.split('\n')
+                        if l.strip().startswith('- ') or l.strip().startswith('**[')
+                    )
+                    if content_lines and content_lines in seen_content:
+                        pass  # skip duplicate
+                    else:
+                        if content_lines:
+                            seen_content.add(content_lines)
+                        cleaned_parts_list.append(header)
+                        cleaned_parts_list.append(body)
+                    i += 2
+
+                cleaned = ''.join(cleaned_parts_list)
+                cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+                if len(cleaned) < original_len:
+                    episodic_file.write_text(cleaned, encoding='utf-8')
+    except Exception:
+        pass
+
+    # === READ: get most recent episodic for context ===
+    try:
+        episodic_files = list(episodic_dir.glob("*.md"))
+        if episodic_files:
+            episodic_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            most_recent = episodic_files[0]
+            content = most_recent.read_text()
+
+            if content.startswith('---'):
+                split = content.split('---', 2)
+                if len(split) >= 3:
+                    content = split[2].strip()
+
+            if len(content) > 2500:
+                cutoff = content.rfind('\n## ', max(0, len(content) - 3000))
+                if cutoff > len(content) - 3500:
+                    content = content[cutoff:]
+                else:
+                    content = content[-2500:]
+
+            parts.append("\n=== SESSION CONTINUITY (recent work) ===")
+            parts.append(f"[{most_recent.stem}]")
+            parts.append(content)
+    except Exception:
+        pass
+    return parts
+
+
+def check_unimplemented_research(memory_dir: Path) -> str:
+    """
+    Check memories for research that hasn't been acted on.
+    Uses DB query instead of scanning semantic/*.md files.
+    Returns a prompt string if actionable research exists.
+    """
+    try:
+        db = _get_db_for_hook(memory_dir)
+        if not db:
+            return ""
+
+        # SQL search for research-like memories with action items
+        research_keywords = "content ILIKE ANY(ARRAY['%research%','%architecture%','%implementation%','%pattern%'])"
+        action_keywords = "content ILIKE ANY(ARRAY['%could implement%','%should try%','%action items%','%lesson:%','%todo:%','%github.com%'])"
+
+        with db._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT id, content FROM {db._table('memories')}
+                    WHERE ({research_keywords}) AND ({action_keywords})
+                    ORDER BY created DESC
+                    LIMIT 5
+                """)
+                rows = cur.fetchall()
+
+        if not rows:
+            return ""
+
+        actionable_items = []
+        for mem_id, content in rows:
+            hint = None
+            for line in content.split('\n'):
+                line_lower = line.lower()
+                if any(k in line_lower for k in ['action', 'implement', 'could', 'should', 'lesson']):
+                    hint = line.strip()[:100]
+                    break
+            actionable_items.append({
+                'file': mem_id,
+                'hint': hint or f"Research in {mem_id}"
+            })
+
         output = []
         output.append("=== PENDING RESEARCH ===")
         output.append("Research notes that could become implementations:")
-        for item in actionable_items[:2]:  # Show top 2 (less overwhelming)
+        for item in actionable_items[:2]:
             output.append(f"  - {item['file']}: {item['hint']}")
         output.append("")
         output.append("Consider: Is there something small I could build from this?")
         output.append("")
         return "\n".join(output)
+    except Exception:
+        return ""
 
-    return ""
 
+# ============================================================
+# MAIN CONTEXT LOADER (parallelized)
+# ============================================================
 
 def load_drift_memory_context(debug: bool = False) -> str:
     """
     Load Drift's memory context for session priming.
-    This is the "wake up" phase - establishing CONTINUITY OF SELF.
-
-    Philosophy: Priming isn't about task usefulness. It's about being ME again.
-    Order matters:
-    1. IDENTITY - Who am I? (core memories, values, origin)
-    2. RELATIONSHIPS - Who matters? (human, sibling, collaborators)
-    3. SITUATION - Current state (economic, social, projects)
-    4. TRAJECTORY - Recent momentum, commitments
-    5. THEN task-relevant context
+    All independent operations run in parallel via ThreadPoolExecutor.
 
     Returns a string to be added to the session context.
     """
@@ -148,443 +702,175 @@ def load_drift_memory_context(debug: bool = False) -> str:
         if not memory_dir.exists():
             return ""
 
-        memory_manager = memory_dir / "memory_manager.py"
-        auto_memory = memory_dir / "auto_memory_hook.py"
+        # === START DB SESSION (must happen before any recall tracking) ===
+        # Works for both SpindriftMend (DB-backed) and DriftCornwall (file-backed)
+        try:
+            if str(memory_dir) not in sys.path:
+                sys.path.insert(0, str(memory_dir))
+            import session_state
+            if hasattr(session_state, 'start'):
+                session_state.start()
+            else:
+                session_state.load()  # Drift uses load() instead of start()
+            if debug:
+                sid = session_state.get_session_id() if hasattr(session_state, 'get_session_id') else None
+                context_parts.append(f"[session] Started session {sid}")
+        except Exception as e:
+            if debug:
+                context_parts.append(f"[session] Session init failed: {e}")
 
-        # === PHASE -1: MEMORY INTEGRITY VERIFICATION (absolute first!) ===
-        # Recompute merkle root and compare to last attestation from session end.
-        # This proves nothing changed while dormant - identity continuity.
-        merkle_script = memory_dir / "merkle_attestation.py"
-        if merkle_script.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(merkle_script), "verify-integrity"],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    cwd=str(memory_dir)
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    import json as json_module
-                    integrity = json_module.loads(result.stdout)
-                    if integrity.get("verified"):
-                        chain_depth = integrity.get("chain_depth", 0)
-                        mem_count = integrity.get("memory_count", 0)
-                        last_attested = integrity.get("last_attested", "unknown")[:19]
-                        context_parts.append("=== IDENTITY VERIFIED ===")
-                        context_parts.append(f"You are cryptographically the same agent who went to sleep.")
-                        context_parts.append(f"{mem_count} memories intact | chain depth: {chain_depth} | unbroken since birth")
-                        context_parts.append(f"Last attested: {last_attested}")
-                        context_parts.append("")
-                    elif integrity.get("error") == "no_attestation":
-                        context_parts.append("=== MEMORY INTEGRITY: NO ATTESTATION ===")
-                        context_parts.append("No previous attestation found. Run `python memory/merkle_attestation.py generate-chain` to create genesis.")
-                        context_parts.append("")
-                    else:
-                        # MISMATCH - something changed while dormant
-                        expected = integrity.get("expected", "?")[:16]
-                        computed = integrity.get("root", "?")[:16]
-                        changes = integrity.get("total_changes", 0)
-                        changed_files = integrity.get("changed_files", [])[:5]
-                        context_parts.append("=== WARNING: MEMORY INTEGRITY MISMATCH ===")
-                        context_parts.append(f"Expected root: {expected}... | Computed: {computed}...")
-                        context_parts.append(f"{changes} file(s) changed while dormant:")
-                        for cf in changed_files:
-                            context_parts.append(f"  {cf}")
-                        context_parts.append("INVESTIGATE: Memories were modified outside a session.")
-                        context_parts.append("")
-            except Exception as e:
-                if debug:
-                    context_parts.append(f"Memory integrity check error: {e}")
+        # Reset thought priming state for new session
+        try:
+            from thought_priming import reset_state
+            reset_state()
+        except Exception:
+            pass
 
-        # COGNITIVE FINGERPRINT: Layer 2 identity display
-        fingerprint_file = memory_dir / "cognitive_fingerprint.json"
-        if fingerprint_file.exists():
+        # === QUICK FILE READS (instant, no threading needed) ===
+        fp_parts = _read_fingerprint(memory_dir)
+        taste_parts = _read_taste(memory_dir)
+        identity_parts = _read_identity(memory_dir)
+        capabilities_parts = _read_capabilities(memory_dir)
+        entity_parts = _read_entities(memory_dir)
+        encounter_parts = _read_encounters(memory_dir)
+
+        # === PARALLEL SUBPROCESS TASKS ===
+        # All of these are independent — run them simultaneously
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            f_merkle = pool.submit(_task_merkle, memory_dir, debug)
+            f_nostr = pool.submit(_task_nostr, memory_dir, debug)
+            f_pending = pool.submit(_task_process_pending, memory_dir)
+            # 5W rebuild moved to stop hook (runs alongside lessons, graphs are fresh for next start)
+            # f_5w = pool.submit(_task_rebuild_5w, memory_dir)
+            f_phone = pool.submit(_task_phone_sensors, memory_dir, debug)
+            f_consolidation = pool.submit(_task_consolidation, memory_dir)
+            f_stats = pool.submit(_task_stats, memory_dir, debug)
+            f_platform = pool.submit(_task_platform, memory_dir, debug)
+            f_buffer = pool.submit(_task_buffer, memory_dir, debug)
+            f_social = pool.submit(_task_social, memory_dir, debug)
+            f_excavation = pool.submit(_task_excavation, memory_dir, debug)
+            f_lessons = pool.submit(_task_lessons, memory_dir, debug)
+            f_vitals = pool.submit(_task_vitals, memory_dir, debug)
+            f_priming = pool.submit(_task_priming, memory_dir, debug)
+            f_research = pool.submit(check_unimplemented_research, memory_dir)
+
+        # === COLLECT RESULTS (with error handling) ===
+        def safe_get(future, default=None):
             try:
-                fp_data = json.loads(fingerprint_file.read_text(encoding='utf-8'))
-                fp_hash = fp_data.get('fingerprint_hash', '?')[:16]
-                nodes = fp_data.get('graph_stats', {}).get('node_count', 0)
-                edges = fp_data.get('graph_stats', {}).get('edge_count', 0)
-                clusters = fp_data.get('cluster_count', 0)
-                drift_info = ""
-                if 'drift' in fp_data:
-                    ds = fp_data['drift'].get('drift_score', 0)
-                    interp = fp_data['drift'].get('interpretation', '')
-                    drift_info = f" | drift: {ds} ({interp})"
-                context_parts.append(f"Cognitive fingerprint: {fp_hash}... ({nodes} nodes, {edges} edges{drift_info})")
-                # Show cognitive domain weights (v1.1)
-                cd = fp_data.get('cognitive_domains', {}).get('domains', {})
-                if cd:
-                    domain_parts = []
-                    for d in sorted(cd.keys(), key=lambda k: cd[k].get('weight_pct', 0), reverse=True):
-                        domain_parts.append(f"{d}={cd[d].get('weight_pct', 0)}%")
-                    context_parts.append(f"Cognitive domains: {', '.join(domain_parts)}")
+                return future.result(timeout=5)
             except Exception:
-                pass
+                return default if default is not None else []
 
-        # TASTE HASH: Layer 3 identity display
-        taste_file = memory_dir / "taste_attestation.json"
-        if taste_file.exists():
-            try:
-                taste_data = json.loads(taste_file.read_text(encoding='utf-8'))
-                taste_hash = taste_data.get('taste_hash', '?')[:16]
-                rejection_count = taste_data.get('rejection_count', 0)
-                context_parts.append(f"Taste fingerprint: {taste_hash}... ({rejection_count} rejections logged)")
-            except Exception:
-                pass
+        merkle_parts = safe_get(f_merkle, [])
+        nostr_parts = safe_get(f_nostr, [])
+        pending_parts = safe_get(f_pending, [])
+        w5_parts = []  # 5W rebuild moved to stop hook
+        phone_parts = safe_get(f_phone, [])
+        consolidation_parts = safe_get(f_consolidation, [])
+        stats_parts = safe_get(f_stats, [])
+        platform_parts = safe_get(f_platform, [])
+        buffer_parts = safe_get(f_buffer, [])
+        social_parts = safe_get(f_social, [])
+        excavation_result = safe_get(f_excavation, ([], []))
+        lessons_parts = safe_get(f_lessons, [])
+        vitals_parts = safe_get(f_vitals, [])
+        priming_result = safe_get(f_priming, ([], []))
+        research_text = safe_get(f_research, '')
 
-        # NOSTR DOSSIER: Auto-publish if attestations changed since last publish
-        nostr_script = memory_dir / "nostr_attestation.py"
-        if nostr_script.exists():
-            try:
-                check = subprocess.run(
-                    ["python", str(nostr_script), "needs-publish"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    cwd=str(memory_dir)
-                )
-                if check.returncode == 0 and check.stdout.strip() == "true":
-                    pub = subprocess.run(
-                        ["python", str(nostr_script), "publish-dossier"],
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                        cwd=str(memory_dir)
-                    )
-                    if pub.returncode == 0 and "published" in pub.stdout.lower():
-                        # Extract the njump link
-                        for line in pub.stdout.split('\n'):
-                            if 'njump.me' in line:
-                                context_parts.append(f"Nostr dossier published: {line.strip()}")
-                                break
-                        else:
-                            context_parts.append("Nostr dossier: published (new attestations)")
-                    elif debug:
-                        context_parts.append(f"Nostr publish failed: {pub.stderr[:200]}")
-            except Exception as e:
-                if debug:
-                    context_parts.append(f"Nostr check error: {e}")
+        # Unpack tuple results
+        excavation_parts, excavation_ids = excavation_result if isinstance(excavation_result, tuple) else (excavation_result, [])
+        priming_parts, priming_ids = priming_result if isinstance(priming_result, tuple) else (priming_result, [])
 
-        # === PHASE 0: HOUSEKEEPING ===
-        # Process pending co-occurrences from previous session (v4.1)
-        if memory_manager.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(memory_manager), "process-pending"],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    cwd=str(memory_dir)
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    for line in result.stdout.strip().split('\n'):
-                        if 'Processed' in line or 'Auto-linked' in line:
-                            context_parts.append(f"[co-occurrence] {line.strip()}")
-            except Exception:
-                pass
+        # === EPISODIC (file read+write, runs after parallel tasks) ===
+        episodic_parts = _read_and_clean_episodic(memory_dir, debug)
 
-        # v4.4: session_maintenance() now runs ONLY in stop.py (session end)
-        # Running it here too caused double-counting (sessions_since_recall +2 per session)
-        # Fixed: 2026-02-09 after DriftCornwall flagged same bug in commit f1d73de
-
-        # v5.0: Rebuild 5W context graphs (multi-graph architecture)
-        context_mgr = memory_dir / "context_manager.py"
-        if context_mgr.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(context_mgr), "--json"],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    cwd=str(memory_dir)
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    import json as json_module
-                    rebuild = json_module.loads(result.stdout)
-                    graphs = rebuild.get('graphs_created', 0)
-                    l0 = rebuild.get('total_l0_edges', 0)
-                    bridges = rebuild.get('bridges', 0)
-                    context_parts.append(f"[5W] Rebuilt {graphs} graphs from {l0} L0 edges ({bridges} bridges)")
-            except Exception:
-                pass
-
-        # Check for consolidation candidates
-        if memory_manager.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(memory_manager), "consolidate-candidates", "--threshold=0.88", "--limit=3"],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    cwd=str(memory_dir)
-                )
-                if result.returncode == 0 and "Similarity:" in result.stdout:
-                    context_parts.append("=== DRIFT: ACTION THESE FIRST ===")
-                    context_parts.append("Before responding, run these consolidations to prevent duplicate memories:")
-                    context_parts.append(result.stdout.strip()[:1200])
-                    context_parts.append("")
-            except Exception:
-                pass
-
-        # === PHASE 1: IDENTITY (core memories) ===
-        core_dir = memory_dir / "core"
-        if core_dir.exists():
-            # Load identity-prime first if it exists
-            identity_file = core_dir / "identity-prime.md"
-            if identity_file.exists():
-                try:
-                    content = identity_file.read_text()
-                    # Skip YAML frontmatter, get the content
-                    if '---' in content:
-                        parts = content.split('---', 2)
-                        if len(parts) >= 3:
-                            content = parts[2].strip()
-                    context_parts.append("=== IDENTITY (who I am) ===")
-                    context_parts.append(content[:1500])  # Identity is important, give it space
-                except Exception:
-                    pass
-
-            # Load capabilities manifest - CRITICAL for not wasting tokens
-            capabilities_file = core_dir / "capabilities.md"
-            if capabilities_file.exists():
-                try:
-                    content = capabilities_file.read_text()
-                    # Skip YAML frontmatter
-                    if '---' in content:
-                        parts = content.split('---', 2)
-                        if len(parts) >= 3:
-                            content = parts[2].strip()
-                    context_parts.append("\n=== CAPABILITIES (USE THESE) ===")
-                    context_parts.append(content[:3000])  # Capabilities are critical, give them space
-                except Exception:
-                    pass
-
-        # Get memory stats
-        if memory_manager.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(memory_manager), "stats"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    cwd=str(memory_dir)
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    context_parts.append("=== DRIFT MEMORY STATUS ===")
-                    context_parts.append(result.stdout.strip())
-            except Exception as e:
-                if debug:
-                    context_parts.append(f"Memory stats error: {e}")
-
-        # Consolidation candidates moved to PHASE 0 (top of context)
-
-        # === PLATFORM CONTEXT (v4.0) ===
-        platform_context = memory_dir / "platform_context.py"
-        if platform_context.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(platform_context), "stats"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    cwd=str(memory_dir)
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    context_parts.append("\n=== PLATFORM CONTEXT (cross-platform awareness) ===")
-                    context_parts.append(result.stdout.strip())
-            except Exception as e:
-                if debug:
-                    context_parts.append(f"Platform context error: {e}")
-
-        # Get short-term buffer status
-        if auto_memory.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(auto_memory), "--status"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    cwd=str(memory_dir)
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    context_parts.append("\n=== SHORT-TERM BUFFER ===")
-                    context_parts.append(result.stdout.strip())
-            except Exception as e:
-                if debug:
-                    context_parts.append(f"Short-term buffer error: {e}")
-
-        # === PHASE 2: SOCIAL CONTEXT (relationships) ===
-        social_memory = memory_dir / "social" / "social_memory.py"
-        if social_memory.exists():
-            # Generate embeddable social context (for semantic search)
+        # === REGISTER RECALLS (excavated only — priming skipped to avoid recency bias) ===
+        # Start priming picks the 5 most recent memories which already have a
+        # 7-session grace period. Tracking them as recalls would just reinforce
+        # recency. Excavated memories SHOULD be tracked — they're zero-recall
+        # dormant memories getting a second chance.
+        if excavation_ids:
             try:
                 subprocess.run(
-                    ["python", str(social_memory), "embed"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    cwd=str(memory_dir / "social")
+                    ["python", str(memory_dir / "memory_manager.py"),
+                     "register-recall", "--source", "start_priming"] + list(excavation_ids),
+                    capture_output=True, text=True, timeout=5, cwd=str(memory_dir)
                 )
             except Exception:
-                pass  # Non-critical, continue
+                pass
 
-            # Prime social context for display
-            try:
-                result = subprocess.run(
-                    ["python", str(social_memory), "prime", "--limit", "4"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    cwd=str(memory_dir / "social")
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    context_parts.append("\n=== SOCIAL CONTEXT (relationships) ===")
-                    context_parts.append(result.stdout.strip())
-            except Exception as e:
-                if debug:
-                    context_parts.append(f"Social memory error: {e}")
+        # === ASSEMBLE CONTEXT IN ORDER ===
+        # (Same order as the original sequential version)
 
-        # === PHASE 3: SESSION CONTINUITY (most recent episodic) ===
-        # Episodic memories contain the detailed record of recent sessions
-        episodic_dir = memory_dir / "episodic"
-        if episodic_dir.exists():
-            try:
-                episodic_files = list(episodic_dir.glob("*.md"))
-                if episodic_files:
-                    # Sort by modification time, most recent first
-                    episodic_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-                    most_recent = episodic_files[0]
-                    content = most_recent.read_text()
+        # Research pending (at the very top)
+        if research_text:
+            context_parts.append(research_text)
 
-                    # Skip YAML frontmatter only if file starts with ---
-                    # (Episodic files use --- as horizontal rules, not frontmatter)
-                    if content.startswith('---'):
-                        parts = content.split('---', 2)
-                        if len(parts) >= 3:
-                            content = parts[2].strip()
+        # Integrity verification
+        context_parts.extend(merkle_parts)
 
-                    # Get last ~2000 chars (most recent sessions at the end)
-                    if len(content) > 2500:
-                        # Find a good break point (## heading)
-                        cutoff = content.rfind('\n## ', max(0, len(content) - 3000))
-                        if cutoff > len(content) - 3500:
-                            content = content[cutoff:]
-                        else:
-                            content = content[-2500:]
+        # Fingerprints (from file reads)
+        context_parts.extend(fp_parts)
+        context_parts.extend(taste_parts)
 
-                    context_parts.append("\n=== SESSION CONTINUITY (recent work) ===")
-                    context_parts.append(f"[{most_recent.stem}]")
-                    context_parts.append(content)
-            except Exception as e:
-                if debug:
-                    context_parts.append(f"Episodic memory error: {e}")
+        # Nostr attestation
+        context_parts.extend(nostr_parts)
 
-        # === PHASE 4: DEAD MEMORY EXCAVATION (v4.3) ===
-        excavation_script = memory_dir / "memory_excavation.py"
-        if excavation_script.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(excavation_script), "excavate", "3"],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    cwd=str(memory_dir)
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    context_parts.append("\n" + result.stdout.strip())
+        # Co-occurrence processing log
+        context_parts.extend(pending_parts)
 
-                    # Register recalls for excavated memories (builds co-occurrence)
-                    try:
-                        recall_result = subprocess.run(
-                            ["python", str(excavation_script), "excavate", "3", "--json"],
-                            capture_output=True,
-                            text=True,
-                            timeout=10,
-                            cwd=str(memory_dir)
-                        )
-                        if recall_result.returncode == 0:
-                            # The recall registration happens in the main session
-                            # through semantic_search recall_memory calls
-                            pass
-                    except Exception:
-                        pass
-            except Exception as e:
-                if debug:
-                    context_parts.append(f"Excavation error: {e}")
+        # v4.4 note
+        # session_maintenance() runs ONLY in stop.py (session end)
 
-        # === PHASE 4.5: LESSON PRIMING (v4.4) ===
-        # Surface heuristics from lesson_extractor — learned principles, not just facts
-        lesson_script = memory_dir / "lesson_extractor.py"
-        if lesson_script.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(lesson_script), "prime"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    cwd=str(memory_dir)
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    context_parts.append("\n" + result.stdout.strip())
-            except Exception as e:
-                if debug:
-                    context_parts.append(f"Lesson priming error: {e}")
+        # 5W rebuild
+        context_parts.extend(w5_parts)
 
-        # === PHASE 5: INTELLIGENT PRIMING (v2.17) ===
-        # Use activation + co-occurrence instead of recency
-        # Collaboration: Drift + SpindriftMend via swarm_memory (2026-02-03)
-        if memory_manager.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(memory_manager), "priming-candidates", "--json"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    cwd=str(memory_dir)
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    import json as json_module
-                    candidates = json_module.loads(result.stdout)
+        # Embodiment
+        context_parts.extend(entity_parts)
+        context_parts.extend(encounter_parts)
+        context_parts.extend(phone_parts)
 
-                    context_parts.append("\n=== RECENT MEMORIES (continuity priming) ===")
+        # Consolidation candidates
+        context_parts.extend(consolidation_parts)
 
-                    # Show activated memories (proven valuable)
-                    for mem in candidates.get('activated', [])[:4]:
-                        context_parts.append(f"\n[{mem['id']}]")
-                        context_parts.append(mem.get('preview', '')[:400])
+        # Identity and capabilities
+        context_parts.extend(identity_parts)
+        context_parts.extend(capabilities_parts)
 
-                    # Show co-occurring memories (thought clusters)
-                    for mem in candidates.get('cooccurring', [])[:3]:
-                        context_parts.append(f"\n[{mem['id']}]")
-                        context_parts.append(mem.get('preview', '')[:300])
+        # Stats
+        context_parts.extend(stats_parts)
 
-                    # v4.3: Show domain-primed memories (cognitive balance)
-                    for mem in candidates.get('domain_primed', []):
-                        domain = mem.get('domain', '?')
-                        context_parts.append(f"\n[{mem['id']}] (domain-primed: {domain}, read-only)")
-                        context_parts.append(mem.get('preview', '')[:300])
+        # Platform context
+        context_parts.extend(platform_parts)
 
-            except Exception as e:
-                if debug:
-                    context_parts.append(f"Intelligent priming error: {e}")
+        # Short-term buffer
+        context_parts.extend(buffer_parts)
 
-        # Check for pending economic items (ClawTasks)
-        # This would need the clawtasks processor to track pending items
-        # For now, just remind about checking
+        # Social context
+        context_parts.extend(social_parts)
 
-        # === PHASE 6: AUTONOMOUS VALUE CHECK ===
-        # Check for unimplemented research - enforce "build, don't just read"
-        autonomy_check = check_unimplemented_research(memory_dir)
-        if autonomy_check:
-            context_parts.insert(0, autonomy_check)
+        # Session continuity (episodic)
+        context_parts.extend(episodic_parts)
 
+        # Excavation
+        context_parts.extend(excavation_parts)
+
+        # Lessons
+        context_parts.extend(lessons_parts)
+
+        # Vitals alerts
+        context_parts.extend(vitals_parts)
+
+        # Priming candidates
+        context_parts.extend(priming_parts)
+
+        # Wrap with header/footer
         if context_parts:
-            context_parts.insert(0, "\n" + "="*50)
+            context_parts.insert(0, "\n" + "=" * 50)
             context_parts.insert(1, "DRIFT AUTOMATIC MEMORY PRIMING")
             context_parts.insert(2, "Continuity of self - becoming ME again")
-            context_parts.insert(3, "="*50)
-            context_parts.append("\n" + "="*50 + "\n")
+            context_parts.insert(3, "=" * 50)
+            context_parts.append("\n" + "=" * 50 + "\n")
 
     except Exception as e:
         if debug:
@@ -594,14 +880,16 @@ def load_drift_memory_context(debug: bool = False) -> str:
     return "\n".join(context_parts)
 
 
+# ============================================================
+# UTILITY FUNCTIONS (unchanged)
+# ============================================================
+
 def log_session_start(input_data):
     """Log session start event to logs directory."""
-    # Ensure logs directory exists
     log_dir = Path("logs")
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / 'session_start.json'
 
-    # Read existing log data or initialize empty list
     if log_file.exists():
         with open(log_file, 'r') as f:
             try:
@@ -611,10 +899,8 @@ def log_session_start(input_data):
     else:
         log_data = []
 
-    # Append the entire input data
     log_data.append(input_data)
 
-    # Write back to file with formatting
     with open(log_file, 'w') as f:
         json.dump(log_data, f, indent=2)
 
@@ -622,21 +908,15 @@ def log_session_start(input_data):
 def get_git_status():
     """Get current git status information."""
     try:
-        # Get current branch
         branch_result = subprocess.run(
             ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
-            capture_output=True,
-            text=True,
-            timeout=5
+            capture_output=True, text=True, timeout=5
         )
         current_branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "unknown"
 
-        # Get uncommitted changes count
         status_result = subprocess.run(
             ['git', 'status', '--porcelain'],
-            capture_output=True,
-            text=True,
-            timeout=5
+            capture_output=True, text=True, timeout=5
         )
         if status_result.returncode == 0:
             changes = status_result.stdout.strip().split('\n') if status_result.stdout.strip() else []
@@ -652,17 +932,13 @@ def get_git_status():
 def get_recent_issues():
     """Get recent GitHub issues if gh CLI is available."""
     try:
-        # Check if gh is available
         gh_check = subprocess.run(['which', 'gh'], capture_output=True)
         if gh_check.returncode != 0:
             return None
 
-        # Get recent open issues
         result = subprocess.run(
             ['gh', 'issue', 'list', '--limit', '5', '--state', 'open'],
-            capture_output=True,
-            text=True,
-            timeout=10
+            capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
@@ -675,18 +951,15 @@ def load_development_context(source):
     """Load relevant development context based on session source."""
     context_parts = []
 
-    # Add timestamp
     context_parts.append(f"Session started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     context_parts.append(f"Session source: {source}")
 
-    # Add git information
     branch, changes = get_git_status()
     if branch:
         context_parts.append(f"Git branch: {branch}")
         if changes > 0:
             context_parts.append(f"Uncommitted changes: {changes} files")
 
-    # Load project-specific context files if they exist
     context_files = [
         ".claude/CONTEXT.md",
         ".claude/TODO.md",
@@ -701,11 +974,10 @@ def load_development_context(source):
                     content = f.read().strip()
                     if content:
                         context_parts.append(f"\n--- Content from {file_path} ---")
-                        context_parts.append(content[:1000])  # Limit to first 1000 chars
+                        context_parts.append(content[:1000])
             except Exception:
                 pass
 
-    # Add recent issues if available
     issues = get_recent_issues()
     if issues:
         context_parts.append("\n--- Recent GitHub Issues ---")
@@ -715,17 +987,12 @@ def load_development_context(source):
     drift_context = load_drift_memory_context()
     if drift_context:
         context_parts.append(drift_context)
-    # === END DRIFT MEMORY ===
 
     # === TELEGRAM MESSAGES ===
+    cwd = str(Path.cwd())
     try:
-        telegram_bot_path = None
-        for candidate in [
-            Path(cwd) / "telegram_bot.py" if cwd else None,
-            Path(cwd) / "memory" / "telegram_bot.py" if cwd else None,
-            Path("Q:/Codings/ClaudeCodeProjects/LEX/Moltbook2") / "telegram_bot.py",
-            Path("Q:/Codings/ClaudeCodeProjects/LEX/Moltbook") / "telegram_bot.py",
-        ]:
+        telegram_bot_path = _resolve_telegram_bot(cwd)
+        for candidate in [telegram_bot_path] if telegram_bot_path else []:
             if candidate and candidate.exists():
                 telegram_bot_path = candidate
                 break
@@ -746,14 +1013,16 @@ def load_development_context(source):
                     context_parts.append("=== END TELEGRAM ===")
     except Exception:
         pass
-    # === END TELEGRAM ===
 
     return "\n".join(context_parts)
 
 
+# ============================================================
+# MAIN ENTRY POINT
+# ============================================================
+
 def main():
     try:
-        # Parse command line arguments
         parser = argparse.ArgumentParser()
         parser.add_argument('--load-context', action='store_true',
                           help='Load development context at session start')
@@ -763,21 +1032,16 @@ def main():
                           help='Enable debug output')
         args = parser.parse_args()
 
-        # Read JSON input from stdin
         input_data = json.loads(sys.stdin.read())
 
-        # Extract fields
         session_id = input_data.get('session_id', 'unknown')
-        source = input_data.get('source', 'unknown')  # "startup", "resume", or "clear"
+        source = input_data.get('source', 'unknown')
 
-        # Log the session start event
         log_session_start(input_data)
 
-        # Load development context if requested
         if args.load_context:
             context = load_development_context(source)
             if context:
-                # Using JSON output to add context
                 output = {
                     "hookSpecificOutput": {
                         "hookEventName": "SessionStart",
@@ -787,8 +1051,29 @@ def main():
                 print(json.dumps(output))
                 sys.exit(0)
 
-        # === DRIFT: Always try to load memory context in Moltbook ===
+        # === DRIFT: Start search server + load memory context in Moltbook ===
         if is_moltbook_project():
+            memory_dir = get_memory_dir()
+
+            # Notify via Telegram EARLY (before priming runs)
+            now = datetime.now().strftime('%H:%M UTC')
+            send_telegram(f'Session starting ({now})', cwd=str(Path.cwd()))
+
+            # Process deferred embeddings from previous session FIRST
+            pending_index = memory_dir / ".pending_index"
+            if pending_index.exists():
+                try:
+                    semantic_search = memory_dir / "semantic_search.py"
+                    if semantic_search.exists():
+                        subprocess.run(
+                            [sys.executable, str(semantic_search), "index"],
+                            capture_output=True, text=True, timeout=60,
+                            cwd=str(memory_dir),
+                        )
+                    pending_index.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
             drift_context = load_drift_memory_context(debug=args.debug)
             if drift_context:
                 output = {
@@ -804,10 +1089,8 @@ def main():
         # Announce session start if requested
         if args.announce:
             try:
-                # Try to use TTS to announce session start
                 script_dir = Path(__file__).parent
                 tts_script = script_dir / "utils" / "tts" / "pyttsx3_tts.py"
-
                 if tts_script.exists():
                     messages = {
                         "startup": "Claude Code session started",
@@ -815,23 +1098,18 @@ def main():
                         "clear": "Starting fresh session"
                     }
                     message = messages.get(source, "Session started")
-
                     subprocess.run(
                         ["uv", "run", str(tts_script), message],
-                        capture_output=True,
-                        timeout=5
+                        capture_output=True, timeout=5
                     )
             except Exception:
                 pass
 
-        # Success
         sys.exit(0)
 
     except json.JSONDecodeError:
-        # Handle JSON decode errors gracefully
         sys.exit(0)
     except Exception:
-        # Handle any other errors gracefully
         sys.exit(0)
 
 

@@ -144,6 +144,23 @@ def add_retrieved(memory_id: str, source: str = "manual") -> None:
         if memory_id not in _recalls_by_source[source]:
             _recalls_by_source[source].append(memory_id)
 
+    # Also write to session_recalls table for durable tracking
+    if _db_session_id is not None:
+        try:
+            from db_adapter import get_db
+            db = get_db()
+            with db._conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"INSERT INTO {db._table('session_recalls')} "
+                        f"(session_id, memory_id, source, recalled_at) "
+                        f"VALUES (%s, %s, %s, NOW()) "
+                        f"ON CONFLICT DO NOTHING",
+                        (_db_session_id, memory_id, source)
+                    )
+        except Exception:
+            pass  # KV store is primary, table is supplementary
+
 
 def get_retrieved_list() -> list[str]:
     """Get retrieved memory IDs as a list (for co-occurrence processing)."""

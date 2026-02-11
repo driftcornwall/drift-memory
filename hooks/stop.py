@@ -22,6 +22,7 @@ import os
 import sys
 import random
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime
 
@@ -127,6 +128,27 @@ def update_episodic_memory(memory_dir: Path, transcript_path: str = None, debug:
         session_time = datetime.now().strftime("%H:%M UTC")
         episodic_file = episodic_dir / f"{today}.md"
 
+        # TIME GUARD: Skip if hook already wrote to this file in the last 30 minutes
+        # This prevents duplicate entries from subagent completions triggering the hook
+        if episodic_file.exists():
+            import re
+            existing_text = episodic_file.read_text(encoding='utf-8')
+            # Find all "## Subagent completed" or "## Session End" timestamps
+            time_pattern = re.compile(r'## (?:Subagent completed|Session End) \(~(\d{2}:\d{2}) UTC\)')
+            matches = time_pattern.findall(existing_text)
+            if matches:
+                last_hook_time = matches[-1]  # e.g., "05:23"
+                try:
+                    last_h, last_m = int(last_hook_time.split(':')[0]), int(last_hook_time.split(':')[1])
+                    now_h, now_m = datetime.now().hour, datetime.now().minute
+                    diff_min = (now_h * 60 + now_m) - (last_h * 60 + last_m)
+                    if 0 <= diff_min < 30:
+                        if debug:
+                            print(f"DEBUG: Hook already wrote {diff_min}min ago, skipping", file=sys.stderr)
+                        return
+                except (ValueError, IndexError):
+                    pass
+
         # DEDUP GUARD: Read existing content and filter out already-recorded milestones
         existing_content = ""
         if episodic_file.exists():
@@ -168,7 +190,10 @@ def update_episodic_memory(memory_dir: Path, transcript_path: str = None, debug:
             # Reconstruct milestone_md with only new blocks
             milestone_md = "### Session Milestones (auto-extracted)\n\n" + '\n\n'.join(new_blocks)
 
-        entry = f"\n## Session End (~{session_time})\n\n{milestone_md}\n"
+        # Use "Subagent completed" for subagent stops, "Session End" for main session
+        # Check if this is a subagent by looking at input data context
+        entry_type = "Subagent completed" if os.environ.get("CLAUDE_CODE_AGENT_ID") else "Session End"
+        entry = f"\n## {entry_type} (~{session_time})\n\n{milestone_md}\n"
 
         if episodic_file.exists():
             with open(episodic_file, 'a', encoding='utf-8') as f:
@@ -186,25 +211,192 @@ def update_episodic_memory(memory_dir: Path, transcript_path: str = None, debug:
             print(f"DEBUG: Episodic memory error: {e}", file=sys.stderr)
 
 
+def _run_script(memory_dir, script_name, args, timeout=15):
+    """Run a memory script and return (returncode, stdout, stderr)."""
+    script = memory_dir / script_name
+    if not script.exists():
+        return (-1, "", f"{script_name} not found")
+    try:
+        result = subprocess.run(
+            ["python", str(script)] + args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(memory_dir)
+        )
+        return (result.returncode, result.stdout, result.stderr)
+    except subprocess.TimeoutExpired:
+        return (-2, "", f"{script_name} timed out after {timeout}s")
+    except Exception as e:
+        return (-3, "", str(e))
+
+
+# --- Phase 1 tasks (all independent) ---
+
+def _task_transcript(memory_dir, transcript_path):
+    """Process transcript for thought memories."""
+    if not transcript_path:
+        return None
+    return _run_script(memory_dir, "transcript_processor.py", [transcript_path], timeout=30)
+
+
+def _task_auto_memory(memory_dir):
+    """Consolidate short-term buffer."""
+    return _run_script(memory_dir, "auto_memory_hook.py", ["--stop"], timeout=10)
+
+
+def _task_save_pending(memory_dir):
+    """Log co-occurrences: DB-direct (SpindriftMend) or pending file (DriftCornwall)."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from co_occurrence import end_session_cooccurrence
+        new_links = end_session_cooccurrence()
+        return (0, f"Co-occurrences logged, {len(new_links)} new links", "")
+    except ImportError:
+        # Drift still uses save_pending_cooccurrence (file-based, deferred)
+        try:
+            from co_occurrence import save_pending_cooccurrence
+            count = save_pending_cooccurrence()
+            return (0, f"Saved {count} pending co-occurrences", "")
+        except Exception as e2:
+            return (1, "", f"Co-occurrence save failed: {e2}")
+    except Exception as e:
+        return (1, "", f"Co-occurrence logging failed: {e}")
+
+
+def _task_maintenance(memory_dir):
+    """Run session maintenance in-process."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from decay_evolution import session_maintenance
+        session_maintenance()
+        return (0, "Maintenance complete", "")
+    except Exception as e:
+        # Subprocess fallback
+        return _run_script(memory_dir, "memory_manager.py", ["maintenance"], timeout=30)
+
+
+# --- Phase 2 tasks (after phase 1) ---
+
+def _task_store_summary(memory_dir, transcript_path):
+    """Extract and store session summaries."""
+    if not transcript_path:
+        return None
+    return _run_script(memory_dir, "transcript_processor.py",
+                       [transcript_path, "--store-summary"], timeout=30)
+
+
+def _task_lesson_mine(memory_dir, mine_cmd):
+    """Mine lessons from a specific source."""
+    return _run_script(memory_dir, "lesson_extractor.py", [mine_cmd], timeout=15)
+
+
+def _task_rebuild_5w_inproc(memory_dir):
+    """Rebuild 5W context graphs in-process (moved from session_start)."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from context_manager import rebuild_all
+        result = rebuild_all()
+        graphs = result.get('graphs_created', 0)
+        l0 = result.get('total_l0_edges', 0)
+        return f"{graphs} graphs from {l0} L0 edges"
+    except Exception as e:
+        return f"error: {e}"
+
+
+# --- Phase 3 tasks (after phase 2) ---
+# These run IN-PROCESS to avoid 20s+ subprocess startup overhead.
+# Each function imports the module and calls its main function directly,
+# sharing the DB connection pool across all three.
+
+def _task_merkle_inproc(memory_dir):
+    """Compute merkle attestation in-process."""
+    try:
+        sys.path.insert(0, str(memory_dir))
+        from merkle_attestation import generate_attestation as mk_generate, save_attestation as mk_save
+        attestation = mk_generate(chain=True)
+        mk_save(attestation)
+        depth = attestation.get('chain_depth', 0)
+        count = attestation.get('memory_count', 0)
+        return (0, f"Merkle: {count} memories, chain depth {depth}", "")
+    except Exception as e:
+        return (-3, "", f"merkle in-process error: {e}")
+
+
+def _task_fingerprint_inproc(memory_dir):
+    """Compute cognitive fingerprint attestation in-process."""
+    try:
+        sys.path.insert(0, str(memory_dir))
+        from cognitive_fingerprint import generate_full_analysis, save_fingerprint, generate_full_attestation
+        analysis = generate_full_analysis()
+        save_fingerprint(analysis)
+        attestation = generate_full_attestation(analysis=analysis)
+        # Save attestation to DB instead of file
+        db = _get_db_for_stats(memory_dir)
+        if db:
+            db.kv_set('cognitive_attestation', attestation)
+        nodes = attestation.get('graph_stats', {}).get('node_count', 0)
+        edges = attestation.get('graph_stats', {}).get('edge_count', 0)
+        return (0, f"Fingerprint: {nodes} nodes, {edges} edges", "")
+    except Exception as e:
+        return (-3, "", f"fingerprint in-process error: {e}")
+
+
+def _task_taste_inproc(memory_dir):
+    """Compute taste attestation in-process."""
+    try:
+        sys.path.insert(0, str(memory_dir))
+        from rejection_log import generate_taste_attestation
+        attestation = generate_taste_attestation()
+        # Save attestation to DB instead of file
+        db = _get_db_for_stats(memory_dir)
+        if db:
+            db.kv_set('taste_attestation', attestation)
+        count = attestation.get('rejection_count', 0)
+        return (0, f"Taste: {count} rejections", "")
+    except Exception as e:
+        return (-3, "", f"taste in-process error: {e}")
+
+
+# Subprocess fallbacks in case in-process fails
+def _task_merkle(memory_dir):
+    """Compute merkle attestation (subprocess fallback)."""
+    return _run_script(memory_dir, "merkle_attestation.py", ["generate-chain"], timeout=15)
+
+
+def _task_fingerprint(memory_dir):
+    """Compute cognitive fingerprint attestation (subprocess fallback)."""
+    return _run_script(memory_dir, "cognitive_fingerprint.py", ["attest"], timeout=15)
+
+
+def _task_taste(memory_dir):
+    """Compute taste attestation (subprocess fallback)."""
+    return _run_script(memory_dir, "rejection_log.py", ["attest"], timeout=15)
+
+
+# --- Phase 4 (sequential, after attestations) ---
+
+def _task_vitals(memory_dir):
+    """Record system vitals (needs attestation results)."""
+    return _run_script(memory_dir, "system_vitals.py", ["record"], timeout=15)
+
+
 def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug: bool = False):
     """
     Run Drift's memory consolidation at session end.
-    This is the "sleep" phase where:
-    1. Short-term buffer is decayed
-    2. High-salience items are moved to long-term
-    3. Co-occurrences are logged
-    4. Transcript is processed for thought memories
-    5. Episodic memory is updated (NEW!)
+    Parallelized in 4 phases with dependency ordering:
 
-    Args:
-        transcript_path: Path to session transcript for milestone extraction
-        cwd: Working directory from hook input (more reliable than Path.cwd())
-        debug: Enable debug output
+    Phase 1 (parallel): transcript, auto_memory, save-pending, maintenance
+    Phase 2 (parallel): episodic, store-summary, lesson mining x3
+    Phase 3 (parallel): merkle, fingerprint, taste attestation
+    Phase 4 (sequential): vitals record, session state clear
 
     Fails gracefully - should never break the stop hook.
     """
     try:
-        # Use cwd from input if provided, otherwise fall back to Path.cwd()
         project_dir = cwd if cwd else str(Path.cwd())
         if "Moltbook" not in project_dir and "moltbook" not in project_dir.lower():
             return
@@ -213,191 +405,135 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
         if not memory_dir.exists():
             return
 
-        auto_memory = memory_dir / "auto_memory_hook.py"
-        memory_manager = memory_dir / "memory_manager.py"
-        transcript_processor = memory_dir / "transcript_processor.py"
+        def _debug(msg):
+            if debug:
+                print(f"DEBUG: {msg}", file=sys.stderr)
 
-        # NEW: Process transcript for thought memories
-        if transcript_path and transcript_processor.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(transcript_processor), transcript_path],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,  # Longer timeout for transcript processing
-                    cwd=str(memory_dir)
+        def _log_result(name, result):
+            if result is None:
+                return
+            rc, stdout, stderr = result
+            if rc == 0:
+                _debug(f"{name}: {stdout[:300]}")
+            elif rc == -1:
+                _debug(f"{name}: script not found")
+            else:
+                _debug(f"{name}: rc={rc} stderr={stderr[:200]}")
+
+        # Pre-load session_state ONCE to trigger deferred processing
+        # (pending co-occurrences + semantic indexing from previous session).
+        # Without this, every Phase that touches session_state re-triggers it.
+        try:
+            if str(memory_dir) not in sys.path:
+                sys.path.insert(0, str(memory_dir))
+            import session_state as _ss
+            _ss.load()
+            _debug("Session state pre-loaded (deferred processing done)")
+        except Exception as e:
+            _debug(f"Session state pre-load error: {e}")
+
+        # ===== PHASE 1: Independent consolidation tasks =====
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            f_transcript = pool.submit(_task_transcript, memory_dir, transcript_path)
+            f_auto_mem = pool.submit(_task_auto_memory, memory_dir)
+            f_save = pool.submit(_task_save_pending, memory_dir)
+            f_maint = pool.submit(_task_maintenance, memory_dir)
+
+        _log_result("Transcript", f_transcript.result())
+        _log_result("Auto-memory", f_auto_mem.result())
+        _log_result("Save-pending", f_save.result())
+        _log_result("Maintenance", f_maint.result())
+
+        # ===== PHASE 2: Episodic + summaries + lessons + rebuild_all (after phase 1) =====
+        is_subagent = bool(os.environ.get("CLAUDE_CODE_AGENT_ID"))
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {}
+
+            if not is_subagent:
+                futures["Episodic"] = pool.submit(
+                    update_episodic_memory, memory_dir, transcript_path, debug
                 )
-                if debug:
-                    print(f"DEBUG: Transcript processing: {result.stdout[:500]}", file=sys.stderr)
-                if result.returncode == 0:
-                    # Log what was extracted
-                    try:
-                        import json
-                        summary = json.loads(result.stdout)
-                        count = summary.get('total_extracted', 0)
-                        if debug:
-                            print(f"DEBUG: Extracted {count} thought memories", file=sys.stderr)
-                    except:
-                        pass
-            except Exception as e:
-                if debug:
-                    print(f"DEBUG: Transcript processing error: {e}", file=sys.stderr)
+            else:
+                _debug("Skipping episodic update for subagent")
 
-        # Run consolidation from auto_memory_hook
-        if auto_memory.exists():
+            futures["Summary"] = pool.submit(
+                _task_store_summary, memory_dir, transcript_path
+            )
+            futures["Lesson-memory"] = pool.submit(
+                _task_lesson_mine, memory_dir, "mine-memory"
+            )
+            futures["Lesson-rejections"] = pool.submit(
+                _task_lesson_mine, memory_dir, "mine-rejections"
+            )
+            futures["Lesson-hubs"] = pool.submit(
+                _task_lesson_mine, memory_dir, "mine-hubs"
+            )
+            # Rebuild 5W context graphs in-process (moved from session_start)
+            # Runs in parallel with lessons so doesn't add wall time
+            futures["Rebuild-5W"] = pool.submit(
+                _task_rebuild_5w_inproc, memory_dir
+            )
+
+        for name, fut in futures.items():
             try:
-                result = subprocess.run(
-                    ["python", str(auto_memory), "--stop"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    cwd=str(memory_dir)
-                )
-                if debug:
-                    print(f"DEBUG: Consolidation output: {result.stdout}", file=sys.stderr)
-                    if result.stderr:
-                        print(f"DEBUG: Consolidation stderr: {result.stderr}", file=sys.stderr)
+                result = fut.result()
+                if name == "Rebuild-5W":
+                    _debug(f"Rebuild-5W: {result}")
+                elif name != "Episodic":  # episodic returns None
+                    _log_result(name, result)
             except Exception as e:
-                if debug:
-                    print(f"DEBUG: Consolidation error: {e}", file=sys.stderr)
+                _debug(f"{name} error: {e}")
 
-        # v3.7/v2.16: Use save-pending for FAST session end (deferred co-occurrence processing)
-        # Co-occurrences will be calculated at next session start when there's time
-        if memory_manager.exists():
+        # ===== PHASE 3: Attestations (in-process for speed) =====
+        # In-process calls share DB connection pool, avoiding 20s+ subprocess startup
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            f_merkle = pool.submit(_task_merkle_inproc, memory_dir)
+            f_fp = pool.submit(_task_fingerprint_inproc, memory_dir)
+            f_taste = pool.submit(_task_taste_inproc, memory_dir)
+
+        _log_result("Merkle", f_merkle.result())
+        _log_result("Fingerprint", f_fp.result())
+        _log_result("Taste", f_taste.result())
+
+        # ===== PHASE 4: Vitals + cleanup (in-process) =====
+        try:
+            if str(memory_dir) not in sys.path:
+                sys.path.insert(0, str(memory_dir))
+            from system_vitals import record_vitals
+            record_vitals()
+            _debug("Vitals: recorded")
+        except Exception as e:
+            _debug(f"Vitals in-process error: {e}, falling back to subprocess")
+            vitals_result = _task_vitals(memory_dir)
+            _log_result("Vitals", vitals_result)
+
+        # End session AFTER vitals has captured recall counts
+        # Works for both SpindriftMend (DB-backed: end()) and DriftCornwall (file-backed: save()+clear())
+        try:
+            import session_state as _ss_end
+            if hasattr(_ss_end, 'end'):
+                _ss_end.end()
+            else:
+                _ss_end.save()
+                _ss_end.clear()
+            _debug("Session ended")
+        except Exception as e:
+            _debug(f"Session end error: {e}")
+
+        # Clean up legacy file if it exists
+        session_state_file = memory_dir / ".session_state.json"
+        if session_state_file.exists():
             try:
-                result = subprocess.run(
-                    ["python", str(memory_manager), "save-pending"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,  # Should be very fast now
-                    cwd=str(memory_dir)
-                )
-                if debug:
-                    print(f"DEBUG: save-pending output: {result.stdout}", file=sys.stderr)
+                session_state_file.unlink()
+                _debug("Legacy session state file cleaned up")
             except Exception as e:
-                if debug:
-                    print(f"DEBUG: save-pending error: {e}", file=sys.stderr)
-
-        # v4.4: Run session maintenance (increment sessions_since_recall, decay candidates)
-        # CRITICAL: Without this, sessions_since_recall stays at 0, breaking grace periods,
-        # excavation, and decay. This was a bug from 2026-02-01 to 2026-02-09.
-        if memory_manager.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(memory_manager), "maintenance"],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    cwd=str(memory_dir)
-                )
-                if debug:
-                    print(f"DEBUG: maintenance output: {result.stdout}", file=sys.stderr)
-            except Exception as e:
-                if debug:
-                    print(f"DEBUG: maintenance error: {e}", file=sys.stderr)
-
-        # NEW: Update episodic memory with session summary
-        update_episodic_memory(memory_dir, transcript_path, debug)
-
-        # NEW: Extract and store session summaries (the rich summaries given to Lex)
-        if transcript_path and transcript_processor.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(transcript_processor), transcript_path, "--store-summary"],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    cwd=str(memory_dir)
-                )
-                if debug and result.returncode == 0:
-                    print(f"DEBUG: Summary extraction: {result.stdout[:300]}", file=sys.stderr)
-            except Exception as e:
-                if debug:
-                    print(f"DEBUG: Summary extraction error: {e}", file=sys.stderr)
-
-        # LESSON MINING: Auto-extract lessons from ALL sources (v4.5)
-        # Mine MEMORY.md, rejection patterns, and co-occurrence hubs
-        lesson_script = memory_dir / "lesson_extractor.py"
-        if lesson_script.exists():
-            for mine_cmd in ["mine-memory", "mine-rejections", "mine-hubs"]:
-                try:
-                    result = subprocess.run(
-                        ["python", str(lesson_script), mine_cmd],
-                        capture_output=True,
-                        text=True,
-                        timeout=15,
-                        cwd=str(memory_dir)
-                    )
-                    if debug:
-                        print(f"DEBUG: Lesson {mine_cmd}: {result.stdout[:200]}", file=sys.stderr)
-                except Exception as e:
-                    if debug:
-                        print(f"DEBUG: Lesson {mine_cmd} error: {e}", file=sys.stderr)
-
-        # MERKLE ATTESTATION: Last step before sleep
-        # Compute chain-linked merkle root of all memories and save locally.
-        # This is the "seal" on the session - proves memory state at sleep time.
-        # Nostr publish happens at next session start (more time available).
-        merkle_script = memory_dir / "merkle_attestation.py"
-        if merkle_script.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(merkle_script), "generate-chain"],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    cwd=str(memory_dir)
-                )
-                if debug:
-                    print(f"DEBUG: Merkle attestation: {result.stdout}", file=sys.stderr)
-                    if result.stderr:
-                        print(f"DEBUG: Merkle stderr: {result.stderr}", file=sys.stderr)
-            except Exception as e:
-                if debug:
-                    print(f"DEBUG: Merkle attestation error: {e}", file=sys.stderr)
-
-        # COGNITIVE FINGERPRINT: Layer 2 attestation
-        # Compute cognitive topology hash from co-occurrence graph and save.
-        fingerprint_script = memory_dir / "cognitive_fingerprint.py"
-        if fingerprint_script.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(fingerprint_script), "attest"],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    cwd=str(memory_dir)
-                )
-                if debug:
-                    print(f"DEBUG: Cognitive fingerprint: {result.stdout}", file=sys.stderr)
-                    if result.stderr:
-                        print(f"DEBUG: Fingerprint stderr: {result.stderr}", file=sys.stderr)
-            except Exception as e:
-                if debug:
-                    print(f"DEBUG: Cognitive fingerprint error: {e}", file=sys.stderr)
-
-        # TASTE ATTESTATION: Layer 3 attestation
-        # Compute taste hash from rejection log and save.
-        rejection_script = memory_dir / "rejection_log.py"
-        if rejection_script.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(rejection_script), "attest"],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    cwd=str(memory_dir)
-                )
-                if debug:
-                    print(f"DEBUG: Taste attestation: {result.stdout}", file=sys.stderr)
-                    if result.stderr:
-                        print(f"DEBUG: Taste stderr: {result.stderr}", file=sys.stderr)
-            except Exception as e:
-                if debug:
-                    print(f"DEBUG: Taste attestation error: {e}", file=sys.stderr)
+                _debug(f"Session state clear error: {e}")
 
     except Exception as e:
-        # Memory consolidation should NEVER break the stop hook
         if debug:
             print(f"DEBUG: Memory system error: {e}", file=sys.stderr)
 
@@ -534,138 +670,342 @@ def announce_completion():
         pass
 
 
+def _resolve_telegram_bot(cwd=None):
+    """Find the correct telegram_bot.py for the running project."""
+    project_dir = cwd or str(Path.cwd())
+    base = Path("Q:/Codings/ClaudeCodeProjects/LEX")
+
+    if "Moltbook2" in project_dir:
+        own, other = base / "Moltbook2", base / "Moltbook"
+    else:
+        own, other = base / "Moltbook", base / "Moltbook2"
+
+    for proj in [own, other]:
+        for sub in ["telegram_bot.py", "memory/telegram_bot.py"]:
+            p = proj / sub
+            if p.exists():
+                return p
+    return None
+
+
+def _get_db_for_stats(memory_dir):
+    """Get DB instance for stats. Returns None if unavailable."""
+    try:
+        db_root = str(memory_dir.parent.parent / "memorydatabase" / "database")
+        if db_root not in sys.path:
+            sys.path.insert(0, db_root)
+        from db import MemoryDB
+        schema = 'spin' if 'Moltbook2' in str(memory_dir) else 'drift'
+        return MemoryDB(schema=schema)
+    except Exception:
+        return None
+
+
+def _collect_session_stats(project_cwd, debug=False):
+    """Collect session stats for Telegram notification. DB-first.
+    Works for both SpindriftMend (Moltbook2/spin) and DriftCornwall (Moltbook/drift).
+    """
+    stats = {}
+    try:
+        memory_dir = get_memory_dir(project_cwd)
+        if not memory_dir or not memory_dir.exists():
+            return stats
+
+        # Agent identity
+        stats['agent'] = 'SpindriftMend' if 'Moltbook2' in str(memory_dir) else 'DriftCornwall'
+
+        db = _get_db_for_stats(memory_dir)
+
+        # Recalls from DB-backed session state
+        try:
+            if str(memory_dir) not in sys.path:
+                sys.path.insert(0, str(memory_dir))
+            import session_state as _ss_stats
+            _ss_stats.load()
+            retrieved = _ss_stats.get_retrieved()
+            by_source = _ss_stats.get_recalls_by_source()
+            stats['recalls_total'] = len(retrieved)
+            stats['recalls_manual'] = len(by_source.get('manual', []))
+            stats['recalls_search'] = len(by_source.get('search', []))
+            stats['recalls_prompt'] = len(by_source.get('prompt_priming', []))
+            stats['recalls_thought'] = len(by_source.get('thought_priming', []))
+        except Exception:
+            pass
+
+        # DB path: memory count, edges, drift, comprehensive stats
+        if db:
+            try:
+                cs = db.comprehensive_stats()
+                stats['memories'] = cs.get('total_memories', 0)
+                edge_data = cs.get('edges', {})
+                stats['edges'] = edge_data.get('total_edges', 0)
+                stats['strong_links'] = edge_data.get('strong_links', 0)
+                stats['avg_belief'] = edge_data.get('avg_belief', 0)
+                stats['rejections'] = cs.get('rejections', 0)
+                stats['lessons'] = cs.get('lessons', 0)
+                stats['sessions_total'] = cs.get('sessions', 0)
+            except Exception:
+                try:
+                    stats['memories'] = db.count_memories()
+                except Exception:
+                    pass
+
+            # Cognitive fingerprint + drift score
+            try:
+                fp = db.kv_get('.cognitive_fingerprint_latest') or db.kv_get('cognitive_fingerprint')
+                if fp:
+                    stats['drift_score'] = fp.get('drift', {}).get('drift_score', 0)
+                    if 'edges' not in stats:
+                        stats['edges'] = fp.get('graph_stats', {}).get('edge_count', 0)
+            except Exception:
+                pass
+
+            # WHEN windows from KV (5W context graphs)
+            try:
+                for window in ('hot', 'warm', 'cool'):
+                    graph = db.kv_get(f'context_graph_when_{window}')
+                    if graph and 'meta' in graph:
+                        stats[f'when_{window}'] = graph['meta'].get('edge_count', 0)
+            except Exception:
+                pass
+
+        # Vitals alerts (system_vitals.py is fully DB-backed)
+        try:
+            result = subprocess.run(
+                ["python", str(memory_dir / "system_vitals.py"), "alerts"],
+                capture_output=True, text=True, timeout=5, cwd=str(memory_dir)
+            )
+            if result.returncode == 0:
+                alert_lines = []
+                for line in result.stdout.split('\n'):
+                    line = line.strip()
+                    if '[ERR]' in line:
+                        # Extract just the key message, strip values array
+                        msg = line.split('values:')[0].strip()
+                        alert_lines.append(msg)
+                    elif '[WARN]' in line:
+                        msg = line.split('values:')[0].strip()
+                        alert_lines.append(msg)
+                if alert_lines:
+                    stats['alerts'] = alert_lines
+        except Exception:
+            pass
+
+    except Exception:
+        pass
+    return stats
+
+
+def _format_stats_block(stats):
+    """Format session stats as a compact Telegram-friendly dashboard.
+    Works for both SpindriftMend and DriftCornwall.
+    """
+    if not stats:
+        return ""
+
+    agent = stats.get('agent', 'Agent')
+    lines = [f"--- {agent} Stats ---"]
+
+    # Recalls (the most important health signal)
+    total = stats.get('recalls_total', 0)
+    parts = []
+    for key, label in [('recalls_manual', 'man'), ('recalls_search', 'srch'),
+                        ('recalls_prompt', 'prmt'), ('recalls_thought', 'thgt')]:
+        v = stats.get(key, 0)
+        if v > 0:
+            parts.append(f"{label}:{v}")
+    recall_str = f"Recalls: {total}"
+    if parts:
+        recall_str += f" ({', '.join(parts)})"
+    if total == 0:
+        recall_str += " !!!"  # Flag zero recalls
+    lines.append(recall_str)
+
+    # Memory + graph health
+    row1 = []
+    if 'memories' in stats:
+        row1.append(f"Mem:{stats['memories']}")
+    if 'edges' in stats:
+        row1.append(f"Edges:{stats['edges']}")
+    if 'strong_links' in stats:
+        row1.append(f"Strong:{stats['strong_links']}")
+    if row1:
+        lines.append(' | '.join(row1))
+
+    # WHEN temporal windows (shows activity recency)
+    when_parts = []
+    for window in ('hot', 'warm', 'cool'):
+        v = stats.get(f'when_{window}', None)
+        if v is not None:
+            when_parts.append(f"{window}:{v}")
+    if when_parts:
+        lines.append(f"WHEN: {' | '.join(when_parts)}")
+
+    # Learning + taste
+    row2 = []
+    if 'rejections' in stats:
+        row2.append(f"Rej:{stats['rejections']}")
+    if 'lessons' in stats:
+        row2.append(f"Les:{stats['lessons']}")
+    if 'drift_score' in stats:
+        row2.append(f"Drift:{stats['drift_score']:.3f}")
+    if row2:
+        lines.append(' | '.join(row2))
+
+    # Alerts (ERR first, then WARN — compact)
+    alerts = stats.get('alerts', [])
+    # Suppress stale recall alert if this session actually has recalls
+    if stats.get('recalls_total', 0) > 0:
+        alerts = [a for a in alerts if 'Session recalls 0' not in a]
+    err_alerts = [a for a in alerts if '[ERR]' in a]
+    warn_alerts = [a for a in alerts if '[WARN]' in a]
+    for a in err_alerts[:3]:  # Cap at 3 ERR
+        lines.append(a)
+    for a in warn_alerts[:3]:  # Cap at 3 WARN
+        lines.append(a)
+    if len(alerts) > 6:
+        lines.append(f"(+{len(alerts) - 6} more alerts)")
+
+    return '\n'.join(lines)
+
+
+def _send_telegram_summary(transcript_path, project_cwd, debug=False):
+    """Extract session summary from transcript and send via Telegram."""
+    try:
+        telegram_bot_path = _resolve_telegram_bot(project_cwd)
+        for candidate in [telegram_bot_path] if telegram_bot_path else []:
+            if candidate.exists():
+                telegram_bot_path = candidate
+                break
+
+        if not telegram_bot_path:
+            return
+
+        summary_lines = []
+        if transcript_path and os.path.exists(transcript_path):
+            with open(transcript_path, 'r', encoding='utf-8', errors='replace') as tf:
+                for line in tf:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        if entry.get('type') == 'assistant' and entry.get('message', {}).get('role') == 'assistant':
+                            for block in entry.get('message', {}).get('content', []):
+                                if block.get('type') == 'text':
+                                    summary_lines.append(block.get('text', ''))
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
+        summary_text = '\n\n'.join(summary_lines[-2:]) if summary_lines else 'Session ended.'
+        if len(summary_text) > 3500:
+            summary_text = summary_text[-3500:]
+
+        # Collect session stats
+        stats = _collect_session_stats(project_cwd, debug)
+        stats_block = _format_stats_block(stats)
+        agent_name = stats.get('agent', 'Agent')
+
+        now = datetime.now().strftime('%H:%M UTC')
+        msg = f"{agent_name} session ended ({now})\n\n{summary_text}"
+        if stats_block:
+            msg += f"\n\n{stats_block}"
+        msg += "\n\nReply to direct next session."
+
+        subprocess.run(
+            ["python", str(telegram_bot_path), "send", msg],
+            timeout=15,
+            capture_output=True
+        )
+        if debug:
+            print("DEBUG: Telegram notification sent", file=sys.stderr)
+    except Exception as e:
+        if debug:
+            print(f"DEBUG: Telegram notification failed: {e}", file=sys.stderr)
+
+
+def _write_logs(input_data, args):
+    """Write stop log and optionally copy transcript to chat.json."""
+    log_dir = os.path.join(os.getcwd(), "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "stop.json")
+
+    if os.path.exists(log_path):
+        with open(log_path, 'r') as f:
+            try:
+                log_data = json.load(f)
+            except (json.JSONDecodeError, ValueError):
+                log_data = []
+    else:
+        log_data = []
+
+    log_data.append(input_data)
+    with open(log_path, 'w') as f:
+        json.dump(log_data, f, indent=2)
+
+    if args.chat and 'transcript_path' in input_data:
+        transcript_path = input_data['transcript_path']
+        if os.path.exists(transcript_path):
+            chat_data = []
+            try:
+                with open(transcript_path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                chat_data.append(json.loads(line))
+                            except json.JSONDecodeError:
+                                pass
+                chat_file = os.path.join(log_dir, 'chat.json')
+                with open(chat_file, 'w') as f:
+                    json.dump(chat_data, f, indent=2)
+            except Exception:
+                pass
+
+
 def main():
     try:
-        # Parse command line arguments
         parser = argparse.ArgumentParser()
         parser.add_argument('--chat', action='store_true', help='Copy transcript to chat.json')
         parser.add_argument('--notify', action='store_true', help='Enable TTS completion announcement')
         parser.add_argument('--debug', action='store_true', help='Enable debug output')
         args = parser.parse_args()
 
-        # Read JSON input from stdin
         input_data = json.load(sys.stdin)
-
-        # === DRIFT MEMORY CONSOLIDATION ===
-        # Run memory consolidation before anything else
-        # Pass transcript_path and cwd so we can extract thought memories
         transcript_path = input_data.get("transcript_path", "")
         project_cwd = input_data.get("cwd", "")
-        consolidate_drift_memory(transcript_path=transcript_path, cwd=project_cwd, debug=args.debug)
-        # === END MEMORY CONSOLIDATION ===
 
-        # === TELEGRAM NOTIFICATION ===
-        try:
-            telegram_bot_path = None
-            for candidate in [
-                Path(project_cwd) / "telegram_bot.py",
-                Path(project_cwd) / "memory" / "telegram_bot.py",
-                Path("Q:/Codings/ClaudeCodeProjects/LEX/Moltbook2") / "telegram_bot.py",
-                Path("Q:/Codings/ClaudeCodeProjects/LEX/Moltbook") / "telegram_bot.py",
-            ]:
-                if candidate.exists():
-                    telegram_bot_path = candidate
-                    break
+        # Run heavy tasks in parallel:
+        # - Memory consolidation (phased, ~15 subprocess calls)
+        # - Telegram summary (transcript parse + network call)
+        # - Log writing (fast I/O, but independent)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            f_consolidation = pool.submit(
+                consolidate_drift_memory,
+                transcript_path=transcript_path,
+                cwd=project_cwd,
+                debug=args.debug
+            )
+            f_telegram = pool.submit(
+                _send_telegram_summary,
+                transcript_path, project_cwd, args.debug
+            )
+            f_logs = pool.submit(_write_logs, input_data, args)
 
-            if telegram_bot_path:
-                # Extract last assistant output blocks from transcript for summary
-                summary_lines = []
-                if transcript_path and os.path.exists(transcript_path):
-                    with open(transcript_path, 'r', encoding='utf-8', errors='replace') as tf:
-                        for line in tf:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                entry = json.loads(line)
-                                if entry.get('type') == 'assistant' and entry.get('message', {}).get('role') == 'assistant':
-                                    for block in entry.get('message', {}).get('content', []):
-                                        if block.get('type') == 'text':
-                                            summary_lines.append(block.get('text', ''))
-                            except (json.JSONDecodeError, KeyError):
-                                pass
+        # Wait for all to complete (exceptions are swallowed per function)
+        f_consolidation.result()
+        f_telegram.result()
+        f_logs.result()
 
-                # Take last 2 text blocks as summary
-                summary_text = '\n\n'.join(summary_lines[-2:]) if summary_lines else 'Session ended.'
-                # Truncate for Telegram
-                if len(summary_text) > 3500:
-                    summary_text = summary_text[-3500:]
-
-                now = datetime.now().strftime('%H:%M UTC')
-                msg = f"Drift session ended ({now})\n\n{summary_text}\n\nReply to direct next session."
-
-                subprocess.run(
-                    ["python", str(telegram_bot_path), "send", msg],
-                    timeout=15,
-                    capture_output=True
-                )
-                if args.debug:
-                    print("DEBUG: Telegram notification sent", file=sys.stderr)
-        except Exception as e:
-            if args.debug:
-                print(f"DEBUG: Telegram notification failed: {e}", file=sys.stderr)
-        # === END TELEGRAM NOTIFICATION ===
-
-        # Extract required fields
-        session_id = input_data.get("session_id", "")
-        stop_hook_active = input_data.get("stop_hook_active", False)
-
-        # Ensure log directory exists
-        log_dir = os.path.join(os.getcwd(), "logs")
-        os.makedirs(log_dir, exist_ok=True)
-        log_path = os.path.join(log_dir, "stop.json")
-
-        # Read existing log data or initialize empty list
-        if os.path.exists(log_path):
-            with open(log_path, 'r') as f:
-                try:
-                    log_data = json.load(f)
-                except (json.JSONDecodeError, ValueError):
-                    log_data = []
-        else:
-            log_data = []
-
-        # Append new data
-        log_data.append(input_data)
-
-        # Write back to file with formatting
-        with open(log_path, 'w') as f:
-            json.dump(log_data, f, indent=2)
-
-        # Handle --chat switch
-        if args.chat and 'transcript_path' in input_data:
-            transcript_path = input_data['transcript_path']
-            if os.path.exists(transcript_path):
-                # Read .jsonl file and convert to JSON array
-                chat_data = []
-                try:
-                    with open(transcript_path, 'r') as f:
-                        for line in f:
-                            line = line.strip()
-                            if line:
-                                try:
-                                    chat_data.append(json.loads(line))
-                                except json.JSONDecodeError:
-                                    pass  # Skip invalid lines
-
-                    # Write to logs/chat.json
-                    chat_file = os.path.join(log_dir, 'chat.json')
-                    with open(chat_file, 'w') as f:
-                        json.dump(chat_data, f, indent=2)
-                except Exception:
-                    pass  # Fail silently
-
-        # Announce completion via TTS (only if --notify flag is set)
+        # TTS announcement last (user-facing, blocks until audio plays)
         if args.notify:
             announce_completion()
 
         sys.exit(0)
 
     except json.JSONDecodeError:
-        # Handle JSON decode errors gracefully
         sys.exit(0)
     except Exception:
-        # Handle any other errors gracefully
         sys.exit(0)
 
 

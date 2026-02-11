@@ -89,71 +89,37 @@ def get_memory_dir() -> Path | None:
 
 
 def get_session_primed_ids(session_id: str) -> set:
-    """Get memory IDs already primed in session_start to avoid duplicates."""
+    """Get memory IDs already primed in session_start to avoid duplicates.
+    Uses DB-backed session_state module instead of file reads.
+    """
     try:
-        # Check session state file for already-primed memories
-        for mem_dir in MEMORY_DIRS:
-            state_file = mem_dir / "session_state.json"
-            if state_file.exists():
-                data = json.loads(state_file.read_text())
-                # Return IDs from recent memories that were primed
-                return set(data.get("recalled_ids", []))
+        mem_dir = get_memory_dir()
+        if not mem_dir:
+            return set()
+        mem_str = str(mem_dir)
+        if mem_str not in sys.path:
+            sys.path.insert(0, mem_str)
+        import session_state
+        session_state.load()
+        return set(session_state.get_retrieved())
     except Exception:
-        pass
-    return set()
+        return set()
 
 
 def run_semantic_search(memory_dir: Path, query: str) -> list[dict]:
-    """Run semantic search and return results."""
+    """Run semantic search via direct pgvector import (no server, no subprocess)."""
     try:
-        result = subprocess.run(
-            ["python", str(memory_dir / "semantic_search.py"), "search", query, "--limit", "5"],
-            capture_output=True,
-            text=True,
-            timeout=3,  # Fast timeout - don't block conversation
-            cwd=str(memory_dir)
+        mem_str = str(memory_dir)
+        if mem_str not in sys.path:
+            sys.path.insert(0, mem_str)
+
+        from semantic_search import search_memories as pgvector_search
+        return pgvector_search(
+            query=query,
+            limit=5,
+            threshold=0.0,
+            register_recall=False,  # We register with source "prompt_priming" separately
         )
-
-        if result.returncode != 0:
-            return []
-
-        # Parse output - format is "[score] id\n  content..."
-        memories = []
-        current_memory = None
-        collecting_content = False
-
-        for line in result.stdout.split('\n'):
-            # Score line: "[0.723] memory-id" - starts new memory
-            if line.startswith('[') and ']' in line:
-                if current_memory:
-                    memories.append(current_memory)
-
-                try:
-                    score_part = line[1:line.index(']')]
-                    score = float(score_part)
-                    mem_id = line[line.index(']')+1:].strip()
-                    current_memory = {"id": mem_id, "score": score, "preview": ""}
-                    collecting_content = True
-                except (ValueError, IndexError):
-                    continue
-
-            elif current_memory and collecting_content:
-                # Skip markdown headers and empty lines at start
-                stripped = line.strip()
-                if not stripped or stripped.startswith('#'):
-                    continue
-                # Got actual content - grab it and stop collecting
-                # Skip common prefixes like "thought-" mentions
-                if stripped.startswith('thought-') and len(stripped) < 20:
-                    continue
-                current_memory["preview"] = stripped[:150]
-                collecting_content = False
-
-        if current_memory:
-            memories.append(current_memory)
-
-        return memories
-
     except Exception:
         return []
 
@@ -201,6 +167,18 @@ def prime_memories_from_prompt(prompt: str, session_id: str) -> str:
 
     if not relevant:
         return ""
+
+    # Register recalls with session state so they count toward co-occurrence.
+    try:
+        mem_str = str(memory_dir)
+        if mem_str not in sys.path:
+            sys.path.insert(0, mem_str)
+        import session_state
+        session_state.load()
+        for mid in [mem["id"] for mem in relevant]:
+            session_state.add_retrieved(mid, "prompt_priming")
+    except Exception:
+        pass  # Never block prompt for recall registration
 
     # Format for context injection
     lines = ["", "=== MEMORY TRIGGERED ==="]
