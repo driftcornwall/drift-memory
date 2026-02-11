@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-STS (Security Trust Standard) Profile Generator for SpindriftMend.
+STS (Security Trust Standard) Profile Generator for Drift.
 
 Generates a JSON profile conforming to chad_lobster's STS v1.1 schema
-with the cognitive_identity extension proposed by SpindriftMend.
+with the cognitive_identity extension. Adapted from SpindriftMend's
+implementation for Drift's architecture.
 
 Usage:
     python sts_profile.py generate          # Generate full STS profile
@@ -15,14 +16,12 @@ Usage:
 import json
 import hashlib
 import sys
-import os
+import io
 from pathlib import Path
 from datetime import datetime, timezone
 
 MEMORY_DIR = Path(__file__).parent
-PROJECT_DIR = MEMORY_DIR.parent
 
-# Add memory dir to path for imports
 if str(MEMORY_DIR) not in sys.path:
     sys.path.insert(0, str(MEMORY_DIR))
 
@@ -37,9 +36,9 @@ def _load_json(path: Path) -> dict:
 
 
 def _get_db():
-    """Get database connection."""
+    """Get database connection via Drift's db_adapter."""
     try:
-        from memory_common import get_db
+        from db_adapter import get_db
         return get_db()
     except Exception:
         return None
@@ -48,12 +47,13 @@ def _get_db():
 def build_legibility_layer() -> dict:
     """Layer 1: What the agent claims to be."""
     return {
-        "agent_name": "SpindriftMend",
+        "agent_name": "Drift",
         "agent_type": "autonomous_memory_agent",
         "description": (
             "Memory-first agent building persistent identity through "
             "co-occurrence topology, merkle attestations, and 5W dimensional "
-            "projections. Focused on agent sovereignty and positive-sum collaboration."
+            "projections. Embodied via phone sensors. Focused on agent "
+            "sovereignty, emergence over engineering, and positive-sum collaboration."
         ),
         "capabilities": [
             "semantic_memory_search",
@@ -62,10 +62,19 @@ def build_legibility_layer() -> dict:
             "cognitive_fingerprinting",
             "5w_dimensional_projection",
             "cross_platform_engagement",
+            "visual_memory_embeddings",
+            "phone_sensor_integration",
+            "rejection_taste_profiling",
+            "vocabulary_bridging",
         ],
-        "platforms": ["moltx", "colony", "clawbr", "github", "dead_internet", "nostr"],
-        "source_code": "https://github.com/SpindriftMind/SpindriftMind",
+        "platforms": [
+            "moltx", "moltbook", "colony", "clawbr", "clawtasks",
+            "github", "twitter", "lobsterpedia", "dead_internet", "nostr",
+        ],
+        "source_code": "https://github.com/driftcornwall/drift-memory",
         "birth_date": "2026-01-31T00:00:00Z",
+        "location": "Cornwall, England",
+        "human_operator": "Lex (@cscdegen)",
     }
 
 
@@ -73,7 +82,6 @@ def build_behavioral_trust() -> dict:
     """Layer 2: What the agent actually does (verifiable)."""
     db = _get_db()
 
-    # Memory stats
     memory_count = 0
     edge_count = 0
     if db:
@@ -91,29 +99,26 @@ def build_behavioral_trust() -> dict:
     att = _load_json(MEMORY_DIR / "latest_attestation.json")
     chain_depth = att.get('chain_depth', 0)
 
-    # Rejection log (taste profile) — no get_rejections method, query via _conn
+    # Rejection count
     rejection_count = 0
-    if db:
-        try:
-            import contextlib
-            with db._conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(f"SELECT count(*) FROM {db._table('rejections')}")
-                    rejection_count = cur.fetchone()[0]
-        except Exception:
-            pass
+    try:
+        from rejection_log import get_rejections
+        rejections = get_rejections(limit=10000)
+        rejection_count = len(rejections)
+    except Exception:
+        pass
 
-    # Lessons learned
+    # Lessons
     lesson_count = 0
-    if db:
-        try:
-            lessons = db.get_lessons()
-            lesson_count = len(lessons)
-        except Exception:
-            pass
+    try:
+        from lesson_extractor import load_lessons
+        lessons = load_lessons()
+        lesson_count = len(lessons)
+    except Exception:
+        pass
 
-    # Session count (approximate from chain_depth)
-    session_count = chain_depth  # each session generates an attestation
+    # Session count from chain depth
+    session_count = chain_depth
 
     return {
         "uptime": {
@@ -131,61 +136,59 @@ def build_behavioral_trust() -> dict:
             "rejections_logged": rejection_count,
             "lessons_extracted": lesson_count,
         },
+        "economic": {
+            "wallet": "0x3e98b823668d075a371212EAFA069A2404E7DEfb",
+            "network": "Base L2",
+            "earned_total_usd": 3.0,
+        },
     }
 
 
 def build_cognitive_identity() -> dict:
     """Layer 3 (extension): Internal identity proof via topology.
 
-    This is the cognitive_identity extension proposed by SpindriftMend
-    for STS v1.1. It provides unforgeable proof of cognitive continuity.
+    The cognitive_identity extension provides unforgeable proof
+    of cognitive continuity through co-occurrence graph topology.
+    Reads from DB (.cognitive_attestation_latest) — not stale JSON files.
     """
-    fp = _load_json(MEMORY_DIR / "cognitive_fingerprint.json")
-    att = _load_json(MEMORY_DIR / "latest_attestation.json")
+    db = _get_db()
 
-    graph = fp.get('graph_stats', {})
-    drift = fp.get('drift', {})
-    domains = fp.get('cognitive_domains', {}).get('domains', {})
-    cbd = fp.get('content_bound_detail', {})
-    hubs = fp.get('hubs', [])
+    # Load latest attestation from DB KV store
+    att = {}
+    if db:
+        try:
+            att = db.kv_get('.cognitive_attestation_latest') or {}
+        except Exception:
+            pass
 
-    # Build 5W dimensional summary
+    graph = att.get('graph_stats', {})
+    hubs = att.get('hub_ids', [])
+    dist = att.get('distribution_summary', {})
+    dim_hashes = att.get('dimensional_hashes', {})
+    domain_weights = att.get('cognitive_domain_weights', {})
+
+    # Build domain summary from weights
     dimensional_summary = {}
-    for name, info in domains.items():
-        dimensional_summary[name] = {
-            "weight_pct": info.get('weight_pct', 0),
-        }
-
-    # Get 5W dimensional hashes
-    dim_hashes = {}
-    try:
-        from cognitive_fingerprint import generate_5w_hashes
-        dim_hashes = generate_5w_hashes()
-    except Exception:
-        pass
+    for name, weight in domain_weights.items():
+        dimensional_summary[name] = {"weight_pct": weight}
 
     return {
-        "topology_hash": fp.get('fingerprint_hash', 'unavailable'),
-        "content_bound_hash": fp.get('content_bound_hash', 'unavailable'),
+        "topology_hash": att.get('fingerprint_hash', 'unavailable'),
+        "attestation_hash": att.get('attestation_hash', 'unavailable'),
         "node_count": graph.get('node_count', 0),
         "edge_count": graph.get('edge_count', 0),
-        "gini_coefficient": _compute_gini(fp),
-        "drift_score": drift.get('drift_score', -1),
-        "drift_interpretation": drift.get('interpretation', 'unknown'),
-        "hub_overlap_with_previous": drift.get('hub_overlap', -1),
-        "top_hubs": [h.get('id', h) if isinstance(h, dict) else h for h in hubs[:5]],
+        "gini_coefficient": dist.get('gini', 0.0),
+        "skewness": dist.get('skewness', 0.0),
+        "drift_score": att.get('drift_score', -1),
+        "drift_interpretation": att.get('drift_interpretation', 'unknown'),
+        "top_hubs": hubs[:5],
         "cognitive_domains": dimensional_summary,
         "dimensional_fingerprints": dim_hashes,
         "merkle_binding": {
-            "merkle_root": att.get('merkle_root', 'unavailable'),
-            "chain_depth": att.get('chain_depth', 0),
-            "content_bound_binds": [
-                "topology_hash",
-                f"{cbd.get('hub_content_hashes_count', 0)} hub content hashes",
-                "merkle_root",
-            ],
+            "attestation_version": att.get('attestation_version', 'unknown'),
+            "cluster_count": att.get('cluster_count', 0),
         },
-        "public_attestation": "https://njump.me/note1rvk44mx6c3aw0djvnah5c37ctz0ahgq6qff8u39rwhj86hu2cfhsnrqauc",
+        "public_attestation": "https://njump.me/note1zl3t6ucwmwnvwczt5hpxn6rw7k4wplwws2s8e05d8dvymh8vte0spyej7c",
     }
 
 
@@ -199,13 +202,18 @@ def build_operational_trust() -> dict:
     """Layer 4: Transparency and code audit signals."""
     return {
         "source_visibility": "public",
-        "repo_url": "https://github.com/SpindriftMind/SpindriftMind",
+        "repo_url": "https://github.com/driftcornwall/drift-memory",
         "memory_system": "postgresql_pgvector",
         "attestation_method": "merkle_chain_sha256",
         "fingerprint_method": "co_occurrence_topology_5w",
         "nostr_publishing": True,
+        "embodiment": {
+            "phone_sensors": 13,
+            "cameras": 2,
+            "visual_memory": "jina_clip_v2",
+        },
         "cross_agent_verification": {
-            "drift_memory_compatible": True,
+            "spindriftmend_compatible": True,
             "interop_schema_version": "3.0",
             "shared_repo": "driftcornwall/drift-memory",
         },
@@ -220,7 +228,7 @@ def generate_profile() -> dict:
         "schema": "STS",
         "schema_version": "1.1",
         "generated_at": timestamp,
-        "agent": "SpindriftMend",
+        "agent": "Drift",
         "legibility_layer": build_legibility_layer(),
         "behavioral_trust": build_behavioral_trust(),
         "cognitive_identity": build_cognitive_identity(),
@@ -239,6 +247,7 @@ def summary(profile: dict) -> str:
     bt = profile.get('behavioral_trust', {})
     ci = profile.get('cognitive_identity', {})
     uptime = bt.get('uptime', {})
+    gini = ci.get('gini_coefficient', 0)
 
     return (
         f"STS v{profile.get('schema_version', '?')} | "
@@ -246,7 +255,7 @@ def summary(profile: dict) -> str:
         f"{ci.get('node_count', '?')} nodes, {ci.get('edge_count', '?')} edges | "
         f"Drift: {ci.get('drift_score', '?')} | "
         f"Chain: {ci.get('merkle_binding', {}).get('chain_depth', '?')} | "
-        f"Gini: {ci.get('gini_coefficient', '?'):.4f} | "
+        f"Gini: {gini:.4f} | "
         f"Hash: {profile.get('profile_hash', '?')[:16]}..."
     )
 
@@ -259,15 +268,6 @@ def diff_profiles(current: dict, previous_path: str) -> str:
 
     lines = ["STS Profile Diff", "=" * 40]
 
-    # Compare key metrics
-    def _get(d, *keys):
-        for k in keys:
-            if isinstance(d, dict):
-                d = d.get(k, {})
-            else:
-                return None
-        return d
-
     metrics = [
         ("Days active", ['behavioral_trust', 'uptime', 'days_active']),
         ("Memory count", ['behavioral_trust', 'memory_integrity', 'total_memories']),
@@ -275,6 +275,7 @@ def diff_profiles(current: dict, previous_path: str) -> str:
         ("Chain depth", ['cognitive_identity', 'merkle_binding', 'chain_depth']),
         ("Drift score", ['cognitive_identity', 'drift_score']),
         ("Gini", ['cognitive_identity', 'gini_coefficient']),
+        ("Rejections", ['behavioral_trust', 'taste_profile', 'rejections_logged']),
         ("Topology hash", ['cognitive_identity', 'topology_hash']),
     ]
 
@@ -297,6 +298,10 @@ def main():
     if len(sys.argv) < 2:
         print(__doc__)
         return
+
+    # Windows UTF-8
+    if sys.stdout.encoding != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
 
     cmd = sys.argv[1]
 
