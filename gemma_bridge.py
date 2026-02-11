@@ -161,7 +161,9 @@ def scan_dead_memories(limit: int = 20) -> dict:
 
     # Find dead memories (low recall, sorted by session age)
     db = get_db()
-    rows = db.list_memories(type_filter=['active', 'core'])
+    rows_core = db.list_memories(type_='core', limit=500)
+    rows_active = db.list_memories(type_='active', limit=2000)
+    rows = rows_core + rows_active
     candidates = []
     for row in rows:
         metadata, content = db_to_file_metadata(row)
