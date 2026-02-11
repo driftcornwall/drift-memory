@@ -373,12 +373,14 @@ def cmd_status():
         idx = sm.update_index()
         total_contacts = idx.get('total_contacts', 0)
         active_week = idx.get('active_week', 0)
-        import json
-        replies_file = MEMORY_ROOT / "social" / "my_replies.json"
+        from db_adapter import get_db as _get_db_social
         reply_count = 0
-        if replies_file.exists():
-            data = json.loads(replies_file.read_text(encoding='utf-8'))
-            reply_count = len(data.get('replies', {}))
+        _sdb = _get_db_social()
+        _replies_data = _sdb.kv_get('.social_my_replies')
+        if _replies_data:
+            import json
+            _replies_data = json.loads(_replies_data) if isinstance(_replies_data, str) else _replies_data
+            reply_count = len(_replies_data.get('replies', {}))
         print(f"    Contacts: {total_contacts} | Active this week: {active_week} | Replies tracked: {reply_count}")
     except Exception as e:
         _ensure_stdout()
@@ -509,7 +511,6 @@ def cmd_health():
         ("brain_visualizer", "Graph visualization"),
         ("feed_quality", "Feed quality filter"),
         ("memory_interop", "Memory import/export"),
-        ("edge_provenance", "Edge provenance tracking"),
         ("temporal_calibration", "Temporal calibration"),
         ("experiment_compare", "Experiment comparison"),
         ("experiment_delta", "Experiment snapshots"),

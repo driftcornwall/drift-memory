@@ -13,9 +13,6 @@ MEMORY_ROOT = Path(__file__).parent
 CORE_DIR = MEMORY_ROOT / "core"
 ACTIVE_DIR = MEMORY_ROOT / "active"
 ARCHIVE_DIR = MEMORY_ROOT / "archive"
-SESSION_FILE = MEMORY_ROOT / ".session_state.json"
-PENDING_COOCCURRENCE_FILE = MEMORY_ROOT / ".pending_cooccurrence.json"
-
 ALL_DIRS = [CORE_DIR, ACTIVE_DIR, ARCHIVE_DIR]
 
 # --- Shared configuration constants (used by multiple peer modules) ---

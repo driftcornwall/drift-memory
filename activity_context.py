@@ -192,8 +192,8 @@ def classify_session() -> dict:
     Classify the current session's activity context.
 
     Reads from:
-    - .session_platforms.json (which platforms were accessed)
-    - .session_state.json (which memories were recalled → their tags)
+    - DB KV .session_platforms (which platforms were accessed)
+    - DB KV .session_state (which memories were recalled → their tags)
 
     Returns:
         {

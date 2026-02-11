@@ -40,7 +40,6 @@ from merkle_attestation import generate_attestation
 
 CREDENTIALS_FILE = Path.home() / ".config" / "nostr" / "drift-credentials.json"
 MEMORY_DIR = Path(__file__).parent
-NOSTR_HISTORY_FILE = MEMORY_DIR / "nostr_attestations.json"
 
 RELAYS = [
     "wss://relay.damus.io",
@@ -80,22 +79,27 @@ def load_or_create_keys() -> Keys:
 
 
 def load_history() -> list[dict]:
-    """Load Nostr attestation history."""
-    if NOSTR_HISTORY_FILE.exists():
-        try:
-            with open(NOSTR_HISTORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, ValueError):
-            pass
+    """Load Nostr attestation history from DB."""
+    try:
+        from db_adapter import get_db
+        data = get_db().kv_get('.nostr_history')
+        if data:
+            import json as _json
+            return _json.loads(data) if isinstance(data, str) else data
+    except Exception:
+        pass
     return []
 
 
 def save_history_entry(entry: dict) -> None:
-    """Append an entry to Nostr attestation history."""
+    """Append an entry to Nostr attestation history in DB."""
     history = load_history()
     history.append(entry)
-    with open(NOSTR_HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2)
+    try:
+        from db_adapter import get_db
+        get_db().kv_set('.nostr_history', history)
+    except Exception:
+        pass
 
 
 def _load_attestation_data() -> tuple[dict, dict, dict]:

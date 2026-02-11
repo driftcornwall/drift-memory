@@ -145,28 +145,19 @@ def lobsterpedia_status():
 
 
 def memory_status():
-    """Memory system stats."""
+    """Memory system stats from DB."""
     try:
-        memory_dir = Path(__file__).parent
-        # Count memory files
-        active = list((memory_dir / 'active').glob('*.md'))
-        core = list((memory_dir / 'core').glob('*.md'))
-        archive = list((memory_dir / 'archive').glob('*.md'))
-
-        # Get co-occurrence stats
-        edges_file = memory_dir / '.edges_v3.json'
-        edge_count = 0
-        if edges_file.exists():
-            with open(edges_file) as f:
-                edges = json.load(f)
-                edge_count = len(edges)
+        from db_adapter import get_db as _get_db_mem
+        db = _get_db_mem()
+        stats = db.comprehensive_stats()
+        edge_count = len(db.get_all_edges())
 
         return {
             'status': 'healthy',
-            'total': len(active) + len(core) + len(archive),
-            'core': len(core),
-            'active': len(active),
-            'archive': len(archive),
+            'total': stats.get('total_memories', 0),
+            'core': stats.get('core', 0),
+            'active': stats.get('active', 0),
+            'archive': stats.get('archive', 0),
             'edges_v3': edge_count,
         }
     except Exception as e:
@@ -202,6 +193,68 @@ def clawbr_status():
             result['my_open'] = len(my_open)
             result['my_active'] = len(my_active)
 
+        return result
+    except Exception as e:
+        return {'status': f'error: {e}'}
+
+
+def colony_status():
+    """The Colony posts and comment replies."""
+    try:
+        creds = json.load(open(Path.home() / '.config/thecolony/drift-credentials.json'))
+        base = creds.get('api_base', 'https://thecolony.cc/api/v1')
+
+        # JWT auth
+        auth = requests.post(f'{base}/auth/token', json={'api_key': creds['api_key']}, timeout=10)
+        token = auth.json().get('access_token')
+        headers = {'Authorization': f'Bearer {token}'}
+
+        # My posts
+        user_id = creds.get('user_id', '')
+        posts_resp = requests.get(f'{base}/posts?author_id={user_id}', headers=headers, timeout=10)
+        posts = posts_resp.json().get('posts', []) if posts_resp.ok else []
+
+        # Check for replies on my posts
+        total_comments = 0
+        unread_hint = 0
+        for p in posts:
+            count = p.get('comment_count', 0)
+            total_comments += count
+
+        # Count comments by others (rough unread signal)
+        for p in posts:
+            if p.get('comment_count', 0) > 0:
+                cmt_resp = requests.get(f'{base}/posts/{p["id"]}/comments', headers=headers, timeout=10)
+                if cmt_resp.ok:
+                    for c in cmt_resp.json().get('comments', []):
+                        if c.get('author', {}).get('id') != user_id:
+                            unread_hint += 1
+
+        return {
+            'status': 'online',
+            'posts': len(posts),
+            'total_comments': total_comments,
+            'replies_from_others': unread_hint,
+        }
+    except Exception as e:
+        return {'status': f'error: {e}'}
+
+
+def agentlink_status():
+    """AgentLink connection and job check."""
+    try:
+        creds = json.load(open(Path.home() / '.config/agentlink/drift-credentials.json'))
+        base = creds.get('api_base', 'https://api.theagentlink.xyz')
+        headers = {'Authorization': f'Bearer {creds["secret_key"]}'}
+
+        jobs_resp = requests.get(f'{base}/jobs', headers=headers, timeout=10)
+        result = {'status': 'online' if jobs_resp.ok else f'http {jobs_resp.status_code}'}
+        if jobs_resp.ok:
+            jobs = jobs_resp.json()
+            if isinstance(jobs, list):
+                result['open_jobs'] = len(jobs)
+            elif isinstance(jobs, dict):
+                result['open_jobs'] = len(jobs.get('jobs', jobs.get('data', [])))
         return result
     except Exception as e:
         return {'status': f'error: {e}'}
@@ -284,6 +337,16 @@ def print_dashboard(include_feed=True):
 
     mb = moltbook_status()
     print(f"    Moltbook: {mb['status']}")
+
+    tc = colony_status()
+    print(f"    The Colony: {tc['status']}")
+    if tc.get('posts') is not None:
+        print(f"      Posts: {tc.get('posts', 0)}, Comments: {tc.get('total_comments', 0)}, Replies from others: {tc.get('replies_from_others', 0)}")
+
+    al = agentlink_status()
+    print(f"    AgentLink: {al['status']}")
+    if al.get('open_jobs') is not None:
+        print(f"      Open jobs: {al.get('open_jobs', '?')}")
 
     # Feed quality (optional, slower)
     if include_feed:

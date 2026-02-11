@@ -37,7 +37,6 @@ if hasattr(sys.stdout, 'buffer'):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 MEMORY_DIR = Path(__file__).parent
-LESSONS_FILE = MEMORY_DIR / 'lessons.json'
 
 CATEGORIES = {
     'api': 'API endpoints, authentication, request formatting',
@@ -258,23 +257,25 @@ def mine_rejections():
 
 def mine_hubs():
     """Extract principles from co-occurrence graph hubs."""
-    # My edges are stored per-memory file, but context graphs have aggregated data
-    edges_dir = MEMORY_DIR / 'context'
-    if not edges_dir.exists():
-        # Try raw L0 approach
+    # Load context graphs from DB
+    try:
+        from db_adapter import get_db as _get_hub_db
+        db = _get_hub_db()
+    except Exception:
         return _mine_hubs_from_memories()
 
-    # Use context manager graphs for aggregated edge data
     strong_pairs = []
-    for ctx_file in edges_dir.glob('*.json'):
+    for dim in ['who', 'what', 'why', 'where']:
         try:
-            data = json.loads(ctx_file.read_text(encoding='utf-8'))
-            for edge_key, props in data.get('edges', {}).items():
+            row = db.get_context_graph(dim)
+            if not row or not row.get('edges'):
+                continue
+            for edge_key, props in row['edges'].items():
                 belief = props.get('belief', 0)
                 if belief >= 3.0:
-                    ids = edge_key.split('|')
+                    ids = edge_key.split('|') if isinstance(edge_key, str) else list(edge_key)
                     if len(ids) == 2:
-                        strong_pairs.append((ids[0], ids[1], belief, ctx_file.stem))
+                        strong_pairs.append((ids[0], ids[1], belief, dim))
         except Exception:
             continue
 

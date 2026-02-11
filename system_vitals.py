@@ -23,8 +23,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MEMORY_ROOT = Path(__file__).parent
-VITALS_LOG = MEMORY_ROOT / ".vitals_log.json"
-CONTEXT_DIR = MEMORY_ROOT / "context"
 
 STALL_THRESHOLD = 5
 DECLINE_THRESHOLD = 3

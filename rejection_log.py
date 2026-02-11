@@ -530,11 +530,10 @@ def cmd_attest() -> None:
         print(f"  {reason}: {count}")
     print()
 
-    # Save attestation
-    attest_file = MEMORY_DIR / "taste_attestation.json"
-    with open(attest_file, 'w', encoding='utf-8') as f:
-        json.dump(attestation, f, indent=2)
-    print(f"Saved to: {attest_file}")
+    # Save attestation to DB
+    from db_adapter import get_db as _get_db_taste
+    _get_db_taste().kv_set('taste_attestation', attestation)
+    print(f"Saved to DB: taste_attestation")
 
 
 if __name__ == '__main__':

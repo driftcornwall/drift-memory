@@ -3,7 +3,7 @@
 Context Manager -- 5W Multi-Graph Projection Engine
 
 Phase 1 of Multi-Graph Architecture (RFC: GitHub Issue #19).
-Materializes 5 dimensional views from L0 canonical graph (.edges_v3.json).
+Materializes 5 dimensional views from L0 canonical graph (PostgreSQL edges table).
 
 Dimensions:
   WHO   - contact-weighted (which memories co-fire around the same people)
@@ -14,7 +14,7 @@ Dimensions:
   BRIDGE - cross-dimensional connections
 
 Design principles:
-  - L0 (.edges_v3.json) is the single source of truth
+  - L0 (PostgreSQL edges table) is the single source of truth
   - Context graphs are materialized views -- rebuilt, never written independently
   - Each W-dimension uses existing context modules for classification
 
