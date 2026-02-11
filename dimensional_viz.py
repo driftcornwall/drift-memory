@@ -11,7 +11,6 @@ Usage:
     python dimensional_viz.py --open         # Generate and open the image
 """
 
-import json
 import sys
 import math
 from pathlib import Path
@@ -19,8 +18,6 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 MEMORY_DIR = Path(__file__).parent
-CONTEXT_DIR = MEMORY_DIR / "context"
-DIM_FINGERPRINT = MEMORY_DIR / ".dimensional_fingerprints.json"
 OUTPUT_PATH = MEMORY_DIR / "dimensional_overlay.png"
 MULTIPLES_PATH = MEMORY_DIR / "dimensional_multiples.png"
 
@@ -51,43 +48,49 @@ HUB_GLOW_LAYERS = [
 
 
 def load_dimension(name):
-    """Load a dimension's context graph."""
-    if name == 'when':
-        edges = {}
-        hubs = []
-        for sub in ['warm', 'cool']:
-            path = CONTEXT_DIR / f"when_{sub}.json"
-            if path.exists():
-                data = json.loads(path.read_text(encoding='utf-8'))
-                for k, v in data.get('edges', {}).items():
-                    if k not in edges or v.get('belief', 0) > edges[k].get('belief', 0):
-                        edges[k] = v
-                hubs.extend(data.get('hubs', []))
-        return edges, list(dict.fromkeys(hubs))[:10]
+    """Load a dimension's context graph from DB."""
+    try:
+        from db_adapter import get_db
+        db = get_db()
+        if name == 'when':
+            edges = {}
+            hubs = []
+            for sub in ['warm', 'cool']:
+                row = db.get_context_graph('when', sub)
+                if row and row.get('edges'):
+                    for k, v in row['edges'].items():
+                        if k not in edges or v.get('belief', 0) > edges[k].get('belief', 0):
+                            edges[k] = v
+                    hubs.extend(row.get('hubs', []))
+            return edges, list(dict.fromkeys(hubs))[:10]
 
-    path = CONTEXT_DIR / f"{name}.json"
-    if not path.exists():
+        row = db.get_context_graph(name, '')
+        if not row or not row.get('edges'):
+            return {}, []
+        return row['edges'], row.get('hubs', [])[:10]
+    except Exception:
         return {}, []
-    data = json.loads(path.read_text(encoding='utf-8'))
-    return data.get('edges', {}), data.get('hubs', [])[:10]
 
 
 def load_gini_values():
-    """Load per-dimension Gini from dimensional fingerprints."""
-    if not DIM_FINGERPRINT.exists():
+    """Load per-dimension Gini from DB."""
+    try:
+        from db_adapter import get_db
+        data = get_db().kv_get('.dimensional_fingerprints')
+        if not data:
+            return {}
+        dims = data.get('dimensions', {})
+        result = {}
+        for key, info in dims.items():
+            dist = info.get('distribution', {})
+            gini = dist.get('gini')
+            if gini is not None:
+                dim_name = key.split('_')[0] if key.startswith('when') else key
+                if dim_name not in result:
+                    result[dim_name] = gini
+        return result
+    except Exception:
         return {}
-    data = json.loads(DIM_FINGERPRINT.read_text(encoding='utf-8'))
-    dims = data.get('dimensions', {})
-    result = {}
-    for key, info in dims.items():
-        dist = info.get('distribution', {})
-        gini = dist.get('gini')
-        if gini is not None:
-            # Map 'when_warm'/'when_cool' back to 'when'
-            dim_name = key.split('_')[0] if key.startswith('when') else key
-            if dim_name not in result:
-                result[dim_name] = gini
-    return result
 
 
 def build_combined_graph():

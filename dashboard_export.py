@@ -1,81 +1,77 @@
 """Export cognitive graph data for interactive dashboard."""
 import sys
-import os
 import json
-import math
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 from datetime import datetime, timezone
 
 sys.stdout.reconfigure(encoding='utf-8')
 
 MEMORY_ROOT = Path(__file__).parent
-CONTEXT_DIR = MEMORY_ROOT / 'context'
-EDGES_FILE = MEMORY_ROOT / '.edges_v3.json'
 OUTPUT_DIR = MEMORY_ROOT / 'dashboard'
-DIRS = ['core', 'active', 'archive']
 
 
 def load_memories():
-    """Load all memory metadata."""
-    memories = {}
-    for d in DIRS:
-        path = MEMORY_ROOT / d
-        if not path.is_dir():
-            continue
-        for f in path.iterdir():
-            if not f.suffix == '.md':
-                continue
-            mid = f.stem
-            content = f.read_text(encoding='utf-8', errors='replace')
-            lines = content.strip().split('\n')
+    """Load all memory metadata from DB."""
+    try:
+        from db_adapter import get_db
+        db = get_db()
+        raw = db.list_memories(limit=2000)
+        memories = {}
+        for mem in raw:
+            mid = mem.get('id', '')
+            content = mem.get('content', '')
+            lines = content.strip().split('\n') if content else []
             title = lines[0][:100] if lines else mid
-            tags = []
-            domain = None
-            for line in lines:
-                if line.startswith('--tags'):
-                    tags = [t.strip() for t in line.replace('--tags', '').strip().split(',') if t.strip()]
-                if line.startswith('--domain'):
-                    domain = line.replace('--domain', '').strip()
             memories[mid] = {
                 'id': mid,
                 'title': title.lstrip('#').strip(),
-                'tags': tags,
-                'type': d,
-                'domain': domain
+                'tags': mem.get('tags', []) or [],
+                'type': mem.get('type', 'active'),
+                'domain': None,
             }
-    return memories
+        return memories
+    except Exception:
+        return {}
 
 
 def load_edges():
-    """Load v3 edges."""
-    if not EDGES_FILE.exists():
+    """Load edges from DB."""
+    try:
+        from db_adapter import get_db
+        db = get_db()
+        all_edges = db.get_all_edges()
+        edges = {}
+        for key, data in all_edges.items():
+            parts = key.split('|') if isinstance(key, str) else list(key)
+            if len(parts) == 2:
+                edges[tuple(parts)] = {
+                    'count': 1,
+                    'belief': data.get('belief', 1.0),
+                    'last_seen': data.get('last_updated', ''),
+                }
+        return edges
+    except Exception:
         return {}
-    with open(EDGES_FILE, 'r', encoding='utf-8') as f:
-        raw = json.load(f)
-    edges = {}
-    for key, data in raw.items():
-        parts = key.split('|') if isinstance(key, str) else list(key)
-        if len(parts) == 2:
-            edges[tuple(parts)] = data
-    return edges
 
 
 def load_dimension_graph(name):
-    """Load a 5W dimension graph."""
-    path = CONTEXT_DIR / f'{name}.json'
-    if not path.exists():
+    """Load a 5W dimension graph from DB."""
+    try:
+        from db_adapter import get_db
+        db = get_db()
+        row = db.get_context_graph(name)
+        if not row or not row.get('edges'):
+            return {}
+        edge_data = row['edges']
+        result = {}
+        for key, data in edge_data.items():
+            parts = key.split('|') if isinstance(key, str) else list(key)
+            if len(parts) == 2:
+                result[tuple(parts)] = data
+        return result
+    except Exception:
         return {}
-    with open(path, 'r', encoding='utf-8') as f:
-        raw = json.load(f)
-    # Structure is {meta, edges, hubs}
-    edge_data = raw.get('edges', raw)
-    result = {}
-    for key, data in edge_data.items():
-        parts = key.split('|') if isinstance(key, str) else list(key)
-        if len(parts) == 2:
-            result[tuple(parts)] = data
-    return result
 
 
 def compute_graph_stats(edges):
@@ -196,18 +192,14 @@ def build_export():
 
     print('[6/6] Loading rejection stats...')
     rejection_stats = {'total': 0, 'categories': {}}
-    rej_file = MEMORY_ROOT / '.rejection_log.json'
-    if rej_file.exists():
-        try:
-            with open(rej_file, 'r', encoding='utf-8') as f:
-                rejections = json.load(f)
-            rejection_stats['total'] = len(rejections)
-            cats = Counter()
-            for r in rejections:
-                cats[r.get('category', 'unknown')] += 1
-            rejection_stats['categories'] = dict(cats.most_common(10))
-        except Exception:
-            pass
+    try:
+        from db_adapter import get_db
+        db = get_db()
+        # Use comprehensive_stats which includes rejection count
+        stats_db = db.comprehensive_stats()
+        rejection_stats['total'] = stats_db.get('rejections', 0)
+    except Exception:
+        pass
 
     # Domain breakdown
     domain_counts = Counter()
@@ -228,14 +220,13 @@ def build_export():
 
     # Temporal trajectory from fingerprint history
     trajectory = []
-    fp_file = MEMORY_ROOT / '.fingerprint_history.json'
-    if fp_file.exists():
-        try:
-            with open(fp_file, 'r', encoding='utf-8') as f:
-                fp_history = json.load(f)
+    try:
+        from db_adapter import get_db
+        fp_history = get_db().kv_get('.fingerprint_history')
+        if fp_history:
             seen_ts = set()
             for entry in fp_history:
-                ts = entry.get('timestamp', '')[:13]  # hour granularity dedup
+                ts = entry.get('timestamp', '')[:13]
                 if ts in seen_ts:
                     continue
                 seen_ts.add(ts)
@@ -247,8 +238,8 @@ def build_export():
                     'skewness': entry.get('skewness', 0),
                     'drift': entry.get('drift_score', 0)
                 })
-        except Exception:
-            pass
+    except Exception:
+        pass
     print(f'  Trajectory points: {len(trajectory)}')
 
     # Assemble export

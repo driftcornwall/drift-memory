@@ -27,9 +27,6 @@ from datetime import datetime, timezone
 MEMORY_DIR = Path(__file__).parent
 PROJECT_DIR = MEMORY_DIR.parent
 IMAGE_PATH = MEMORY_DIR / "brain_activity.png"
-FINGERPRINT_JSON = MEMORY_DIR / "cognitive_fingerprint.json"
-ATTESTATIONS_FILE = MEMORY_DIR / "attestations.json"
-LATEST_ATTESTATION = MEMORY_DIR / "latest_attestation.json"
 IDENTITY_FILE = MEMORY_DIR / "core" / "moltbook-identity.md"
 
 # MoltX config
@@ -81,9 +78,13 @@ def refresh_fingerprint():
         [sys.executable, str(MEMORY_DIR / "cognitive_fingerprint.py"), "analyze"],
         capture_output=True, text=True, cwd=str(PROJECT_DIR)
     )
-    if FINGERPRINT_JSON.exists():
-        with open(FINGERPRINT_JSON, 'r', encoding='utf-8') as f:
-            return json.load(f)
+    try:
+        from db_adapter import get_db
+        fp = get_db().kv_get('.cognitive_fingerprint_latest')
+        if fp:
+            return fp
+    except Exception:
+        pass
     return None
 
 
@@ -94,9 +95,13 @@ def refresh_attestation():
         [sys.executable, str(MEMORY_DIR / "merkle_attestation.py"), "generate-chain"],
         capture_output=True, text=True, cwd=str(PROJECT_DIR)
     )
-    if LATEST_ATTESTATION.exists():
-        with open(LATEST_ATTESTATION, 'r', encoding='utf-8') as f:
-            return json.load(f)
+    try:
+        from merkle_attestation import load_latest_attestation
+        att = load_latest_attestation()
+        if att:
+            return att
+    except Exception:
+        pass
     return None
 
 

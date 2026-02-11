@@ -16,14 +16,12 @@ Usage:
     python brain_visualizer.py --top N      # Only show top N connected nodes
 """
 
-import json
 import argparse
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
 
 MEMORY_DIR = Path(__file__).parent
-EDGES_FILE = MEMORY_DIR / ".edges_v3.json"
 OUTPUT_DIR = MEMORY_DIR / "visualizations"
 
 # Color schemes
@@ -50,42 +48,34 @@ ACTIVITY_COLORS = {
 
 
 def load_edges() -> dict:
-    """Load edges from v3 format."""
-    if not EDGES_FILE.exists():
+    """Load edges from PostgreSQL co-occurrence table."""
+    try:
+        from db_adapter import get_db
+        db = get_db()
+        raw = db.get_all_edges()  # Returns {id1|id2: edge_data}
+        edges = {}
+        for key, value in raw.items():
+            if '|' in key:
+                pair = tuple(key.split('|'))
+                edges[pair] = value
+        return edges
+    except Exception:
         return {}
-
-    with open(EDGES_FILE, 'r', encoding='utf-8') as f:
-        raw = json.load(f)
-
-    # Convert string keys back to tuples
-    edges = {}
-    for key, value in raw.items():
-        if '|' in key:
-            pair = tuple(key.split('|'))
-            edges[pair] = value
-
-    return edges
 
 
 def get_node_metadata(memory_id: str) -> dict:
-    """Get metadata for a memory node."""
-    for subdir in ['core', 'active', 'archive']:
-        dir_path = MEMORY_DIR / subdir
-        if not dir_path.exists():
-            continue
-        for f in dir_path.glob(f"*-{memory_id}.md"):
-            try:
-                with open(f, 'r', encoding='utf-8') as file:
-                    content = file.read()
-                    # Parse YAML frontmatter
-                    if content.startswith('---'):
-                        end = content.find('---', 3)
-                        if end > 0:
-                            import yaml
-                            metadata = yaml.safe_load(content[3:end])
-                            return metadata or {}
-            except Exception:
-                pass
+    """Get metadata for a memory node from DB."""
+    try:
+        from db_adapter import get_db
+        mem = get_db().get_memory(memory_id)
+        if mem:
+            return {
+                'tags': mem.get('tags', []),
+                'type': mem.get('type', 'active'),
+                'id': mem.get('id', memory_id),
+            }
+    except Exception:
+        pass
     return {}
 
 
