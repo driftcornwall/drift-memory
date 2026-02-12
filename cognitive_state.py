@@ -50,9 +50,10 @@ EVIDENCE_SCALE = 3.0
 EVIDENCE_DECAY = 0.98
 
 # Mean reversion: adds pseudo-counts biased toward default mean each event.
-# Prevents runaway drift. 0.10 calibrated to match old equilibrium of ~0.20
-# for a dimension receiving constant negative deltas.
-MEAN_REVERSION_STRENGTH = 0.10
+# Prevents runaway drift. 0.15 tuned session 18: curiosity was stuck at 0.28
+# because success events (-0.05 each) vastly outnumber novelty events.
+# 0.10 wasn't enough pull toward 0.5 to keep curiosity healthy.
+MEAN_REVERSION_STRENGTH = 0.15
 
 # Parameter clamps
 MIN_PARAM = 0.5    # Prevent degenerate distributions
