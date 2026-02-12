@@ -251,7 +251,6 @@ def process_pending_cooccurrence() -> int:
         db.kv_set('.pending_cooccurrence', None)
         return 0
 
-    import psycopg2.extras
     total_pairs = 0
     total_memories = 0
 
@@ -261,21 +260,29 @@ def process_pending_cooccurrence() -> int:
             continue
 
         total_memories += len(retrieved)
-        print(f"Processing {len(retrieved)} pending memories from session {session_data.get('session_id', '?')[:19]}...")
+        session_id = session_data.get('session_id', '')
+        agent = session_data.get('agent', get_agent_name())
+        print(f"Processing {len(retrieved)} pending memories from session {session_id[:19]}...")
 
         pairs_updated = 0
-        with db._conn() as conn:
-            with conn.cursor() as cur:
-                for i, id1 in enumerate(retrieved):
-                    for id2 in retrieved[i + 1:]:
-                        for memory_id, other_id in [(id1, id2), (id2, id1)]:
-                            cur.execute(f"""
-                                INSERT INTO {db._table('co_occurrences')} (memory_id, other_id, count)
-                                VALUES (%s, %s, 1)
-                                ON CONFLICT (memory_id, other_id)
-                                DO UPDATE SET count = {db._table('co_occurrences')}.count + 1
-                            """, (memory_id, other_id))
-                        pairs_updated += 1
+        for i, id1 in enumerate(retrieved):
+            for id2 in retrieved[i + 1:]:
+                existing = db.get_edge(id1, id2)
+                belief = (existing.get('belief', 0.0) if existing else 0.0) + 1.0
+                db.upsert_edge(
+                    id1, id2,
+                    belief=belief,
+                    platform_context=existing.get('platform_context', {}) if existing else {},
+                    activity_context=existing.get('activity_context', {}) if existing else {},
+                    topic_context=existing.get('topic_context', {}) if existing else {},
+                )
+                db.add_observation(
+                    id1, id2,
+                    source_type='deferred_recall',
+                    session_id=session_id,
+                    agent=agent,
+                )
+                pairs_updated += 1
 
         total_pairs += pairs_updated
 
