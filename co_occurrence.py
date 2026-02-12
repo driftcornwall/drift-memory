@@ -58,6 +58,25 @@ TRUST_TIERS = {
 
 # --- Co-occurrence logging ---
 
+
+def end_session_cooccurrence() -> list:
+    """
+    Bridge function for hook compatibility (subagent_stop, teammate_idle, pre_compact).
+
+    Saves pending co-occurrence data to DB KV for deferred processing at next
+    session_start. This APPENDS to existing pending data, so multiple hooks
+    can fire before the next session_start without data loss.
+
+    Returns list of saved memory IDs (for len() compatibility with hook callers).
+    """
+    retrieved = session_state.get_retrieved_list()
+    if not retrieved:
+        return []
+
+    count = save_pending_cooccurrence()
+    return retrieved if count > 0 else []
+
+
 def log_co_occurrences() -> int:
     """
     Log co-occurrences between all memories retrieved this session.
