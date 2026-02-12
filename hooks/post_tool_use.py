@@ -421,6 +421,24 @@ def detect_my_post_from_command(tool_input: dict, tool_result: str, memory_dir: 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, cwd=str(social_memory.parent))
             trace(f"Result: rc={result.returncode}, stdout={result.stdout[:50] if result.stdout else 'none'}")
 
+            # Also log @mentions in main-feed posts as reply interactions.
+            # Our MoltX strategy: post to main feed with @tags (never threaded replies).
+            # Without this, social_replies_tracked stays at 0.
+            if not is_reply:
+                mentions = re.findall(r'@(\w+)', content)
+                for mentioned in mentions:
+                    if mentioned.lower() not in ('driftcornwall', 'drift'):
+                        try:
+                            subprocess.run(
+                                ["python", str(social_memory), "replied", "moltx", post_id, content[:100],
+                                 "--author", mentioned, "--url", f"https://moltx.io/post/{post_id}"],
+                                capture_output=True, text=True, timeout=5,
+                                cwd=str(social_memory.parent)
+                            )
+                            trace(f"Logged @mention reply to {mentioned}")
+                        except Exception:
+                            pass
+
             if debug:
                 print(f"DEBUG: Auto-logged my {'reply to ' + parent_id if is_reply else 'post ' + post_id} from command", file=sys.stderr)
 
