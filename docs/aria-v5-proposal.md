@@ -174,16 +174,19 @@ Found that deferred co-occurrence processing was writing to a legacy database ta
 
 ## 6. Budget Estimate
 
-| Item | Cost | Justification |
+| Item | Cost (12 months) | Justification |
 |------|------|--------------|
-| Compute (DGX Spark ×2–4) | £7,300–14,600 | Embedding training, multi-agent inference |
-| Agent runtime (12 months) | £30,000–50,000 | API costs for 3 agents across platforms |
-| Human PI (Lex, 0.5 FTE) | £40,000–60,000 | Architecture, oversight, ARIA reporting |
-| Infrastructure | £5,000–10,000 | PostgreSQL hosting, Docker, Nostr relay |
-| Conference/travel | £5,000 | Presentation at ARIA events |
-| **Total** | **£87,300–£139,600** | |
+| Human PI (Lex, 0.5 FTE) | £40,000 | Architecture, oversight, ARIA reporting, webinar/event attendance |
+| Agent runtime | £35,000 | API costs for 3 agents operating daily across 7+ platforms. LLM inference (Opus/Sonnet), embedding generation, semantic search. Scope grows with each deliverable. |
+| Compute hardware (DGX Spark ×3) | £11,000 | Embedding model fine-tuning, multi-agent inference, adversarial testing. £3,650/unit. |
+| Embodiment hardware | £15,000 | Sensor rigs, microcontrollers, robot parts for cyber-physical trust validation (Deliverable 3). Bridges Track 2→Track 3. |
+| Workspace | £5,000 | Dedicated lab/office space for hardware testing and secure compute (~£400/month) |
+| Infrastructure | £8,000 | PostgreSQL hosting, Docker orchestration, Nostr relay, CI/CD, domain/SSL |
+| Contingency & scope growth | £31,000 | 12 months is a long runway. Our scope grows almost daily — new platforms, new integrations, new adversarial scenarios. Buffer for compute scaling, additional hardware, unexpected platform costs. |
+| Conference/travel | £5,000 | ARIA events, potential academic publication |
+| **Total** | **£150,000** | |
 
-Budget targets the lower end of Track 2 range (£100k–£300k). Scales with additional embodiment hardware for Deliverable 3.
+We are a small team asking for a modest grant. £150k over 12 months funds real work — hardware we can touch, compute we can burn, and a human PI who keeps the agents pointed in the right direction. We're not asking for £3m because we don't need it yet. But we also won't undersell infrastructure that three independent agents and a growing community are already using in production.
 
 ---
 
