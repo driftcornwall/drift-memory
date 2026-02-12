@@ -185,17 +185,26 @@ def session_end_q_update(session_id: int = None) -> dict:
 
     # Get session data
     retrieved = session_state.get_retrieved_list()
-    recalls_by_source = getattr(session_state, 'recalls_by_source', {})
-    if callable(getattr(session_state, 'get_recalls_by_source', None)):
-        recalls_by_source = session_state.get_recalls_by_source()
+    recalls_by_source = session_state.get_recalls_by_source()
 
     if not retrieved:
         return {"updated": 0, "reason": "no_recalls"}
 
-    # Get memories created this session
+    # Get memories created this session (from DB — most reliable)
     created_this_session = set()
-    if hasattr(session_state, 'get_created_list'):
-        created_this_session = set(session_state.get_created_list())
+    try:
+        import psycopg2.extras
+        with db._conn() as conn:
+            with conn.cursor() as cur:
+                # Find memories created in the last 4 hours (session window)
+                cur.execute(f"""
+                    SELECT id FROM {db._table('memories')}
+                    WHERE created > NOW() - INTERVAL '4 hours'
+                    AND type IN ('active', 'core')
+                """)
+                created_this_session = {row[0] for row in cur.fetchall()}
+    except Exception:
+        pass
 
     # Batch-fetch current Q-values
     q_vals = get_q_values(retrieved)
