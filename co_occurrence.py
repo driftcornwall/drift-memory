@@ -289,6 +289,26 @@ def process_pending_cooccurrence() -> int:
     # Clear pending data
     db.kv_set('.pending_cooccurrence', None)
 
+    # Auto-detect curiosity conversions: check if any processed memory went from 0 edges to >0
+    try:
+        from curiosity_engine import log_curiosity_conversion, _load_curiosity_log
+        curiosity_log = _load_curiosity_log(db)
+        recent_targets = set()
+        for entry in curiosity_log.get('surfaced', [])[-5:]:
+            for t in entry.get('targets', []):
+                recent_targets.add(t.get('id', '') if isinstance(t, dict) else t)
+        all_processed = set()
+        for session_data in sessions:
+            all_processed.update(session_data.get('retrieved', []))
+        converted = recent_targets & all_processed
+        for mem_id in converted:
+            neighbors = db.get_neighbors(mem_id)
+            if neighbors:
+                log_curiosity_conversion(mem_id, len(neighbors))
+                print(f"  Curiosity conversion: {mem_id} -> {len(neighbors)} edges")
+    except Exception:
+        pass  # Non-critical, don't break the main pipeline
+
     print(f"Processed co-occurrences: {len(sessions)} session(s), {total_memories} memories, {total_pairs} pairs updated")
     return total_pairs
 
