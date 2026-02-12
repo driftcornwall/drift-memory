@@ -666,14 +666,16 @@ def get_priming_modifier() -> dict:
 
     # Effective curiosity: mean PLUS uncertainty bonus
     # "I'm uncertain about my curiosity" -> explore to resolve it
-    effective_curiosity = cur_mean + cur_unc * 0.3
+    # v2.0.1: Increased uncertainty weight from 0.3 to 0.4 and lowered thresholds.
+    # With 88% isolated memories, we were in a dead zone where neither condition fired.
+    effective_curiosity = cur_mean + cur_unc * 0.4
 
     curiosity_targets = 0
     if effective_curiosity > 0.6 and focus_mean < 0.4:
         curiosity_targets = 3
-    elif effective_curiosity > 0.5:
+    elif effective_curiosity > 0.45:
         curiosity_targets = 1
-    elif cur_unc > 0.7:
+    elif cur_unc > 0.6:
         # High uncertainty even with low mean -> explore anyway
         curiosity_targets = 2
 
