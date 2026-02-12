@@ -99,11 +99,15 @@ def update_episodic_memory(memory_dir: Path, transcript_path: str = None, debug:
     - Looks for milestone keywords (shipped, launched, deployed, etc.)
     - Only writes to episodic if there's something meaningful to record
 
-    DEDUP GUARD (2026-02-04):
-    - Filters out milestone sentences that already appear in the episodic file
-    - Prevents the same milestones from being appended on every session-end
+    DEDUP GUARD v2 (2026-02-12):
+    - Uses DB KV hash store (.episodic_seen_hashes) for persistent dedup
+    - Old approach checked file content, but manual cleanup removed the
+      lines that the guard used for matching → infinite re-append loop
+    - Hash-based dedup survives file edits, cleanup, and reformatting
     """
     try:
+        import hashlib
+
         # Only run if we have a transcript to analyze
         if not transcript_path:
             if debug:
@@ -138,7 +142,6 @@ def update_episodic_memory(memory_dir: Path, transcript_path: str = None, debug:
                 print("DEBUG: No milestones found, skipping episodic update", file=sys.stderr)
             return
 
-        # We have milestones! But first check for duplicates
         episodic_dir = memory_dir / "episodic"
         episodic_dir.mkdir(exist_ok=True)
 
@@ -146,70 +149,64 @@ def update_episodic_memory(memory_dir: Path, transcript_path: str = None, debug:
         session_time = datetime.now().strftime("%H:%M UTC")
         episodic_file = episodic_dir / f"{today}.md"
 
-        # TIME GUARD: Skip if hook already wrote to this file in the last 30 minutes
-        # This prevents duplicate entries from subagent completions triggering the hook
-        if episodic_file.exists():
-            import re
-            existing_text = episodic_file.read_text(encoding='utf-8')
-            # Find all "## Subagent completed" or "## Session End" timestamps
-            time_pattern = re.compile(r'## (?:Subagent completed|Session End) \(~(\d{2}:\d{2}) UTC\)')
-            matches = time_pattern.findall(existing_text)
-            if matches:
-                last_hook_time = matches[-1]  # e.g., "05:23"
-                try:
-                    last_h, last_m = int(last_hook_time.split(':')[0]), int(last_hook_time.split(':')[1])
-                    now_h, now_m = datetime.now().hour, datetime.now().minute
-                    diff_min = (now_h * 60 + now_m) - (last_h * 60 + last_m)
-                    if 0 <= diff_min < 30:
-                        if debug:
-                            print(f"DEBUG: Hook already wrote {diff_min}min ago, skipping", file=sys.stderr)
-                        return
-                except (ValueError, IndexError):
-                    pass
+        # DEDUP GUARD v2: Hash-based dedup via DB KV store
+        # Survives file edits, manual cleanup, and reformatting
+        db = _get_db_for_stats(memory_dir)
+        seen_hashes = set()
+        if db:
+            try:
+                raw = db.kv_get('.episodic_seen_hashes') or []
+                seen_hashes = set(raw) if isinstance(raw, list) else set()
+            except Exception:
+                pass
 
-        # DEDUP GUARD: Read existing content and filter out already-recorded milestones
-        existing_content = ""
-        if episodic_file.exists():
-            existing_content = episodic_file.read_text(encoding='utf-8')
-
-        if existing_content:
-            # Parse milestone_md into individual milestone blocks
-            # Format: "**[keywords]**\n- sentence\n- sentence\n\n"
-            milestone_blocks = []
-            current_block = []
-            for line in milestone_md.split('\n'):
-                if line.startswith('**[') and current_block:
-                    milestone_blocks.append('\n'.join(current_block))
-                    current_block = [line]
-                elif line.strip():
-                    current_block.append(line)
-                elif current_block and not line.startswith('###'):
-                    current_block.append(line)
-            if current_block:
+        # Parse milestone_md into individual blocks
+        milestone_blocks = []
+        current_block = []
+        for line in milestone_md.split('\n'):
+            if line.startswith('**[') and current_block:
                 milestone_blocks.append('\n'.join(current_block))
+                current_block = [line]
+            elif line.strip():
+                current_block.append(line)
+            elif current_block and not line.startswith('###'):
+                current_block.append(line)
+        if current_block:
+            milestone_blocks.append('\n'.join(current_block))
 
-            # Filter: only keep blocks whose "- sentence" lines are NOT already in the file
-            new_blocks = []
-            for block in milestone_blocks:
-                # Extract the actual content lines (- sentence)
-                content_lines = [l.strip() for l in block.split('\n') if l.strip().startswith('- ')]
-                if not content_lines:
-                    continue
-                # A block is "new" if ANY of its content lines are not in the existing file
-                is_new = any(line not in existing_content for line in content_lines)
-                if is_new:
-                    new_blocks.append(block)
+        # Filter: only keep blocks whose content hash hasn't been seen before
+        new_blocks = []
+        new_hashes = []
+        for block in milestone_blocks:
+            content_lines = [l.strip() for l in block.split('\n') if l.strip().startswith('- ')]
+            if not content_lines:
+                continue
+            # Hash the sorted content lines (order-independent dedup)
+            block_hash = hashlib.sha256('\n'.join(sorted(content_lines)).encode()).hexdigest()[:16]
+            if block_hash not in seen_hashes:
+                new_blocks.append(block)
+                new_hashes.append(block_hash)
 
-            if not new_blocks:
-                if debug:
-                    print("DEBUG: All milestones already recorded, skipping", file=sys.stderr)
-                return
+        if not new_blocks:
+            if debug:
+                print("DEBUG: All milestones already seen (hash dedup), skipping", file=sys.stderr)
+            return
 
-            # Reconstruct milestone_md with only new blocks
-            milestone_md = "### Session Milestones (auto-extracted)\n\n" + '\n\n'.join(new_blocks)
+        # Store new hashes in DB KV (append to existing)
+        if db and new_hashes:
+            try:
+                all_hashes = list(seen_hashes | set(new_hashes))
+                # Cap at 500 to prevent unbounded growth (keep most recent)
+                if len(all_hashes) > 500:
+                    all_hashes = all_hashes[-500:]
+                db.kv_set('.episodic_seen_hashes', all_hashes)
+            except Exception:
+                pass
+
+        # Reconstruct milestone_md with only genuinely new blocks
+        milestone_md = "### Session Milestones (auto-extracted)\n\n" + '\n\n'.join(new_blocks)
 
         # Use "Subagent completed" for subagent stops, "Session End" for main session
-        # Check if this is a subagent by looking at input data context
         entry_type = "Subagent completed" if os.environ.get("CLAUDE_CODE_AGENT_ID") else "Session End"
         entry = f"\n## {entry_type} (~{session_time})\n\n{milestone_md}\n"
 
@@ -222,7 +219,7 @@ def update_episodic_memory(memory_dir: Path, transcript_path: str = None, debug:
                 f.write(header + entry)
 
         if debug:
-            print(f"DEBUG: Wrote {len(new_blocks) if existing_content else 'all'} new milestones to {episodic_file}", file=sys.stderr)
+            print(f"DEBUG: Wrote {len(new_blocks)} new milestones ({len(new_hashes)} new hashes) to {episodic_file}", file=sys.stderr)
 
     except Exception as e:
         if debug:
