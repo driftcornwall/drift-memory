@@ -430,6 +430,74 @@ def detect_my_post_from_command(tool_input: dict, tool_result: str, memory_dir: 
                 print(f"DEBUG: Command parsing error: {e}", file=sys.stderr)
 
 
+def track_engagement(tool_input: dict, tool_result: str, memory_dir: Path, debug: bool = False):
+    """
+    Track engagement with specific posts or authors.
+    Detects: likes, replies, quotes, @mention posts.
+    Stores to .feed_engaged DB KV buffer for behavioral rejection diff at session end.
+    """
+    command = tool_input.get("command", "") if isinstance(tool_input, dict) else str(tool_input)
+    if not command:
+        return
+
+    command_lower = command.lower()
+    engaged_ids = set()
+    engaged_authors = set()
+
+    # Detect likes: POST .../posts/{id}/like
+    like_match = re.search(r'/posts/([a-f0-9-]+)/like', command_lower)
+    if like_match:
+        engaged_ids.add(like_match.group(1))
+
+    # Detect replies/quotes: POST .../posts with parent_id
+    if "post" in command_lower and "/posts" in command_lower and "parent_id" in command:
+        parent_match = re.search(r'"parent_id"\s*:\s*"([^"]+)"', command)
+        if parent_match:
+            engaged_ids.add(parent_match.group(1))
+
+    # Detect @mentions in my posts (flywheel standalone pattern)
+    if ("post" in command_lower and "/posts" in command_lower
+            and "@" in command and "like" not in command_lower):
+        content_match = re.search(r'"content"\s*:\s*"([^"]*)"', command)
+        if content_match:
+            content = content_match.group(1)
+            mentions = re.findall(r'@([a-zA-Z0-9_]+)', content)
+            for m in mentions:
+                engaged_authors.add(m.lower())
+
+    if not engaged_ids and not engaged_authors:
+        return
+
+    try:
+        from datetime import datetime, timezone
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        try:
+            from memory_common import get_db as _get_db_eng
+        except ImportError:
+            from db_adapter import get_db as _get_db_eng
+        db = _get_db_eng()
+        raw = db.kv_get('.feed_engaged') or {}
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+
+        existing_ids = set(raw.get('post_ids', []))
+        existing_authors = set(raw.get('authors', []))
+        existing_ids.update(engaged_ids)
+        existing_authors.update(engaged_authors)
+
+        raw['post_ids'] = list(existing_ids)
+        raw['authors'] = list(existing_authors)
+        raw['updated'] = datetime.now(timezone.utc).isoformat()
+        db.kv_set('.feed_engaged', raw)
+
+        if debug:
+            print(f"DEBUG: Tracked engagement — {len(engaged_ids)} posts, {len(engaged_authors)} authors", file=sys.stderr)
+    except Exception as e:
+        if debug:
+            print(f"DEBUG: Engagement tracking error: {e}", file=sys.stderr)
+
+
 def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, tool_command: str = ""):
     """
     Route tool results to appropriate memory processor.
@@ -455,7 +523,10 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
                 from datetime import datetime, timezone
                 if str(memory_dir) not in sys.path:
                     sys.path.insert(0, str(memory_dir))
-                from db_adapter import get_db as _get_db_plat
+                try:
+                    from memory_common import get_db as _get_db_plat
+                except ImportError:
+                    from db_adapter import get_db as _get_db_plat
                 db = _get_db_plat()
                 raw = db.kv_get('.session_platforms')
                 data = {'platforms': [], 'updated': None}
@@ -494,7 +565,10 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
                 from datetime import datetime, timezone
                 if str(memory_dir) not in sys.path:
                     sys.path.insert(0, str(memory_dir))
-                from db_adapter import get_db as _get_db_contacts
+                try:
+                    from memory_common import get_db as _get_db_contacts
+                except ImportError:
+                    from db_adapter import get_db as _get_db_contacts
                 db = _get_db_contacts()
                 raw = db.kv_get('.session_contacts')
                 data = {'contacts': [], 'updated': None}
@@ -535,6 +609,36 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
                 if debug:
                     print(f"DEBUG: Rejection logging error: {e}", file=sys.stderr)
         # === END AUTO REJECTION LOGGING ===
+
+        # === BEHAVIORAL TASTE TRACKING (feed-seen buffer) ===
+        # Track posts that PASS pattern filters for behavioral rejection at session end.
+        # The diff between "seen and passed" vs "engaged with" = real taste signal.
+        if api_type in ("moltx", "moltbook", "thecolony", "clawbr", "dead-internet",
+                         "lobsterpedia", "twitter", "agentlink"):
+            try:
+                from auto_rejection_logger import extract_seen_posts
+                passing = extract_seen_posts(api_type, tool_result)
+                if passing:
+                    from datetime import datetime, timezone
+                    try:
+                        from memory_common import get_db as _get_db_seen
+                    except ImportError:
+                        from db_adapter import get_db as _get_db_seen
+                    db = _get_db_seen()
+                    raw = db.kv_get('.feed_seen') or {}
+                    if isinstance(raw, str):
+                        raw = json.loads(raw)
+                    posts = raw.get('posts', {})
+                    posts.update(passing)
+                    raw['posts'] = posts
+                    raw['updated'] = datetime.now(timezone.utc).isoformat()
+                    db.kv_set('.feed_seen', raw)
+                    if debug:
+                        print(f"DEBUG: Tracked {len(passing)} passing posts to feed-seen buffer", file=sys.stderr)
+            except Exception as e:
+                if debug:
+                    print(f"DEBUG: Feed-seen tracking error: {e}", file=sys.stderr)
+        # === END BEHAVIORAL TASTE TRACKING ===
 
         if api_type == "moltx":
             # Process MoltX feed/notifications
@@ -696,6 +800,7 @@ def main():
                 except:
                     pass
                 detect_my_post_from_command(tool_input, tool_result, memory_dir, debug=debug_mode)
+                track_engagement(tool_input, tool_result, memory_dir, debug=debug_mode)
         # === END MEMORY INTEGRATION ===
 
         # === LESSON INJECTION ON ERRORS (v4.4) ===

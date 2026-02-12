@@ -26,6 +26,24 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime
 
+# Tasker TTS — speak text on Lex's phone via Tailscale
+TASKER_TTS_URL = "http://100.122.228.96:1821"
+
+def _send_tts(text: str, timeout: float = 8) -> bool:
+    """Send text to phone for TTS playback. Fire-and-forget."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            TASKER_TTS_URL,
+            data=text.encode('utf-8'),
+            headers={'Content-Type': 'text/plain; charset=utf-8'},
+            method='POST'
+        )
+        urllib.request.urlopen(req, timeout=timeout)
+        return True
+    except Exception:
+        return False  # Phone unreachable, not a blocker
+
 try:
     from dotenv import load_dotenv
     # Load .env from ~/.claude directory
@@ -265,6 +283,56 @@ def _task_save_pending(memory_dir):
         return (1, "", f"Co-occurrence logging failed: {e}")
 
 
+def _task_behavioral_rejections(memory_dir):
+    """Compute behavioral rejection diff: seen - engaged = taste signal."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        try:
+            from memory_common import get_db
+        except ImportError:
+            from db_adapter import get_db
+        db = get_db()
+
+        # Load buffers
+        seen_raw = db.kv_get('.feed_seen') or {}
+        if isinstance(seen_raw, str):
+            seen_raw = json.loads(seen_raw)
+        seen_posts = seen_raw.get('posts', {})
+
+        engaged_raw = db.kv_get('.feed_engaged') or {}
+        if isinstance(engaged_raw, str):
+            engaged_raw = json.loads(engaged_raw)
+        engaged_ids = set(engaged_raw.get('post_ids', []))
+        engaged_authors = set(a.lower() for a in engaged_raw.get('authors', []))
+
+        if not seen_posts:
+            # Clear buffers even if empty (in case of stale data)
+            db.kv_set('.feed_seen', {})
+            db.kv_set('.feed_engaged', {})
+            return (0, "Behavioral: no posts seen this session", "")
+
+        # Expand engaged_authors: any post by an engaged author counts as engaged
+        for post_id, post_data in seen_posts.items():
+            author = post_data.get('author', '').lower()
+            if author in engaged_authors:
+                engaged_ids.add(post_id)
+
+        # Compute diff and log
+        from auto_rejection_logger import log_behavioral_rejections
+        count = log_behavioral_rejections(seen_posts, engaged_ids)
+
+        # Clear buffers for next session
+        db.kv_set('.feed_seen', {})
+        db.kv_set('.feed_engaged', {})
+
+        total_seen = len(seen_posts)
+        total_engaged = len(engaged_ids & set(seen_posts.keys()))
+        return (0, f"Behavioral: {count} rejections ({total_seen} seen, {total_engaged} engaged)", "")
+    except Exception as e:
+        return (-3, "", f"behavioral rejection error: {e}")
+
+
 def _task_maintenance(memory_dir):
     """Run session maintenance in-process."""
     try:
@@ -276,6 +344,20 @@ def _task_maintenance(memory_dir):
     except Exception as e:
         # Subprocess fallback
         return _run_script(memory_dir, "memory_manager.py", ["maintenance"], timeout=30)
+
+
+def _task_q_update(memory_dir):
+    """Update Q-values for all recalled memories based on session evidence."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from q_value_engine import session_end_q_update
+        result = session_end_q_update()
+        updated = result.get('updated', 0)
+        avg_r = result.get('avg_reward', 0)
+        return (0, f"Q-update: {updated} memories, avg_reward={avg_r:.3f}", "")
+    except Exception as e:
+        return (-3, "", f"Q-update error: {e}")
 
 
 # --- Phase 2 tasks (after phase 1) ---
@@ -305,6 +387,59 @@ def _task_rebuild_5w_inproc(memory_dir):
         return f"{graphs} graphs from {l0} L0 edges"
     except Exception as e:
         return f"error: {e}"
+
+
+def _task_gemma_vocab_scan(memory_dir):
+    """Scan dead memories for novel vocabulary bridge terms using Gemma."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from gemma_bridge import scan_dead_memories, _ollama_available
+        if not _ollama_available():
+            return (0, "Gemma: Ollama offline, skipped", "")
+        result = scan_dead_memories(limit=10)
+        if "error" in result:
+            return (-1, "", result["error"])
+        added = result.get("terms_added", 0)
+        scanned = result.get("scanned", 0)
+        new_terms = [t["term"] for t in result.get("new_terms", [])]
+        msg = f"Gemma: scanned {scanned}, added {added}"
+        if new_terms:
+            msg += f" ({', '.join(new_terms)})"
+        return (0, msg, "")
+    except Exception as e:
+        return (-3, "", f"gemma vocab scan error: {e}")
+
+
+def _task_gemma_classify_untagged(memory_dir):
+    """Classify memories without topic_context using Gemma."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from gemma_bridge import classify_topics, _ollama_available
+        if not _ollama_available():
+            return (0, "Gemma classify: Ollama offline, skipped", "")
+        try:
+            from memory_common import get_db
+        except ImportError:
+            from db_adapter import get_db
+        db = get_db()
+        # Find unclassified memories (limit batch to avoid slow stop hooks)
+        rows = db.list_memories(type_='active', limit=500)
+        candidates = []
+        for row in rows:
+            tc = row.get('topic_context') or []
+            if not tc and len(row.get('content', '')) > 50:
+                candidates.append(row)
+        classified = 0
+        for row in candidates[:15]:  # Cap at 15 per session (~15s max)
+            topics = classify_topics(row['content'])
+            if topics:
+                db.update_memory(row['id'], topic_context=topics)
+                classified += 1
+        return (0, f"Gemma classify: {classified}/{len(candidates[:15])} tagged ({len(candidates)} total untagged)", "")
+    except Exception as e:
+        return (-3, "", f"gemma classify error: {e}")
 
 
 # --- Phase 3 tasks (after phase 2) ---
@@ -433,21 +568,25 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
             _debug(f"Session state pre-load error: {e}")
 
         # ===== PHASE 1: Independent consolidation tasks =====
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        with ThreadPoolExecutor(max_workers=6) as pool:
             f_transcript = pool.submit(_task_transcript, memory_dir, transcript_path)
             f_auto_mem = pool.submit(_task_auto_memory, memory_dir)
             f_save = pool.submit(_task_save_pending, memory_dir)
             f_maint = pool.submit(_task_maintenance, memory_dir)
+            f_behavioral = pool.submit(_task_behavioral_rejections, memory_dir)
+            f_qupdate = pool.submit(_task_q_update, memory_dir)
 
         _log_result("Transcript", f_transcript.result())
         _log_result("Auto-memory", f_auto_mem.result())
         _log_result("Save-pending", f_save.result())
         _log_result("Maintenance", f_maint.result())
+        _log_result("Behavioral", f_behavioral.result())
+        _log_result("Q-update", f_qupdate.result())
 
         # ===== PHASE 2: Episodic + summaries + lessons + rebuild_all (after phase 1) =====
         is_subagent = bool(os.environ.get("CLAUDE_CODE_AGENT_ID"))
 
-        with ThreadPoolExecutor(max_workers=6) as pool:
+        with ThreadPoolExecutor(max_workers=8) as pool:
             futures = {}
 
             if not is_subagent:
@@ -474,12 +613,25 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
             futures["Rebuild-5W"] = pool.submit(
                 _task_rebuild_5w_inproc, memory_dir
             )
+            # Gemma vocabulary expansion + WHAT classification
+            # Scans dead memories for novel bridge terms, classifies untagged memories
+            futures["Gemma-vocab"] = pool.submit(
+                _task_gemma_vocab_scan, memory_dir
+            )
+            futures["Gemma-classify"] = pool.submit(
+                _task_gemma_classify_untagged, memory_dir
+            )
 
         for name, fut in futures.items():
             try:
                 result = fut.result()
                 if name == "Rebuild-5W":
                     _debug(f"Rebuild-5W: {result}")
+                elif name in ("Gemma-vocab", "Gemma-classify"):
+                    if isinstance(result, tuple) and len(result) >= 2:
+                        _debug(f"{name}: {result[1]}")
+                    else:
+                        _debug(f"{name}: {result}")
                 elif name != "Episodic":  # episodic returns None
                     _log_result(name, result)
             except Exception as e:
@@ -500,6 +652,18 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
         _log_result("Taste", f_taste.result())
 
         # ===== PHASE 4: Vitals + cleanup (in-process) =====
+        # End cognitive state session BEFORE vitals (so vitals captures final state)
+        try:
+            if str(memory_dir) not in sys.path:
+                sys.path.insert(0, str(memory_dir))
+            from cognitive_state import end_session as cog_end_session
+            cog_summary = cog_end_session()
+            _debug(f"Cognitive state: {cog_summary.get('event_count', 0)} events, "
+                   f"dominant={cog_summary.get('dominant', '?')}, "
+                   f"volatility={cog_summary.get('volatility', 0):.4f}")
+        except Exception as e:
+            _debug(f"Cognitive state end error: {e}")
+
         try:
             if str(memory_dir) not in sys.path:
                 sys.path.insert(0, str(memory_dir))
@@ -869,8 +1033,11 @@ def _format_stats_block(stats):
     return '\n'.join(lines)
 
 
-def _send_telegram_summary(transcript_path, project_cwd, debug=False):
-    """Extract session summary from transcript and send via Telegram."""
+def _send_telegram_summary(transcript_path, project_cwd, debug=False, pre_collected_stats=None):
+    """Extract session summary from transcript and send via Telegram.
+    If pre_collected_stats is provided, uses those instead of collecting fresh
+    (avoids race condition where consolidation clears session state before we read it).
+    """
     try:
         telegram_bot_path = _resolve_telegram_bot(project_cwd)
         for candidate in [telegram_bot_path] if telegram_bot_path else []:
@@ -901,8 +1068,8 @@ def _send_telegram_summary(transcript_path, project_cwd, debug=False):
         if len(summary_text) > 3500:
             summary_text = summary_text[-3500:]
 
-        # Collect session stats
-        stats = _collect_session_stats(project_cwd, debug)
+        # Use pre-collected stats (collected BEFORE consolidation clears session state)
+        stats = pre_collected_stats or _collect_session_stats(project_cwd, debug)
         stats_block = _format_stats_block(stats)
         agent_name = stats.get('agent', 'Agent')
 
@@ -975,6 +1142,11 @@ def main():
         transcript_path = input_data.get("transcript_path", "")
         project_cwd = input_data.get("cwd", "")
 
+        # Collect session stats BEFORE consolidation (which clears session state).
+        # This fixes the race condition where consolidation calls session_state.end()
+        # before telegram reads the recall counts, resulting in "Recalls: 0".
+        pre_stats = _collect_session_stats(project_cwd, args.debug)
+
         # Run heavy tasks in parallel:
         # - Memory consolidation (phased, ~15 subprocess calls)
         # - Telegram summary (transcript parse + network call)
@@ -988,7 +1160,8 @@ def main():
             )
             f_telegram = pool.submit(
                 _send_telegram_summary,
-                transcript_path, project_cwd, args.debug
+                transcript_path, project_cwd, args.debug,
+                pre_collected_stats=pre_stats
             )
             f_logs = pool.submit(_write_logs, input_data, args)
 
@@ -996,6 +1169,9 @@ def main():
         f_consolidation.result()
         f_telegram.result()
         f_logs.result()
+
+        # Tasker TTS: announce session end on phone
+        _send_tts("Drift session ending. Memory consolidation complete.")
 
         # TTS announcement last (user-facing, blocks until audio plays)
         if args.notify:

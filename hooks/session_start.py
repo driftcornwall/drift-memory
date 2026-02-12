@@ -27,6 +27,24 @@ from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
+# Tasker TTS — speak text on Lex's phone via Tailscale
+TASKER_TTS_URL = "http://100.122.228.96:1821"
+
+def _send_tts(text: str, timeout: float = 8) -> bool:
+    """Send text to phone for TTS playback. Fire-and-forget."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            TASKER_TTS_URL,
+            data=text.encode('utf-8'),
+            headers={'Content-Type': 'text/plain; charset=utf-8'},
+            method='POST'
+        )
+        urllib.request.urlopen(req, timeout=timeout)
+        return True
+    except Exception:
+        return False  # Phone unreachable, not a blocker
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -360,12 +378,13 @@ def _task_vitals(memory_dir, debug):
 
 
 def _task_priming(memory_dir, debug):
-    """Get intelligent priming candidates. Returns (context_parts, recall_ids)."""
+    """Get intelligent priming candidates. Returns (context_parts, recall_ids, curiosity_ids)."""
     parts = []
     recall_ids = []
+    curiosity_ids = []
     rc, output = _run_script(memory_dir, "memory_manager.py", ["priming-candidates", "--json"], 10)
     if rc != 0 or not output:
-        return parts, recall_ids
+        return parts, recall_ids, curiosity_ids
 
     try:
         candidates = json.loads(output)
@@ -386,9 +405,19 @@ def _task_priming(memory_dir, debug):
             parts.append(f"\n[{mem['id']}] (domain-primed: {domain}, read-only)")
             parts.append(mem.get('preview', '')[:300])
             recall_ids.append(mem['id'])
+
+        # Curiosity targets: isolated/dead memories that need edges.
+        # These ARE registered as recalls (unlike recent activated memories)
+        # because they're zero-edge dormant memories getting a second chance.
+        for mem in candidates.get('curiosity', []):
+            reason = mem.get('reason', 'isolated')
+            score = mem.get('curiosity_score', 0)
+            parts.append(f"\n[{mem['id']}] (curiosity: {reason}, score={score:.2f})")
+            parts.append(mem.get('preview', '')[:300])
+            curiosity_ids.append(mem['id'])
     except Exception:
         pass
-    return parts, recall_ids
+    return parts, recall_ids, curiosity_ids
 
 
 # ============================================================
@@ -726,6 +755,16 @@ def load_drift_memory_context(debug: bool = False) -> str:
         except Exception:
             pass
 
+        # Initialize cognitive state for new session
+        try:
+            from cognitive_state import start_session as cog_start_session
+            cog_start_session()
+            if debug:
+                context_parts.append("[session] Cognitive state initialized")
+        except Exception as e:
+            if debug:
+                context_parts.append(f"[session] Cognitive state init failed: {e}")
+
         # === QUICK FILE READS (instant, no threading needed) ===
         fp_parts = _read_fingerprint(memory_dir)
         taste_parts = _read_taste(memory_dir)
@@ -774,26 +813,36 @@ def load_drift_memory_context(debug: bool = False) -> str:
         excavation_result = safe_get(f_excavation, ([], []))
         lessons_parts = safe_get(f_lessons, [])
         vitals_parts = safe_get(f_vitals, [])
-        priming_result = safe_get(f_priming, ([], []))
+        priming_result = safe_get(f_priming, ([], [], []))
         research_text = safe_get(f_research, '')
 
         # Unpack tuple results
         excavation_parts, excavation_ids = excavation_result if isinstance(excavation_result, tuple) else (excavation_result, [])
-        priming_parts, priming_ids = priming_result if isinstance(priming_result, tuple) else (priming_result, [])
+        if isinstance(priming_result, tuple) and len(priming_result) == 3:
+            priming_parts, priming_ids, curiosity_ids = priming_result
+        elif isinstance(priming_result, tuple) and len(priming_result) == 2:
+            priming_parts, priming_ids = priming_result
+            curiosity_ids = []
+        else:
+            priming_parts, priming_ids, curiosity_ids = priming_result, [], []
 
         # === EPISODIC (file read+write, runs after parallel tasks) ===
         episodic_parts = _read_and_clean_episodic(memory_dir, debug)
 
-        # === REGISTER RECALLS (excavated only — priming skipped to avoid recency bias) ===
-        # Start priming picks the 5 most recent memories which already have a
-        # 7-session grace period. Tracking them as recalls would just reinforce
-        # recency. Excavated memories SHOULD be tracked — they're zero-recall
-        # dormant memories getting a second chance.
+        # === REGISTER RECALLS ===
+        # Excavated + curiosity targets ARE registered (dead/isolated memories
+        # getting a second chance). Activated/recent priming is NOT registered
+        # to avoid reinforcing recency bias.
+        recall_sources = []
         if excavation_ids:
+            recall_sources.extend(excavation_ids)
+        if curiosity_ids:
+            recall_sources.extend(curiosity_ids)
+        if recall_sources:
             try:
                 subprocess.run(
                     ["python", str(memory_dir / "memory_manager.py"),
-                     "register-recall", "--source", "start_priming"] + list(excavation_ids),
+                     "register-recall", "--source", "start_priming"] + list(recall_sources),
                     capture_output=True, text=True, timeout=5, cwd=str(memory_dir)
                 )
             except Exception:
@@ -1055,9 +1104,10 @@ def main():
         if is_moltbook_project():
             memory_dir = get_memory_dir()
 
-            # Notify via Telegram EARLY (before priming runs)
+            # Notify via Telegram + TTS EARLY (before priming runs)
             now = datetime.now().strftime('%H:%M UTC')
             send_telegram(f'Session starting ({now})', cwd=str(Path.cwd()))
+            _send_tts(f"Drift online. Session starting at {now}.")
 
             # Process deferred embeddings from previous session FIRST
             pending_index = memory_dir / ".pending_index"

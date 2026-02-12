@@ -114,24 +114,20 @@ def consolidate_subagent_memory(
                 if debug:
                     print(f"DEBUG: [subagent] Buffer error: {e}", file=sys.stderr)
 
-        # 3. Save pending co-occurrences
-        if memory_manager.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(memory_manager), "save-pending"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    cwd=str(memory_dir),
+        # 3. Save co-occurrences in-process (save-pending was removed in DB migration)
+        try:
+            if str(memory_dir) not in sys.path:
+                sys.path.insert(0, str(memory_dir))
+            from co_occurrence import end_session_cooccurrence
+            result = end_session_cooccurrence()
+            if debug:
+                print(
+                    f"DEBUG: [subagent] co-occurrences saved: {len(result)} new links",
+                    file=sys.stderr,
                 )
-                if debug:
-                    print(
-                        f"DEBUG: [subagent] save-pending: {result.stdout}",
-                        file=sys.stderr,
-                    )
-            except Exception as e:
-                if debug:
-                    print(f"DEBUG: [subagent] save-pending error: {e}", file=sys.stderr)
+        except Exception as e:
+            if debug:
+                print(f"DEBUG: [subagent] co-occurrence error: {e}", file=sys.stderr)
 
         # 4. Update episodic memory with subagent milestones
         if transcript_path and transcript_processor.exists() and os.path.exists(transcript_path):

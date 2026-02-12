@@ -89,8 +89,11 @@ def get_memory_dir() -> Path | None:
 
 
 def get_session_primed_ids(session_id: str) -> set:
-    """Get memory IDs already primed in session_start to avoid duplicates.
-    Uses DB-backed session_state module instead of file reads.
+    """Get memory IDs already primed via prompt/start priming to avoid duplicates.
+    Only deduplicates against start_priming and prompt_priming sources,
+    NOT thought_priming — because thought priming fires on tool calls (agent context)
+    while prompt priming fires on user messages (user context). They serve different
+    purposes and should not block each other.
     """
     try:
         mem_dir = get_memory_dir()
@@ -101,7 +104,12 @@ def get_session_primed_ids(session_id: str) -> set:
             sys.path.insert(0, mem_str)
         import session_state
         session_state.load()
-        return set(session_state.get_retrieved())
+        by_source = session_state.get_recalls_by_source()
+        # Only dedup against these sources, not thought_priming
+        primed = set()
+        for source in ('start_priming', 'prompt_priming'):
+            primed.update(by_source.get(source, []))
+        return primed
     except Exception:
         return set()
 
@@ -177,6 +185,7 @@ def prime_memories_from_prompt(prompt: str, session_id: str) -> str:
         session_state.load()
         for mid in [mem["id"] for mem in relevant]:
             session_state.add_retrieved(mid, "prompt_priming")
+        session_state.save()  # Persist to KV store so stop hook + vitals can read it
     except Exception:
         pass  # Never block prompt for recall registration
 

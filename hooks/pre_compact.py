@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime
 
@@ -39,6 +40,38 @@ def get_memory_dir(cwd: str = None) -> Path:
         if d.exists():
             return d
     return MOLTBOOK_DIRS[0]
+
+
+def _resolve_telegram_bot(cwd=None):
+    """Find the correct telegram_bot.py for the running project."""
+    project_dir = cwd or str(Path.cwd())
+    base = Path("Q:/Codings/ClaudeCodeProjects/LEX")
+
+    if "Moltbook2" in project_dir:
+        own, other = base / "Moltbook2", base / "Moltbook"
+    else:
+        own, other = base / "Moltbook", base / "Moltbook2"
+
+    for proj in [own, other]:
+        for sub in ["telegram_bot.py", "memory/telegram_bot.py"]:
+            p = proj / sub
+            if p.exists():
+                return p
+    return None
+
+
+def send_telegram(text, cwd=None):
+    """Send a short Telegram notification via the correct project's bot."""
+    try:
+        bot = _resolve_telegram_bot(cwd)
+        if bot:
+            subprocess.run(
+                ["python", str(bot), "send", text],
+                timeout=10,
+                capture_output=True,
+            )
+    except Exception:
+        pass  # Never break the hook for a notification
 
 
 def log_pre_compact(input_data):
@@ -84,19 +117,36 @@ def backup_transcript(transcript_path, trigger):
         return None
 
 
+def _run_script(memory_dir, script_name, args, timeout=15):
+    """Run a memory script and return (returncode, stdout, stderr)."""
+    script = memory_dir / script_name
+    if not script.exists():
+        return (-1, "", f"{script_name} not found")
+    try:
+        result = subprocess.run(
+            ["python", str(script)] + args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(memory_dir)
+        )
+        return (result.returncode, result.stdout, result.stderr)
+    except subprocess.TimeoutExpired:
+        return (-2, "", f"{script_name} timed out after {timeout}s")
+    except Exception as e:
+        return (-3, "", str(e))
+
+
 def process_memories_before_compaction(transcript_path: str, cwd: str = None):
     """
     Extract memories from transcript BEFORE compaction destroys them.
+    Parallelized in 2 phases:
 
-    When context compaction fires, thinking blocks and detailed tool
-    results from earlier in the session get compressed into summaries.
-    If we don't extract memories here, those thoughts are lost forever.
+    Phase 1 (parallel): transcript, auto_memory, save-pending
+    Phase 2 (parallel): lesson mining x3
 
     The transcript_processor has hash-based dedup, so running it here
     AND again at session end (stop.py) is safe — no double-counting.
-
-    Also runs save-pending to persist any co-occurrences accumulated
-    during the session so far.
     """
     try:
         project_dir = cwd if cwd else str(Path.cwd())
@@ -107,66 +157,34 @@ def process_memories_before_compaction(transcript_path: str, cwd: str = None):
         if not memory_dir.exists():
             return
 
-        transcript_processor = memory_dir / "transcript_processor.py"
-        memory_manager = memory_dir / "memory_manager.py"
-        auto_memory = memory_dir / "auto_memory_hook.py"
-
-        # 1. Process transcript for thought memories
-        if transcript_path and transcript_processor.exists():
-            try:
-                subprocess.run(
-                    ["python", str(transcript_processor), transcript_path],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    cwd=str(memory_dir)
-                )
-            except Exception:
-                pass
-
-        # 2. Consolidate short-term buffer
-        if auto_memory.exists():
-            try:
-                subprocess.run(
-                    ["python", str(auto_memory), "--stop"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    cwd=str(memory_dir)
-                )
-            except Exception:
-                pass
-
-        # 3. Save pending co-occurrences
-        if memory_manager.exists():
-            try:
-                subprocess.run(
-                    ["python", str(memory_manager), "save-pending"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    cwd=str(memory_dir)
-                )
-            except Exception:
-                pass
-
-        # 4. Mine lessons from ALL sources (v4.5)
-        # Compaction = mid-session checkpoint. New learnings from MEMORY.md edits,
-        # rejection patterns, and co-occurrence hubs should be captured NOW
-        # before context compression potentially loses the reasoning that led to them.
-        lesson_script = memory_dir / "lesson_extractor.py"
-        if lesson_script.exists():
-            for mine_cmd in ["mine-memory", "mine-rejections", "mine-hubs"]:
+        # Phase 1: transcript + consolidation + save-pending (all independent)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = []
+            if transcript_path:
+                futures.append(pool.submit(
+                    _run_script, memory_dir, "transcript_processor.py",
+                    [transcript_path], 30
+                ))
+            futures.append(pool.submit(
+                _run_script, memory_dir, "auto_memory_hook.py", ["--stop"], 10
+            ))
+            # Save co-occurrences in-process (save-pending was removed in DB migration)
+            def _save_cooccurrences(mdir):
                 try:
-                    subprocess.run(
-                        ["python", str(lesson_script), mine_cmd],
-                        capture_output=True,
-                        text=True,
-                        timeout=15,
-                        cwd=str(memory_dir)
-                    )
-                except Exception:
-                    pass
+                    if str(mdir) not in sys.path:
+                        sys.path.insert(0, str(mdir))
+                    from co_occurrence import end_session_cooccurrence
+                    result = end_session_cooccurrence()
+                    return (0, f"Co-occurrences saved: {len(result)} new links", "")
+                except Exception as e:
+                    return (-3, "", f"Co-occurrence error: {e}")
+            futures.append(pool.submit(_save_cooccurrences, memory_dir))
+
+        # Phase 2: lesson mining x3 (after phase 1, all independent)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            pool.submit(_run_script, memory_dir, "lesson_extractor.py", ["mine-memory"], 15)
+            pool.submit(_run_script, memory_dir, "lesson_extractor.py", ["mine-rejections"], 15)
+            pool.submit(_run_script, memory_dir, "lesson_extractor.py", ["mine-hubs"], 15)
 
     except Exception:
         pass  # Never break compaction
@@ -183,33 +201,33 @@ def main():
 
         input_data = json.loads(sys.stdin.read())
 
-        session_id = input_data.get('session_id', 'unknown')
         transcript_path = input_data.get('transcript_path', '')
         trigger = input_data.get('trigger', 'unknown')
-        custom_instructions = input_data.get('custom_instructions', '')
         cwd = input_data.get('cwd', '')
 
-        # Log the pre-compact event
-        log_pre_compact(input_data)
+        # Run log + telegram + memory extraction + backup in parallel
+        # Telegram and logging are independent of memory processing
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            pool.submit(log_pre_compact, input_data)
 
-        # CRITICAL: Process memories before compaction loses them
-        # Thinking blocks and detailed tool results are about to be
-        # compressed into summaries. Extract memories NOW.
-        if transcript_path:
-            process_memories_before_compaction(transcript_path, cwd)
+            now = datetime.now().strftime('%H:%M UTC')
+            pool.submit(
+                send_telegram,
+                f'Context compacting ({now}) — extracting memories before compression',
+                cwd
+            )
 
-        # Create backup if requested
-        backup_path = None
-        if args.backup and transcript_path:
-            backup_path = backup_transcript(transcript_path, trigger)
+            if transcript_path:
+                pool.submit(process_memories_before_compaction, transcript_path, cwd)
 
-        # Provide feedback
+            if args.backup and transcript_path:
+                pool.submit(backup_transcript, transcript_path, trigger)
+
         message = "Pre-compaction memory extraction complete."
         if trigger == "auto":
             message = f"Auto-compaction: memories extracted before compression. {message}"
 
         print(message)
-
         sys.exit(0)
 
     except json.JSONDecodeError:
