@@ -390,6 +390,59 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
             _expl.add_step('gravity_dampening', dampened_count, weight=-0.5,
                            context=f'{dampened_count} results dampened (no key terms in preview)')
 
+    # === HUB DEGREE DAMPENING (from SpindriftMend #27) ===
+    # Structural penalty for high-degree co-occurrence hubs (P90+)
+    # Complements keyword dampening: catches hubs whose preview naturally
+    # contains common terms but are still too general
+    try:
+        from curiosity_engine import _build_degree_map
+        _hub_degree_map = _build_degree_map()
+        if _hub_degree_map:
+            degrees = sorted(_hub_degree_map.values())
+            p90_idx = int(len(degrees) * 0.9)
+            p90_threshold = degrees[p90_idx] if p90_idx < len(degrees) else degrees[-1]
+            max_deg = degrees[-1] if degrees else 1
+            hub_dampened = 0
+            for result in results:
+                if result.get('entity_injected') or result.get('entity_match'):
+                    continue  # Entity-matched memories exempt
+                deg = _hub_degree_map.get(result['id'], 0)
+                if deg > p90_threshold and max_deg > p90_threshold:
+                    # Scale from 1.0 at P90 to 0.6 at max degree
+                    ratio = (deg - p90_threshold) / (max_deg - p90_threshold)
+                    penalty = 1.0 - 0.4 * ratio  # Floor at 0.6x
+                    result['score'] *= max(0.6, penalty)
+                    result['hub_dampened'] = True
+                    hub_dampened += 1
+            if _expl and hub_dampened:
+                _expl.add_step('hub_degree_dampening', hub_dampened, weight=-0.3,
+                               context=f'{hub_dampened} high-degree hubs dampened (P90={p90_threshold})')
+    except Exception:
+        pass
+
+    # === Q-VALUE RE-RANKING (Phase 5: MemRL) ===
+    # Blend similarity score with learned Q-value utility
+    try:
+        from q_value_engine import get_q_values, get_lambda, Q_RERANKING_ENABLED
+        if Q_RERANKING_ENABLED:
+            result_ids = [r['id'] for r in results]
+            q_vals = get_q_values(result_ids)
+            lam = get_lambda()
+            q_reranked = 0
+            for result in results:
+                q = q_vals.get(result['id'], 0.5)
+                if q != 0.5:  # Only rerank trained memories
+                    old_score = result['score']
+                    result['score'] = lam * old_score + (1 - lam) * q
+                    result['q_value'] = q
+                    result['q_lambda'] = lam
+                    q_reranked += 1
+            if _expl and q_reranked:
+                _expl.add_step('q_value_reranking', q_reranked, weight=0.4,
+                               context=f'{q_reranked} results reranked (lambda={lam:.3f})')
+    except Exception:
+        pass
+
     # === RESOLUTION BOOSTING ===
     for result in results:
         tags = load_memory_tags(result["id"])

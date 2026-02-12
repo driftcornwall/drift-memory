@@ -210,6 +210,15 @@ def build_registry():
         Command("kg-path", "dashboard", "Find shortest typed path", "knowledge_graph", "path", "<id1> <id2>"),
     ]
 
+    # === Q-VALUE LEARNING (MemRL) ===
+    cmds += [
+        Command("q-stats", "dashboard", "Q-value distribution", "q_value_engine", "stats"),
+        Command("q-top", "dashboard", "Top memories by Q-value", "q_value_engine", "top", "[N]"),
+        Command("q-bottom", "dashboard", "Bottom memories by Q-value", "q_value_engine", "bottom", "[N]"),
+        Command("q-history", "dashboard", "Q trajectory for memory", "q_value_engine", "history", "<id>"),
+        Command("q-convergence", "dashboard", "Q-value convergence report", "q_value_engine", "convergence"),
+    ]
+
     # === VISUALIZATION ===
     if cfg.get("has_dimensional_viz"):
         cmds += [
@@ -556,6 +565,7 @@ def cmd_health():
         ("explanation", "Explainability interface"),
         ("cognitive_state", "Cognitive state tracker"),
         ("knowledge_graph", "Knowledge graph (typed relationships)"),
+        ("q_value_engine", "Q-value learning (MemRL)"),
     ]
 
     # Social subpackage

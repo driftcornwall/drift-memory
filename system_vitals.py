@@ -357,6 +357,23 @@ def collect_vitals():
         m["cognitive_events"] = 0
         m["cognitive_volatility"] = 0.0
 
+    # --- Q-VALUE METRICS (Phase 5: MemRL) ---
+    try:
+        from q_value_engine import q_stats, get_lambda
+        qs = q_stats()
+        m["q_total_memories"] = qs.get('total', 0)
+        m["q_trained"] = qs.get('trained', 0)
+        m["q_high"] = qs.get('high_q', 0)
+        m["q_low"] = qs.get('low_q', 0)
+        m["q_avg"] = qs.get('avg_q', 0.5)
+        m["q_lambda"] = round(get_lambda(), 4)
+    except Exception:
+        m["q_trained"] = 0
+        m["q_high"] = 0
+        m["q_low"] = 0
+        m["q_avg"] = 0.5
+        m["q_lambda"] = 0.5
+
     return snapshot
 
 
@@ -702,6 +719,7 @@ def format_snapshot(snapshot, compact=False):
             f"iso={m.get('graph_isolated_memories', '?')}",
             f"kg={m.get('typed_edges_total', 0)}",
             f"cog={m.get('cognitive_dominant', '?')}({m.get('cognitive_events', 0)}ev)",
+            f"Q={m.get('q_trained', 0)}/{m.get('q_total_memories', '?')}(avg={m.get('q_avg', '?')})",
         ]
         return f"[{ts[:19]}] {' | '.join(parts)}"
 
@@ -769,6 +787,10 @@ def format_snapshot(snapshot, compact=False):
         f"  Curiosity: {m.get('cognitive_curiosity', '?')} | Confidence: {m.get('cognitive_confidence', '?')} | Focus: {m.get('cognitive_focus', '?')}",
         f"  Arousal: {m.get('cognitive_arousal', '?')} | Satisfaction: {m.get('cognitive_satisfaction', '?')}",
         f"  Dominant: {m.get('cognitive_dominant', '?')} | Events: {m.get('cognitive_events', '?')} | Volatility: {m.get('cognitive_volatility', '?')}",
+        "",
+        "Q-VALUE LEARNING (MemRL)",
+        f"  Trained: {m.get('q_trained', '?')}/{m.get('q_total_memories', '?')} | High Q (>=0.7): {m.get('q_high', '?')} | Low Q (<=0.3): {m.get('q_low', '?')}",
+        f"  Avg Q: {m.get('q_avg', '?')} | Dynamic LAMBDA: {m.get('q_lambda', '?')}",
     ]
     return "\n".join(lines)
 
