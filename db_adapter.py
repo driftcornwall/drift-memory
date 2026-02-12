@@ -67,6 +67,8 @@ def db_to_file_metadata(row: dict) -> tuple[dict, str]:
         'contact_context': row.get('contact_context', []),
         'platform_context': row.get('platform_context', []),
         'co_occurrences': {},  # Legacy field — now in separate table
+        'importance': row.get('importance', 0.5),
+        'freshness': row.get('freshness', 1.0),
     }
 
     # Merge extra_metadata back into metadata

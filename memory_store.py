@@ -82,6 +82,62 @@ def create_memory(
     return memory_id
 
 
+def calculate_importance(content: str, tags: list[str], emotion: float,
+                         caused_by: list[str]) -> float:
+    """
+    Calculate intrinsic importance of a memory at creation time.
+
+    Importance is a slow-moving score reflecting the memory's inherent value,
+    independent of recency. It evolves slowly over the memory's lifetime.
+
+    Components:
+    - Tag salience: certain tags indicate higher importance
+    - Causal depth: memories with causes or effects are more connected
+    - Emotional signal: higher emotion = stickier memory
+    - Content richness: longer, more detailed content scores higher
+    """
+    score = 0.0
+
+    # Tag salience (0-0.3): specific tags indicate importance
+    HIGH_VALUE_TAGS = {
+        'critical', 'milestone', 'shipped', 'identity', 'values',
+        'architecture', 'breakthrough', 'resolution', 'fix', 'api',
+        'procedural', 'lesson', 'dossier', 'attestation',
+    }
+    MEDIUM_VALUE_TAGS = {
+        'insight', 'social', 'collaboration', 'economic', 'decision',
+        'problem_solved', 'connection',
+    }
+    tag_set = set(t.lower() for t in (tags or []))
+    high_matches = len(tag_set & HIGH_VALUE_TAGS)
+    medium_matches = len(tag_set & MEDIUM_VALUE_TAGS)
+    tag_score = min(0.3, high_matches * 0.15 + medium_matches * 0.08)
+    score += tag_score
+
+    # Causal depth (0-0.2): connected memories are more important
+    causal_count = len(caused_by) if caused_by else 0
+    causal_score = min(0.2, causal_count * 0.1)
+    score += causal_score
+
+    # Emotional signal (0-0.3): higher emotion = stickier
+    emotion_score = emotion * 0.3
+    score += emotion_score
+
+    # Content richness (0-0.2): longer content tends to be more detailed
+    word_count = len(content.split())
+    if word_count > 100:
+        richness = 0.2
+    elif word_count > 50:
+        richness = 0.15
+    elif word_count > 20:
+        richness = 0.1
+    else:
+        richness = 0.05
+    score += richness
+
+    return round(min(1.0, max(0.1, score)), 3)
+
+
 def store_memory(
     content: str,
     tags: list[str] = None,
@@ -130,6 +186,9 @@ def store_memory(
 
     detected_entities = detect_entities(content, tags)
 
+    # Calculate intrinsic importance at creation
+    importance = calculate_importance(content, tags, emotion, all_causal)
+
     db = get_db()
     db.insert_memory(
         memory_id=memory_id,
@@ -138,6 +197,8 @@ def store_memory(
         tags=tags,
         entities=detected_entities or {},
         emotional_weight=emotion,
+        importance=importance,
+        freshness=1.0,  # New memories start fully fresh
         extra_metadata={
             'caused_by': all_causal,
             'leads_to': [],
@@ -176,6 +237,26 @@ def store_memory(
             threading.Thread(target=_classify_bg, args=(memory_id, content), daemon=True).start()
     except Exception:
         pass  # Classification failure shouldn't block store
+
+    # Fire cognitive state event
+    try:
+        from cognitive_state import process_event
+        process_event('memory_stored')
+    except Exception:
+        pass
+
+    # Auto-extract typed relationships (background thread — avoids blocking store)
+    try:
+        import threading
+        def _extract_bg(mid):
+            try:
+                from knowledge_graph import extract_from_memory
+                extract_from_memory(mid)
+            except Exception:
+                pass
+        threading.Thread(target=_extract_bg, args=(memory_id,), daemon=True).start()
+    except Exception:
+        pass
 
     return memory_id, display_name
 

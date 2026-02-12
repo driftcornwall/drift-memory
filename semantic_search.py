@@ -260,7 +260,33 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
         print("Failed to get query embedding", file=sys.stderr)
         return []
 
+    # === COGNITIVE STATE THRESHOLD ADJUSTMENT ===
+    # High curiosity lowers threshold (explore more), high confidence raises it
+    _cog_modifier = 0.0
+    try:
+        from cognitive_state import get_search_threshold_modifier, process_event
+        _cog_modifier = get_search_threshold_modifier()
+        threshold = max(0.1, min(0.5, threshold + _cog_modifier))
+    except Exception:
+        pass
+
     results = []
+
+    # Start explanation
+    try:
+        from explanation import ExplanationBuilder
+        _expl = ExplanationBuilder('semantic_search', 'search')
+        _expl.set_inputs({
+            'query': query[:200],
+            'bridged_query': bridged_query[:200] if bridged_query != query else '(unchanged)',
+            'limit': limit,
+            'threshold': threshold,
+            'dimension': dimension,
+            'sub_view': sub_view,
+            'cognitive_threshold_modifier': _cog_modifier,
+        })
+    except Exception:
+        _expl = None
 
     # pgvector search — DB-only, no file fallback
     from db_adapter import get_db
@@ -275,6 +301,10 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                 "preview": (row.get('preview') or row.get('content', ''))[:150],
                 "path": f"db://{row.get('type', 'active')}/{row['id']}.md"
             })
+
+    if _expl:
+        _expl.add_step('pgvector_candidates', len(results), weight=1.0,
+                        context=f'{len(rows)} raw rows, {len(results)} above threshold {threshold}')
 
     # === ENTITY INDEX INJECTION (Fix for WHO dimension) ===
     # When query mentions a known contact, inject their memories into candidates
@@ -327,6 +357,12 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     except Exception:
         pass
 
+    if _expl:
+        injected_count = sum(1 for r in results if r.get('entity_injected'))
+        if injected_count:
+            _expl.add_step('entity_injection', injected_count, weight=0.5,
+                           context=f'{injected_count} memories injected from entity index')
+
     # === GRAVITY WELL DAMPENING ===
     # Penalize memories where query key terms don't appear in the preview
     # This catches hub memories that match everything via embedding similarity
@@ -348,12 +384,82 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                 result["score"] *= 0.5
                 result["dampened"] = True
 
+    if _expl:
+        dampened_count = sum(1 for r in results if r.get('dampened'))
+        if dampened_count:
+            _expl.add_step('gravity_dampening', dampened_count, weight=-0.5,
+                           context=f'{dampened_count} results dampened (no key terms in preview)')
+
     # === RESOLUTION BOOSTING ===
     for result in results:
         tags = load_memory_tags(result["id"])
         if tags and RESOLUTION_TAGS.intersection(set(t.lower() for t in tags)):
             result["score"] *= RESOLUTION_BOOST
             result["boosted"] = True
+
+    if _expl:
+        boosted_count = sum(1 for r in results if r.get('boosted'))
+        if boosted_count:
+            _expl.add_step('resolution_boost', boosted_count, weight=0.25,
+                           context=f'{boosted_count} results boosted ({RESOLUTION_BOOST}x) for resolution tags')
+
+    # === IMPORTANCE/FRESHNESS SCORING ===
+    # Detect query context and apply importance/freshness weights to boost scores
+    try:
+        from decay_evolution import calculate_activation
+        from db_adapter import get_db as _imp_db, db_to_file_metadata as _imp_meta
+
+        # Detect context from query keywords
+        recent_keywords = {'today', 'recent', 'latest', 'just', 'last', 'new', 'current'}
+        foundational_keywords = {'core', 'fundamental', 'always', 'identity', 'values', 'principle'}
+        query_words = set(query.lower().split())
+
+        if query_words & recent_keywords:
+            imp_context = 'recent'
+        elif query_words & foundational_keywords:
+            imp_context = 'foundational'
+        else:
+            imp_context = 'general'
+
+        _db = _imp_db()
+        for result in results:
+            row = _db.get_memory(result['id'])
+            if row:
+                meta, _ = _imp_meta(row)
+                activation = calculate_activation(meta, context=imp_context)
+                # Blend cosine similarity with activation: 70% cosine, 30% activation
+                result['score'] = 0.7 * result['score'] + 0.3 * activation
+                result['activation'] = activation
+                result['imp_context'] = imp_context
+    except Exception:
+        pass  # Don't break search if activation scoring fails
+
+    if _expl and any(r.get('activation') for r in results):
+        _expl.add_step('importance_freshness', imp_context, weight=0.3,
+                       context=f'context={imp_context}, blended 70% cosine + 30% activation')
+
+    # === CURIOSITY BOOST (Phase 2: sparse-region exploration) ===
+    # Memories with few co-occurrence edges get a small boost to encourage
+    # the system to build connections in sparse graph regions
+    try:
+        from curiosity_engine import _build_degree_map, LOW_DEGREE_THRESHOLD
+        _degree_map = _build_degree_map()
+        if _degree_map:
+            max_degree = max(_degree_map.values())
+            curiosity_boosted = 0
+            for result in results:
+                degree = _degree_map.get(result['id'], 0)
+                if degree <= LOW_DEGREE_THRESHOLD and max_degree > 0:
+                    # Small boost: up to 10% for completely isolated memories
+                    boost = 0.10 * (1.0 - degree / max(LOW_DEGREE_THRESHOLD + 1, 1))
+                    result['score'] *= (1.0 + boost)
+                    result['curiosity_boosted'] = True
+                    curiosity_boosted += 1
+            if _expl and curiosity_boosted:
+                _expl.add_step('curiosity_boost', curiosity_boosted, weight=0.1,
+                               context=f'{curiosity_boosted} results boosted for sparse-graph exploration')
+    except Exception:
+        pass  # Don't break search if curiosity engine unavailable
 
     # === AUTO-DETECT DIMENSION from session context ===
     if not dimension and results:
@@ -384,6 +490,33 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                 result['dim_boosted'] = True
                 result['dim_degree'] = degree
 
+    if _expl and dimension:
+        dim_boosted = sum(1 for r in results if r.get('dim_boosted'))
+        if dim_boosted:
+            _expl.add_step('dimensional_boost', dim_boosted, weight=0.1,
+                           context=f'{dim_boosted} results boosted in {dimension} dimension')
+
+    # === TYPED EDGE EXPANSION (Phase 4: knowledge graph enrichment) ===
+    # For top results, check if they have causal/resolves relationships
+    # and flag them for context (don't add new results, just annotate)
+    try:
+        from knowledge_graph import get_edges_from
+        kg_annotated = 0
+        for result in results[:20]:  # Only check top 20 candidates
+            edges = get_edges_from(result['id'], 'causes')
+            if edges:
+                result['kg_causes'] = len(edges)
+                kg_annotated += 1
+            res_edges = get_edges_from(result['id'], 'resolves')
+            if res_edges:
+                result['kg_resolves'] = len(res_edges)
+                kg_annotated += 1
+        if _expl and kg_annotated:
+            _expl.add_step('knowledge_graph_annotation', kg_annotated, weight=0.05,
+                           context=f'{kg_annotated} results annotated with typed edges')
+    except Exception:
+        pass  # Don't break search if knowledge graph unavailable
+
     # Sort by (boosted) score descending
     results.sort(key=lambda x: x["score"], reverse=True)
     top_results = results[:limit]
@@ -396,6 +529,29 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                 recall_memory(r["id"])
         except Exception:
             pass
+
+    # === COGNITIVE STATE: Fire search event ===
+    try:
+        from cognitive_state import process_event
+        if top_results:
+            process_event('search_success')
+        else:
+            process_event('search_failure')
+    except Exception:
+        pass
+
+    # Save explanation
+    if _expl:
+        if _cog_modifier != 0.0:
+            _expl.add_step('cognitive_threshold', _cog_modifier, weight=0.1,
+                           context=f'Threshold adjusted by {_cog_modifier:+.3f} from cognitive state')
+        _expl.set_output({
+            'result_count': len(top_results),
+            'top_ids': [r['id'] for r in top_results[:5]],
+            'top_scores': [round(r['score'], 4) for r in top_results[:5]],
+            'total_candidates': len(results),
+        })
+        _expl.save()
 
     return top_results
 

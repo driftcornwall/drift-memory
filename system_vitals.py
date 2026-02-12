@@ -230,6 +230,133 @@ def collect_vitals():
                             if isinstance(r, dict) and r.get('source') == 'twitter')
     m["twitter_rejections"] = twitter_rejections
 
+    # --- IMPORTANCE/FRESHNESS METRICS (Phase 1a) ---
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT
+                    AVG(importance) as avg_imp,
+                    AVG(freshness) as avg_fresh,
+                    COUNT(*) FILTER (WHERE importance > 0.7 AND freshness < 0.5) as old_important,
+                    COUNT(*) FILTER (WHERE importance > 0.7) as important_total
+                FROM {db._table('memories')}
+                WHERE type IN ('core', 'active')
+                AND importance IS NOT NULL
+            """)
+            row = cur.fetchone()
+            m["importance_mean"] = round(float(row[0] or 0.5), 3)
+            m["freshness_mean"] = round(float(row[1] or 1.0), 3)
+            old_important = row[2] or 0
+            important_total = row[3] or 0
+            m["old_important_count"] = old_important
+            m["old_important_recall_rate"] = round(
+                1 - (old_important / important_total), 3
+            ) if important_total > 0 else 1.0
+
+    # Importance Gini coefficient (measures distribution inequality)
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT importance FROM {db._table('memories')}
+                WHERE type IN ('core', 'active')
+                AND importance IS NOT NULL
+                ORDER BY importance
+            """)
+            imp_values = [float(r[0]) for r in cur.fetchall()]
+    if imp_values and len(imp_values) > 1:
+        n = len(imp_values)
+        total = sum(imp_values)
+        if total > 0:
+            cumulative = sum((2 * (i + 1) - n - 1) * v for i, v in enumerate(imp_values))
+            m["importance_gini"] = round(cumulative / (n * total), 3)
+        else:
+            m["importance_gini"] = 0.0
+    else:
+        m["importance_gini"] = 0.0
+
+    # --- EXPLAINABILITY METRICS (Phase 1b) ---
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT
+                    COUNT(*) as total,
+                    AVG(jsonb_array_length(reasoning)) as avg_depth,
+                    COUNT(DISTINCT module) as modules
+                FROM {db._table('explanations')}
+            """)
+            exp_row = cur.fetchone()
+            m["explanation_count"] = exp_row[0] or 0
+            m["avg_reasoning_depth"] = round(float(exp_row[1] or 0), 1)
+            m["explanation_modules_covered"] = exp_row[2] or 0
+
+    # --- CURIOSITY ENGINE METRICS (Phase 2) ---
+    try:
+        from curiosity_engine import get_curiosity_stats, analyze_sparsity
+        curiosity_stats = get_curiosity_stats()
+        m["curiosity_targets_surfaced"] = curiosity_stats.get('total_surfaced', 0)
+        m["curiosity_conversions"] = curiosity_stats.get('total_conversions', 0)
+        m["curiosity_conversion_rate"] = curiosity_stats.get('conversion_rate', 0)
+        m["curiosity_new_edges"] = curiosity_stats.get('total_new_edges_from_curiosity', 0)
+        m["graph_sparsity"] = curiosity_stats.get('sparsity_score', 0)
+        m["graph_isolated_memories"] = curiosity_stats.get('isolated_memories', 0)
+    except Exception:
+        m["curiosity_targets_surfaced"] = 0
+        m["curiosity_conversions"] = 0
+        m["curiosity_conversion_rate"] = 0
+        m["curiosity_new_edges"] = 0
+        m["graph_sparsity"] = 0
+        m["graph_isolated_memories"] = 0
+
+    # --- KNOWLEDGE GRAPH METRICS (Phase 4) ---
+    try:
+        from knowledge_graph import get_stats as kg_stats
+        kg = kg_stats()
+        m["typed_edges_total"] = kg.get('total', 0)
+        m["typed_edges_auto"] = kg.get('auto_extracted', 0)
+        m["typed_edges_types_used"] = kg.get('types_used', 0)
+        m["typed_edges_density"] = kg.get('density', 0)
+        m["typed_edges_sources"] = kg.get('unique_sources', 0)
+    except Exception:
+        m["typed_edges_total"] = 0
+        m["typed_edges_auto"] = 0
+        m["typed_edges_types_used"] = 0
+        m["typed_edges_density"] = 0
+        m["typed_edges_sources"] = 0
+
+    # --- COGNITIVE STATE METRICS (Phase 3) ---
+    try:
+        from cognitive_state import get_state, get_session_history, get_session_trends
+        state = get_state()
+        m["cognitive_curiosity"] = round(state.curiosity, 4)
+        m["cognitive_confidence"] = round(state.confidence, 4)
+        m["cognitive_focus"] = round(state.focus, 4)
+        m["cognitive_arousal"] = round(state.arousal, 4)
+        m["cognitive_satisfaction"] = round(state.satisfaction, 4)
+        m["cognitive_dominant"] = state.dominant()
+        m["cognitive_events"] = state.event_count
+
+        # Session volatility from history
+        history = get_session_history()
+        if len(history) >= 2:
+            from cognitive_state import CognitiveState as _CS
+            total_dist = 0.0
+            for i in range(1, len(history)):
+                s1 = _CS.from_dict(history[i - 1].get('state', {}))
+                s2 = _CS.from_dict(history[i].get('state', {}))
+                total_dist += s2.volatility_from(s1)
+            m["cognitive_volatility"] = round(total_dist / (len(history) - 1), 4)
+        else:
+            m["cognitive_volatility"] = 0.0
+    except Exception:
+        m["cognitive_curiosity"] = 0.5
+        m["cognitive_confidence"] = 0.5
+        m["cognitive_focus"] = 0.5
+        m["cognitive_arousal"] = 0.3
+        m["cognitive_satisfaction"] = 0.5
+        m["cognitive_dominant"] = "unknown"
+        m["cognitive_events"] = 0
+        m["cognitive_volatility"] = 0.0
+
     return snapshot
 
 
@@ -357,6 +484,8 @@ def check_alerts():
         "social_replies_tracked": (True, "info", "No new social replies tracked"),
         "memory_total": (True, "info", "Total memory count not growing"),
         "wgraph_total_edges": (True, "warn", "W-graph edges not growing"),
+        "curiosity_targets_surfaced": (True, "info", "Curiosity targets not being surfaced"),
+        "typed_edges_total": (True, "info", "Knowledge graph not growing"),
     }
 
     for metric, (should_grow, severity, desc) in metrics_to_watch.items():
@@ -457,6 +586,90 @@ def check_alerts():
                     "values": [v]
                 })
 
+    # Old important memories not being recalled (importance/freshness health)
+    if log:
+        latest_m = log[-1].get("metrics", {})
+        old_imp_rate = latest_m.get("old_important_recall_rate")
+        if old_imp_rate is not None and old_imp_rate < 0.5:
+            alerts.append({
+                "metric": "old_important_recall_rate",
+                "severity": "warn",
+                "message": f"Only {old_imp_rate:.0%} of important memories are being recalled",
+                "values": [old_imp_rate]
+            })
+
+    # Importance Gini too high (everything equally important = nothing is important)
+    if log:
+        latest_m = log[-1].get("metrics", {})
+        imp_gini = latest_m.get("importance_gini")
+        if imp_gini is not None and imp_gini < 0.05:
+            alerts.append({
+                "metric": "importance_gini",
+                "severity": "info",
+                "message": f"Importance distribution too flat (Gini={imp_gini:.3f}) — no clear priority signal",
+                "values": [imp_gini]
+            })
+
+    # Explainability coverage — alert if no explanations in recent sessions
+    explanation_values = [s["metrics"].get("explanation_count", 0) for s in recent]
+    if all(v == 0 for v in explanation_values) and len(explanation_values) >= 3:
+        alerts.append({
+            "metric": "explanation_count",
+            "severity": "warn",
+            "message": "No explanations being generated — explainability may be broken",
+            "values": explanation_values
+        })
+
+    # Graph sparsity too high (curiosity engine should be reducing this)
+    if log:
+        latest_m = log[-1].get("metrics", {})
+        sparsity = latest_m.get("graph_sparsity", 0)
+        isolated = latest_m.get("graph_isolated_memories", 0)
+        total = latest_m.get("memory_total", 0)
+        if sparsity > 0.8 and total > 100:
+            isolated_pct = round(isolated * 100 / total, 1) if total > 0 else 0
+            alerts.append({
+                "metric": "graph_sparsity",
+                "severity": "warn",
+                "message": f"Graph sparsity {sparsity:.2f} — {isolated} isolated memories ({isolated_pct}%)",
+                "values": [sparsity, isolated]
+            })
+
+    # Curiosity conversion rate declining
+    conversion_values = [s["metrics"].get("curiosity_conversions", 0) for s in recent]
+    surfaced_values = [s["metrics"].get("curiosity_targets_surfaced", 0) for s in recent]
+    total_surfaced = sum(surfaced_values)
+    total_conversions = sum(conversion_values)
+    if total_surfaced >= 10 and total_conversions == 0:
+        alerts.append({
+            "metric": "curiosity_conversions",
+            "severity": "info",
+            "message": f"Curiosity targets surfaced ({total_surfaced}) but 0 conversions — exploration not creating edges",
+            "values": conversion_values
+        })
+
+    # Cognitive state: high volatility (session instability)
+    if log:
+        latest_m = log[-1].get("metrics", {})
+        vol = latest_m.get("cognitive_volatility", 0)
+        if vol > 0.15:
+            alerts.append({
+                "metric": "cognitive_volatility",
+                "severity": "info",
+                "message": f"High cognitive volatility ({vol:.4f}) — frequent state swings this session",
+                "values": [vol]
+            })
+
+    # Cognitive state: zero events (tracker not firing)
+    event_values = [s["metrics"].get("cognitive_events", 0) for s in recent]
+    if len(event_values) >= 3 and all(v == 0 for v in event_values[-3:]):
+        alerts.append({
+            "metric": "cognitive_events",
+            "severity": "warn",
+            "message": "Cognitive state tracker not firing — 0 events for 3+ sessions",
+            "values": event_values
+        })
+
     if not alerts:
         alerts.append({
             "metric": "all_clear",
@@ -482,6 +695,13 @@ def format_snapshot(snapshot, compact=False):
             f"merkle={m.get('merkle_chain_depth', '?')}",
             f"drift={m.get('identity_drift', '?')}",
             f"wg={m.get('wgraph_total_edges', '?')}",
+            f"imp={m.get('importance_mean', '?')}",
+            f"fresh={m.get('freshness_mean', '?')}",
+            f"expl={m.get('explanation_count', '?')}",
+            f"sparse={m.get('graph_sparsity', '?')}",
+            f"iso={m.get('graph_isolated_memories', '?')}",
+            f"kg={m.get('typed_edges_total', 0)}",
+            f"cog={m.get('cognitive_dominant', '?')}({m.get('cognitive_events', 0)}ev)",
         ]
         return f"[{ts[:19]}] {' | '.join(parts)}"
 
@@ -526,6 +746,29 @@ def format_snapshot(snapshot, compact=False):
         "",
         "SEARCH & VOCABULARY",
         f"  Indexed: {m.get('search_indexed', '?')} | Vocab terms: {m.get('vocabulary_terms', '?')}",
+        "",
+        "IMPORTANCE/FRESHNESS",
+        f"  Importance: avg={m.get('importance_mean', '?')} gini={m.get('importance_gini', '?')}",
+        f"  Freshness: avg={m.get('freshness_mean', '?')}",
+        f"  Old important: {m.get('old_important_count', '?')} (recall rate: {m.get('old_important_recall_rate', '?')})",
+        "",
+        "EXPLAINABILITY",
+        f"  Explanations: {m.get('explanation_count', '?')} | Avg depth: {m.get('avg_reasoning_depth', '?')} steps",
+        f"  Modules covered: {m.get('explanation_modules_covered', '?')}",
+        "",
+        "CURIOSITY ENGINE",
+        f"  Sparsity: {m.get('graph_sparsity', '?')} | Isolated: {m.get('graph_isolated_memories', '?')}",
+        f"  Targets surfaced: {m.get('curiosity_targets_surfaced', '?')} | Conversions: {m.get('curiosity_conversions', '?')}",
+        f"  Conversion rate: {m.get('curiosity_conversion_rate', '?')} | New edges: {m.get('curiosity_new_edges', '?')}",
+        "",
+        "KNOWLEDGE GRAPH",
+        f"  Typed edges: {m.get('typed_edges_total', '?')} (auto={m.get('typed_edges_auto', '?')})",
+        f"  Types used: {m.get('typed_edges_types_used', '?')} | Sources: {m.get('typed_edges_sources', '?')} | Density: {m.get('typed_edges_density', '?')}",
+        "",
+        "COGNITIVE STATE",
+        f"  Curiosity: {m.get('cognitive_curiosity', '?')} | Confidence: {m.get('cognitive_confidence', '?')} | Focus: {m.get('cognitive_focus', '?')}",
+        f"  Arousal: {m.get('cognitive_arousal', '?')} | Satisfaction: {m.get('cognitive_satisfaction', '?')}",
+        f"  Dominant: {m.get('cognitive_dominant', '?')} | Events: {m.get('cognitive_events', '?')} | Volatility: {m.get('cognitive_volatility', '?')}",
     ]
     return "\n".join(lines)
 

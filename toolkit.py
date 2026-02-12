@@ -176,6 +176,40 @@ def build_registry():
             Command("dash-build", "dashboard", "Build standalone HTML dashboard", "dashboard.build", "main"),
         ]
 
+    # === EXPLAINABILITY ===
+    cmds += [
+        Command("explain-last", "dashboard", "Show last N explanations", "explanation", "last", "[N=5]"),
+        Command("explain-search", "dashboard", "Show search explanations", "explanation", "search"),
+        Command("explain-priming", "dashboard", "Show last priming explanation", "explanation", "priming"),
+        Command("explain-why", "dashboard", "Why was a memory selected?", "explanation", "why", "<memory_id>"),
+        Command("explain-stats", "dashboard", "Explanation coverage statistics", "explanation", "stats"),
+        Command("explain-session", "dashboard", "All explanations this session", "explanation", "session"),
+    ]
+
+    # === CURIOSITY ENGINE ===
+    cmds += [
+        Command("curiosity-scan", "dashboard", "Top curiosity targets (sparse graph)", "curiosity_engine", "scan", "[N=10]"),
+        Command("curiosity-map", "dashboard", "Graph sparsity analysis", "curiosity_engine", "map"),
+        Command("curiosity-stats", "dashboard", "Exploration history & conversion rates", "curiosity_engine", "stats"),
+        Command("curiosity-targets", "dashboard", "Diversified targets for priming", "curiosity_engine", "targets", "[N=5]"),
+    ]
+
+    # === COGNITIVE STATE ===
+    cmds += [
+        Command("cognitive-state", "dashboard", "Current 5-dimension cognitive state", "cognitive_state", "state"),
+        Command("cognitive-history", "dashboard", "State changes this session", "cognitive_state", "history"),
+        Command("cognitive-trend", "dashboard", "Cross-session cognitive trends", "cognitive_state", "trend"),
+    ]
+
+    # === KNOWLEDGE GRAPH ===
+    cmds += [
+        Command("kg-extract", "dashboard", "Auto-extract typed relationships", "knowledge_graph", "extract", "[--limit=N]"),
+        Command("kg-query", "dashboard", "Multi-hop graph traversal", "knowledge_graph", "query", "<id> [rel] [hops]"),
+        Command("kg-stats", "dashboard", "Relationship type distribution", "knowledge_graph", "stats"),
+        Command("kg-types", "dashboard", "List all relationship types with counts", "knowledge_graph", "types"),
+        Command("kg-path", "dashboard", "Find shortest typed path", "knowledge_graph", "path", "<id1> <id2>"),
+    ]
+
     # === VISUALIZATION ===
     if cfg.get("has_dimensional_viz"):
         cmds += [
@@ -518,6 +552,10 @@ def cmd_health():
         ("dimensional_viz", "5W dimensional visualization"),
         ("telegram_bot", "Telegram communication"),
         ("lesson_extractor", "Lesson extraction system"),
+        ("curiosity_engine", "Curiosity-driven exploration"),
+        ("explanation", "Explainability interface"),
+        ("cognitive_state", "Cognitive state tracker"),
+        ("knowledge_graph", "Knowledge graph (typed relationships)"),
     ]
 
     # Social subpackage

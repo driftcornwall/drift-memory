@@ -84,6 +84,14 @@ def log_co_occurrences() -> int:
                         """, (memory_id, other_id))
                     pairs_updated += 1
 
+    # Fire cognitive state events for new edges
+    if pairs_updated > 0:
+        try:
+            from cognitive_state import process_event
+            process_event('cooccurrence_formed')
+        except Exception:
+            pass
+
     print(f"Logged {pairs_updated} co-occurrence pairs from {len(retrieved)} memories")
     return pairs_updated
 

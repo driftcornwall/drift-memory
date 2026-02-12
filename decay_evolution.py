@@ -361,31 +361,22 @@ def backfill_entities(dry_run: bool = True) -> dict:
 
 # --- Activation scoring (v2.14) ---
 
-def calculate_activation(metadata: dict) -> float:
+# Context-dependent weighting for importance vs freshness
+ACTIVATION_WEIGHTS = {
+    'general':       (0.6, 0.4),   # default: favor importance
+    'recent':        (0.3, 0.7),   # recent context: favor freshness
+    'foundational':  (0.8, 0.2),   # foundational: favor importance
+}
+FRESHNESS_HALF_LIFE_HOURS = 24 * 7  # 7-day half-life for freshness decay
+
+
+def calculate_freshness(metadata: dict) -> float:
     """
-    Calculate memory activation score using exponential time decay.
+    Calculate freshness using exponential time decay.
+    Freshness = exp(-lambda * hours_since_recall), resets to 1.0 on recall.
 
-    Inspired by SpindriftMend's Hebbian learning implementation.
-    Formula: A(t) = A_0 * e^(-lambda*t)
-
-    Returns:
-        Activation score (0.0 to 1.0+, can exceed 1.0 for highly reinforced memories)
+    This is a pure temporal signal — how recently was this memory accessed?
     """
-    if not ACTIVATION_DECAY_ENABLED:
-        return metadata.get('emotional_weight', 0.5)
-
-    emotional_weight = metadata.get('emotional_weight', 0.5)
-
-    recall_count = metadata.get('recall_count', 1)
-    recall_bonus = math.log(recall_count + 1) / 5
-
-    base_activation = emotional_weight + recall_bonus
-
-    # Grace period: new memories immune from decay for first N sessions
-    sessions_since = metadata.get('sessions_since_recall', 0)
-    if sessions_since < GRACE_PERIOD_SESSIONS:
-        return max(base_activation, 0.5)  # Keep at least 0.5 during grace period
-
     last_recalled_str = metadata.get('last_recalled')
     if last_recalled_str:
         try:
@@ -396,14 +387,54 @@ def calculate_activation(metadata: dict) -> float:
                 last_recalled = last_recalled.replace(tzinfo=timezone.utc)
             hours_since_recall = (datetime.now(timezone.utc) - last_recalled).total_seconds() / 3600
         except (ValueError, TypeError):
-            hours_since_recall = ACTIVATION_HALF_LIFE_HOURS
+            hours_since_recall = FRESHNESS_HALF_LIFE_HOURS
     else:
-        hours_since_recall = ACTIVATION_HALF_LIFE_HOURS
+        hours_since_recall = FRESHNESS_HALF_LIFE_HOURS
 
-    lambda_rate = math.log(2) / ACTIVATION_HALF_LIFE_HOURS
-    decay_factor = math.exp(-lambda_rate * hours_since_recall)
+    lambda_rate = math.log(2) / FRESHNESS_HALF_LIFE_HOURS
+    return round(math.exp(-lambda_rate * hours_since_recall), 4)
 
-    activation = base_activation * decay_factor
+
+def calculate_activation(metadata: dict, context: str = 'general') -> float:
+    """
+    Calculate memory activation score using importance/freshness split.
+
+    v3.0: Separates intrinsic importance (slow, value-based) from
+    freshness (fast, time-based). Combined with context-dependent weights.
+
+    Args:
+        metadata: Memory metadata dict
+        context: 'general', 'recent', or 'foundational' — determines
+                 the importance/freshness weight ratio
+
+    Returns:
+        Activation score (0.0 to 1.0+)
+    """
+    if not ACTIVATION_DECAY_ENABLED:
+        return metadata.get('emotional_weight', 0.5)
+
+    importance = metadata.get('importance', 0.5) or 0.5
+    emotional_weight = metadata.get('emotional_weight', 0.5)
+
+    # Recall bonus still applies (proven value through use)
+    recall_count = metadata.get('recall_count', 1)
+    recall_bonus = math.log(recall_count + 1) / 5
+
+    # Importance with recall bonus capped at 1.0
+    effective_importance = min(1.0, importance + recall_bonus)
+
+    # Grace period: new memories immune from decay
+    sessions_since = metadata.get('sessions_since_recall', 0)
+    if sessions_since < GRACE_PERIOD_SESSIONS:
+        return max(effective_importance, 0.5)
+
+    # Calculate live freshness from time since last recall
+    freshness = calculate_freshness(metadata)
+
+    # Context-dependent weighting
+    alpha, beta = ACTIVATION_WEIGHTS.get(context, ACTIVATION_WEIGHTS['general'])
+
+    activation = alpha * effective_importance + beta * freshness
 
     min_floor = 0.1 if emotional_weight >= EMOTIONAL_WEIGHT_THRESHOLD else ACTIVATION_MIN_FLOOR
 

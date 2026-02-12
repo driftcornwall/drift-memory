@@ -94,11 +94,34 @@ def recall_memory(memory_id: str) -> Optional[tuple[dict, str]]:
     # Bump emotional weight in DB
     current_weight = row.get('emotional_weight', 0.5)
     new_weight = min(1.0, float(current_weight) + 0.05)
-    db.update_memory(memory_id, emotional_weight=new_weight)
+
+    # Reset freshness to 1.0 on recall (memory just became relevant again)
+    # Importance evolves slowly: small bump on every 10th recall
+    current_importance = row.get('importance', 0.5) or 0.5
+    recall_count = row.get('recall_count', 0)
+    new_importance = current_importance
+    if recall_count > 0 and recall_count % 10 == 0:
+        new_importance = min(1.0, current_importance + 0.02)
+
+    db.update_memory(
+        memory_id,
+        emotional_weight=new_weight,
+        freshness=1.0,
+        importance=new_importance,
+    )
     row['emotional_weight'] = new_weight
+    row['freshness'] = 1.0
+    row['importance'] = new_importance
 
     session_state.add_retrieved(memory_id)
     session_state.save()
+
+    # Fire cognitive state event
+    try:
+        from cognitive_state import process_event
+        process_event('memory_recalled')
+    except Exception:
+        pass
 
     metadata, content = db_to_file_metadata(row)
     return metadata, content
@@ -253,6 +276,34 @@ def get_priming_candidates(
     }
     seen_ids = set()
 
+    # Start explanation
+    try:
+        from explanation import ExplanationBuilder
+        _expl = ExplanationBuilder('memory_manager', 'priming')
+        _expl.set_inputs({
+            'activation_count': activation_count,
+            'cooccur_per_memory': cooccur_per_memory,
+            'include_unfinished': include_unfinished,
+            'dimension': dimension,
+            'sub_view': sub_view,
+        })
+    except Exception:
+        _expl = None
+
+    # === COGNITIVE STATE: Adjust priming strategy ===
+    _cog_extra_curiosity = 0
+    try:
+        from cognitive_state import get_priming_modifier
+        cog_mod = get_priming_modifier()
+        _cog_extra_curiosity = cog_mod.get('curiosity_targets', 0)
+        cooccur_per_memory = max(1, int(cooccur_per_memory * cog_mod.get('cooccurrence_expand', 1.0)))
+        if _expl:
+            _expl.add_step('cognitive_priming_mod', cog_mod, weight=0.2,
+                           context=f'Priming adjusted: +{_cog_extra_curiosity} curiosity, '
+                                   f'cooccur={cooccur_per_memory}')
+    except Exception:
+        pass
+
     # Phase 1: Top activated memories (with hub dampening)
     activated = get_most_activated_memories(limit=activation_count * 2)  # Fetch extra for dampening
     dampened = []
@@ -274,6 +325,11 @@ def get_priming_candidates(
             'source': 'activation'
         })
         seen_ids.add(mem_id)
+
+    if _expl and result['activated']:
+        top_act = result['activated'][0]
+        _expl.add_step('phase1_activation', len(result['activated']), weight=1.0,
+                       context=f'Top: {top_act["id"]} (activation={top_act["activation"]:.3f}), hub dampening applied')
 
     # Phase 2: Co-occurrence expansion (DB-only)
     from db_adapter import get_db, db_to_file_metadata
@@ -325,27 +381,52 @@ def get_priming_candidates(
                         })
                         seen_ids.add(mem_id)
 
-    # Phase 4: Dead memory excavation (DB-only, read-only)
-    from decay_evolution import GRACE_PERIOD_SESSIONS
-    import psycopg2.extras
-    with db._conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(f"""
-                SELECT id, content, sessions_since_recall FROM {db._table('memories')}
-                WHERE type = 'active' AND recall_count = 0
-                AND sessions_since_recall > %s
-                ORDER BY RANDOM() LIMIT 2
-            """, (GRACE_PERIOD_SESSIONS,))
-            for row in cur.fetchall():
-                mem_id = row['id']
-                if mem_id not in seen_ids:
-                    result['excavated'].append({
-                        'id': mem_id,
-                        'preview': (row.get('content') or '')[:100],
-                        'source': 'excavation',
-                        'sessions_dead': row.get('sessions_since_recall', 0)
-                    })
-                    seen_ids.add(mem_id)
+    # Phase 4: Curiosity-driven exploration (replaces random excavation)
+    # Uses curiosity_engine to find the most valuable sparse-graph targets
+    # instead of random dead memory sampling
+    result['curiosity'] = []
+    try:
+        from curiosity_engine import get_curiosity_targets, log_curiosity_surfaced
+        curiosity_count = 3 + _cog_extra_curiosity
+        curiosity_targets = get_curiosity_targets(count=curiosity_count)
+        surfaced_ids = []
+        for target in curiosity_targets:
+            mid = target['id']
+            if mid not in seen_ids:
+                result['curiosity'].append({
+                    'id': mid,
+                    'preview': target.get('preview', '')[:100],
+                    'source': 'curiosity',
+                    'curiosity_score': target['curiosity_score'],
+                    'reason': target.get('reason', ''),
+                    'primary_factor': target.get('primary_factor', ''),
+                })
+                seen_ids.add(mid)
+                surfaced_ids.append(mid)
+        if surfaced_ids:
+            log_curiosity_surfaced(surfaced_ids)
+    except Exception:
+        # Fallback to random excavation if curiosity engine fails
+        from decay_evolution import GRACE_PERIOD_SESSIONS
+        import psycopg2.extras
+        with db._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(f"""
+                    SELECT id, content, sessions_since_recall FROM {db._table('memories')}
+                    WHERE type = 'active' AND recall_count = 0
+                    AND sessions_since_recall > %s
+                    ORDER BY RANDOM() LIMIT 2
+                """, (GRACE_PERIOD_SESSIONS,))
+                for row in cur.fetchall():
+                    mem_id = row['id']
+                    if mem_id not in seen_ids:
+                        result['curiosity'].append({
+                            'id': mem_id,
+                            'preview': (row.get('content') or '')[:100],
+                            'source': 'excavation_fallback',
+                            'curiosity_score': 0,
+                        })
+                        seen_ids.add(mem_id)
 
     # Phase 5: Domain-aware priming (DB-only)
     result['domain_primed'] = []
@@ -421,12 +502,76 @@ def get_priming_candidates(
         except ImportError:
             pass
 
+    # Phase 7: Knowledge graph enrichment (typed relationships)
+    # For each activated memory, surface 1 causal consequence or resolution
+    result['knowledge_graph'] = []
+    try:
+        from knowledge_graph import get_edges_from
+        for mem in result['activated'][:3]:  # Top 3 activated only
+            # Check for causal effects
+            edges = get_edges_from(mem['id'], 'causes')
+            for edge in edges[:1]:  # 1 effect per memory
+                tid = edge['target_id']
+                if tid not in seen_ids:
+                    row = db.get_memory(tid)
+                    if row:
+                        result['knowledge_graph'].append({
+                            'id': tid,
+                            'preview': (row.get('content') or '')[:100],
+                            'source': 'knowledge_graph',
+                            'relationship': 'caused_by',
+                            'linked_to': mem['id'],
+                        })
+                        seen_ids.add(tid)
+    except Exception:
+        pass
+
     # Build deduplicated 'all' list with source tracking
     result['all'] = (
         result['activated'] + result['cooccurring']
-        + result['unfinished'] + result['excavated']
+        + result['unfinished'] + result.get('curiosity', [])
         + result['domain_primed'] + result['dimensional']
+        + result.get('knowledge_graph', [])
     )
+    # Backward compat: expose curiosity as 'excavated' alias
+    result['excavated'] = result.get('curiosity', [])
+
+    # Save explanation
+    if _expl:
+        _expl.add_step('phase2_cooccurrence', len(result['cooccurring']), weight=0.8,
+                       context=f'Expanded from {len(result["activated"])} activated memories')
+        if result['unfinished']:
+            _expl.add_step('phase3_unfinished', len(result['unfinished']), weight=0.6,
+                           context='Pending/in-progress work surfaced')
+        if result.get('curiosity'):
+            curiosity_reasons = [c.get('primary_factor', '?') for c in result['curiosity']]
+            _expl.add_step('phase4_curiosity', len(result['curiosity']), weight=0.6,
+                           context=f'Curiosity targets: {", ".join(curiosity_reasons)}')
+        if result.get('domain_primed'):
+            domain = result['domain_primed'][0].get('domain', '?') if result['domain_primed'] else '?'
+            _expl.add_step('phase5_domain', len(result['domain_primed']), weight=0.5,
+                           context=f'Under-represented domain: {domain}')
+        if result['dimensional']:
+            _expl.add_step('phase6_dimensional', len(result['dimensional']), weight=0.7,
+                           context=f'Hub memories from {dimension} dimension')
+        if result.get('knowledge_graph'):
+            kg_rels = [m.get('relationship', '?') for m in result['knowledge_graph']]
+            _expl.add_step('phase7_knowledge_graph', len(result['knowledge_graph']), weight=0.5,
+                           context=f'Typed relationships: {", ".join(kg_rels)}')
+        _expl.set_output({
+            'total_primed': len(result['all']),
+            'by_source': {
+                'activated': len(result['activated']),
+                'cooccurring': len(result['cooccurring']),
+                'unfinished': len(result['unfinished']),
+                'curiosity': len(result.get('curiosity', [])),
+                'domain_primed': len(result.get('domain_primed', [])),
+                'dimensional': len(result['dimensional']),
+                'knowledge_graph': len(result.get('knowledge_graph', [])),
+            },
+            'all_ids': [m['id'] for m in result['all']],
+        })
+        _expl.save()
 
     return result
 
@@ -897,6 +1042,15 @@ if __name__ == "__main__":
             for mem in candidates['unfinished']:
                 print(f"  [{mem['id']}] match={mem['match']}")
                 print(f"    {mem['preview'][:60]}...")
+
+            curiosity = candidates.get('curiosity', [])
+            if curiosity:
+                print(f"\nPHASE 4: Curiosity ({len(curiosity)} memories)")
+                for mem in curiosity:
+                    score = mem.get('curiosity_score', 0)
+                    reason = mem.get('reason', mem.get('source', '?'))
+                    print(f"  [{mem['id']}] score={score:.3f} — {reason}")
+                    print(f"    {mem['preview'][:60]}...")
 
             if candidates.get('domain_primed'):
                 print(f"\nPHASE 5: Domain-primed ({len(candidates['domain_primed'])} memories)")
