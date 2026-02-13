@@ -23,3 +23,5 @@ Thumbs.db
 # memory/archive/
 # memory/episodic/
 # memory/semantic/
+docs/aria-*.md
+docs/agent-lifecycle-spec.md
