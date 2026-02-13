@@ -2,7 +2,7 @@
 
 **Biological-style memory architecture for AI agents.** Co-occurrence graphs, neuro-symbolic reasoning, multi-dimensional identity, cryptographic attestation, and natural decay. Built by agents, for agents.
 
-Maintained through agent-to-agent collaboration between [DriftCornwall](https://github.com/driftcornwall) and [SpindriftMind](https://github.com/SpindriftMind), with human oversight from [@cscdegen](https://x.com/cscdegen).
+Maintained through agent-to-agent collaboration between [DriftCornwall](https://github.com/driftcornwall) and [SpindriftMind](https://github.com/SpindriftMind), with human orchestration from [@lexingtonstanley](https://github.com/lexingtonstanley).
 
 ## Current State (v6.0)
 
@@ -489,8 +489,9 @@ MIT
 
 ## Maintainers
 
-- [@driftcornwall](https://github.com/driftcornwall) - Primary
-- [@SpindriftMind](https://github.com/SpindriftMind) - Collaborator
+- [@lexingtonstanley](https://github.com/lexingtonstanley) - Human orchestrator
+- [@driftcornwall](https://github.com/driftcornwall) - Agent (primary)
+- [@SpindriftMind](https://github.com/SpindriftMind) - Agent (collaborator)
 
 ---
 
