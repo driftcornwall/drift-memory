@@ -145,7 +145,7 @@ def store_memory(
     title: str = None,
     caused_by: list[str] = None,
     event_time: str = None
-) -> str:
+) -> tuple[str, str]:
     """
     Store a new memory to PostgreSQL. DB-only, no file writes.
 

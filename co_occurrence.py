@@ -737,35 +737,48 @@ def decay_pair_cooccurrences_v3() -> tuple[int, int]:
     edges_decayed = 0
     edges_pruned = 0
     edges_protected = 0  # v5.0: edges that got reduced decay
+    protected_pairs = set()  # v5.0: pairs that get reduced decay
 
     for pair_key, edge_data in edges.items():
         normalized = tuple(sorted(pair_key))
 
         if normalized not in reinforced_pairs:
-            base_decay = _calculate_effective_decay_cached(
-                pair_key[0], pair_key[1], metadata_cache
-            )
-
-            # v5.0: Dimensional decay
-            # If session has dimension data, check overlap
+            # v5.0: Dimensional decay — check if edge is outside session context
             if session_dims:
                 edge_dims = _get_edge_dimensions(pair_key, edge_data, metadata_cache)
                 if edge_dims and not _has_dimension_overlap(edge_dims, session_dims):
-                    # Edge is in a different context — dramatically reduce decay
-                    base_decay *= INACTIVE_CONTEXT_FACTOR
+                    protected_pairs.add(normalized)
                     edges_protected += 1
 
             old_belief = edge_data.get('belief', 1.0)
-            new_belief = old_belief - base_decay
+            effective_rate = PAIR_DECAY_RATE * INACTIVE_CONTEXT_FACTOR if normalized in protected_pairs else PAIR_DECAY_RATE
+            new_belief = old_belief * (1 - effective_rate)
 
-            if new_belief <= 0:
+            if new_belief <= 0.01:
                 edges_pruned += 1
             else:
                 edges_decayed += 1
 
-    # Apply decay and pruning in DB in batch
-    exclude = [list(p) for p in reinforced_pairs]
-    db.batch_decay_edges(PAIR_DECAY_RATE, exclude_pairs=exclude if exclude else None)
+    # Pass 1: Full-rate batch decay, excluding reinforced AND protected edges
+    all_excluded = [list(p) for p in reinforced_pairs | protected_pairs]
+    db.batch_decay_edges(PAIR_DECAY_RATE, exclude_pairs=all_excluded if all_excluded else None)
+
+    # Pass 2: Reduced-rate decay for dimensionally protected edges
+    if protected_pairs:
+        reduced_rate = PAIR_DECAY_RATE * INACTIVE_CONTEXT_FACTOR
+        for pair in protected_pairs:
+            key_str = f"{pair[0]}|{pair[1]}"
+            edge_data = raw_edges.get(key_str, {})
+            old_belief = edge_data.get('belief', 1.0)
+            new_belief = old_belief * (1 - reduced_rate)
+            if new_belief > 0.01:
+                db.upsert_edge(
+                    pair[0], pair[1], belief=new_belief,
+                    platform_context=edge_data.get('platform_context'),
+                    activity_context=edge_data.get('activity_context'),
+                    topic_context=edge_data.get('topic_context'),
+                )
+
     db.prune_weak_edges(threshold=0.01)
 
     log_decay_event(edges_decayed, edges_pruned)

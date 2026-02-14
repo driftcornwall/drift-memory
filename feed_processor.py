@@ -113,7 +113,7 @@ def compute_feed_item_salience(post: Dict) -> float:
         score += 0.1
 
     # Negative signal: token spam
-    if "!clawnch" in content or "$" in content and len(content) < 100:
+    if "!clawnch" in content or ("$" in content and len(content) < 100):
         score -= 0.3
 
     # Negative signal: generic bot post
