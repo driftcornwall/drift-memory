@@ -97,6 +97,7 @@ def collect_vitals():
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(f"""
                 SELECT data FROM {db._table('attestations')}
+                WHERE type = 'merkle'
                 ORDER BY timestamp DESC LIMIT 1
             """)
             att_row = cur.fetchone()

@@ -28,8 +28,15 @@ Usage:
 """
 
 import json
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
+
+# Ensure parent directory (memory/) is in path for db_adapter import
+_parent = str(Path(__file__).resolve().parent.parent)
+if _parent not in sys.path:
+    sys.path.insert(0, _parent)
 
 # DB keys
 KV_CONTACTS = '.social_contacts'       # {normalized_name: contact_data}
