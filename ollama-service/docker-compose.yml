@@ -14,7 +14,7 @@ services:
       - OLLAMA_MAX_LOADED_MODELS=1
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "ollama", "list"]
       interval: 30s
       timeout: 5s
       retries: 3
