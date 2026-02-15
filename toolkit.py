@@ -160,6 +160,8 @@ def build_registry():
         Command("dream", "memory", "Run generative sleep cycle", "generative_sleep", "dream"),
         Command("dream-sample", "memory", "Preview dream sampling", "generative_sleep", "sample"),
         Command("dream-stats", "memory", "Dream statistics", "generative_sleep", "stats"),
+        Command("llm-status", "memory", "LLM backend status", "llm_client", "status"),
+        Command("llm-test", "memory", "Test LLM generation", "llm_client", "test"),
         Command("export", "memory", "Secure memory export", "memory_interop", "export"),
         Command("import", "memory", "Import with quarantine", "memory_interop", "import"),
     ]

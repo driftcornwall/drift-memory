@@ -198,12 +198,23 @@ def dream(dry_run: bool = False) -> dict:
         result['prompt'] = prompt
         return result
 
-    # --- LLM synthesis call ---
-    # This is where the actual dream happens. Currently uses a simple
-    # co-occurrence-based heuristic as a placeholder. Full LLM integration
-    # will be wired through the consolidation daemon.
+    # --- LLM synthesis call (with heuristic fallback) ---
+    synthesis_text = ''
+    try:
+        from llm_client import synthesize_memories
+        llm_result = synthesize_memories(memories)
+        if llm_result.get('is_novel') and llm_result.get('synthesis'):
+            synthesis_text = llm_result['synthesis']
+            result['backend'] = llm_result.get('backend', '?')
+            result['model'] = llm_result.get('model', '?')
+            result['elapsed_ms'] = llm_result.get('elapsed_ms', 0)
+    except Exception:
+        pass
 
-    synthesis_text = _heuristic_synthesis(memories)
+    # Fallback to heuristic if LLM unavailable or produced nothing novel
+    if not synthesis_text:
+        synthesis_text = _heuristic_synthesis(memories)
+        result['backend'] = 'heuristic'
 
     if _is_generic_output(synthesis_text):
         result['status'] = 'filtered'

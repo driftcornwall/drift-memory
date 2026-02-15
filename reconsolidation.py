@@ -176,18 +176,18 @@ def clear_queue():
 
 
 # ============================================================
-# Stage 3: LLM-Based Revision (placeholder — needs LLM integration)
+# Stage 3: LLM-Based Revision
 # ============================================================
 
 def process_revisions(dry_run: bool = True, max_revisions: int = MAX_REVISIONS_PER_SESSION) -> list[dict]:
     """
-    Process queued revision candidates.
+    Process queued revision candidates via LLM.
 
-    Stage 3 placeholder — actual LLM revision will be added when we wire up
-    the consolidation daemon's LLM endpoint.
-
-    For now: identifies candidates, shows what would be revised, and
-    (if not dry_run) marks them as processed and resets counters.
+    For each candidate:
+    1. Load memory + recall contexts + contradiction info
+    2. Call LLM to produce revised version
+    3. Store revision: update content, append old version to history, re-embed
+    4. Reset counters
     """
     db = _get_db()
     queue = get_queue()
@@ -201,10 +201,11 @@ def process_revisions(dry_run: bool = True, max_revisions: int = MAX_REVISIONS_P
 
         extra = row.get('extra_metadata') or {}
         contexts = extra.get('recall_contexts', [])
+        original_content = row.get('content') or ''
 
         result = {
             'id': memory_id,
-            'content_preview': (row.get('content') or '')[:120],
+            'content_preview': original_content[:120],
             'reason': item['reason'],
             'path': item['path'],
             'recall_contexts_count': len(contexts),
@@ -213,31 +214,102 @@ def process_revisions(dry_run: bool = True, max_revisions: int = MAX_REVISIONS_P
             ))[:5],
         }
 
-        if not dry_run:
-            # Stage 3 TODO: Actually revise content via LLM
-            # For now: just reset counters to prevent re-queuing
+        if dry_run:
+            result['action'] = 'dry_run'
+            results.append(result)
+            continue
+
+        # Build contradiction info string
+        contradiction_info = ''
+        contra_count = extra.get('contradiction_signals', 0)
+        if contra_count > 0:
+            try:
+                from knowledge_graph import get_edges_from, get_edges_to
+                contra_edges = get_edges_from(memory_id, 'contradicts') + get_edges_to(memory_id, 'contradicts')
+                if contra_edges:
+                    parts = []
+                    for e in contra_edges[:3]:
+                        other_id = e['target_id'] if e['source_id'] == memory_id else e['source_id']
+                        parts.append(f"Contradicts {other_id} (confidence: {e.get('confidence', '?')})")
+                    contradiction_info = '; '.join(parts)
+            except Exception:
+                contradiction_info = f'{contra_count} contradiction(s) detected'
+
+        # Call LLM for revision
+        try:
+            from llm_client import revise_memory
+            llm_result = revise_memory(original_content, contexts, contradiction_info)
+            revised = llm_result.get('revised_content', '')
+            backend = llm_result.get('backend', 'none')
+        except Exception as e:
+            result['action'] = 'llm_error'
+            result['error'] = str(e)
+            results.append(result)
+            continue
+
+        if not revised or len(revised) < 20 or revised.strip() == original_content.strip():
+            # LLM didn't produce a meaningful revision
             extra['recall_count_since_revision'] = 0
             extra['last_revision_check'] = _now_iso()
-
-            # Append to version history (even without content change)
             versions = extra.get('versions', [])
             versions.append({
                 'checked_at': _now_iso(),
                 'action': 'reviewed_no_change',
+                'backend': backend,
                 'recall_contexts_at_review': len(contexts),
             })
-            extra['versions'] = versions[-10:]  # Keep last 10
-
+            extra['versions'] = versions[-10:]
             db.update_memory(memory_id, extra_metadata=extra)
-            result['action'] = 'counters_reset'
-        else:
-            result['action'] = 'dry_run'
+            result['action'] = 'no_change'
+            results.append(result)
+            continue
 
+        # Store revision: update content, save old version
+        versions = extra.get('versions', [])
+        versions.append({
+            'revised_at': _now_iso(),
+            'action': 'revised',
+            'backend': backend,
+            'previous_content': original_content[:500],
+            'recall_contexts_at_review': len(contexts),
+            'contradiction_signals': contra_count,
+        })
+        extra['versions'] = versions[-10:]
+        extra['recall_count_since_revision'] = 0
+        extra['last_revision_check'] = _now_iso()
+        extra['recall_contexts'] = []  # Clear contexts after revision
+
+        db.update_memory(memory_id, content=revised, extra_metadata=extra)
+
+        # Re-embed the revised content
+        try:
+            from semantic_search import _embed_text
+            embedding = _embed_text(revised)
+            if embedding:
+                import psycopg2.extras
+                with db._conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            f"UPDATE {db._table('memories')} SET embedding = %s WHERE id = %s",
+                            (embedding, memory_id)
+                        )
+        except Exception:
+            pass  # Re-embedding is best-effort
+
+        # Re-extract KG edges from revised content
+        try:
+            from knowledge_graph import extract_and_store
+            extract_and_store(memory_id, revised)
+        except Exception:
+            pass
+
+        result['action'] = 'revised'
+        result['backend'] = backend
+        result['revised_preview'] = revised[:120]
         results.append(result)
 
     if not dry_run and results:
-        # Remove processed items from queue
-        processed_ids = {r['id'] for r in results}
+        processed_ids = {r['id'] for r in results if r.get('action') != 'dry_run'}
         remaining = [item for item in queue if item['id'] not in processed_ids]
         db.kv_set('.reconsolidation.queue', {
             'items': remaining,

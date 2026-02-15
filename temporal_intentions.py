@@ -334,8 +334,11 @@ def extract_from_transcript(transcript_path: str, max_intentions: int = 3) -> li
         r'(?:remember to|don\'t forget to)\s+(.{10,80}?)(?:\.|$)',
     ]
 
+    # Date pattern — checked FIRST so date triggers take priority over "next session" etc.
+    date_pattern = r'(?:by|before|on|until)\s+(\d{4}-\d{2}-\d{2}|(?:March|April|May|June|July|August|September|October|November|December|January|February)\s+\d{1,2}(?:,?\s+\d{4})?)'
+
     candidates = []
-    seen = set()
+    seen_word_sets = []  # Word-set overlap detection (Bug fix from Spin)
     for pattern in patterns:
         matches = re.finditer(pattern, full_text, re.IGNORECASE)
         for m in matches:
@@ -343,32 +346,35 @@ def extract_from_transcript(transcript_path: str, max_intentions: int = 3) -> li
             # Filter out noise
             if len(action) < 15 or len(action) > 100:
                 continue
-            # Dedup by first 30 chars
-            key = action[:30].lower()
-            if key in seen:
+            # Dedup via word-set overlap (fixes "I should follow up" + "follow up with" dupes)
+            action_words = set(action.lower().split())
+            is_dupe = False
+            for existing_words in seen_word_sets:
+                overlap = len(action_words & existing_words)
+                smaller = min(len(action_words), len(existing_words))
+                if smaller > 0 and overlap / smaller >= 0.7:
+                    is_dupe = True
+                    break
+            if is_dupe:
                 continue
-            seen.add(key)
+            seen_word_sets.append(action_words)
             candidates.append(action)
-
-    # Extract date references for trigger conditions
-    date_pattern = r'(?:by|before|on|until)\s+(\d{4}-\d{2}-\d{2}|(?:March|April|May|June|July|August|September|October|November|December|January|February)\s+\d{1,2}(?:,?\s+\d{4})?)'
 
     created = []
     for action in candidates[:max_intentions]:
-        # Try to find a date in the action text
+        # Date triggers take priority (Bug fix: "next session" was overwriting dates)
         trigger_type = 'event'
-        trigger_condition = action[:30].lower()  # Default: event trigger on keywords
+        trigger_condition = action[:30].lower()
 
         date_match = re.search(date_pattern, action, re.IGNORECASE)
         if date_match:
             trigger_type = 'time'
             date_str = date_match.group(1)
-            # Try to parse the date
             try:
                 for fmt in ['%Y-%m-%d', '%B %d, %Y', '%B %d %Y', '%B %d']:
                     try:
                         parsed = datetime.strptime(date_str, fmt)
-                        if parsed.year < 2000:  # No year specified
+                        if parsed.year < 2000:
                             parsed = parsed.replace(year=datetime.now().year)
                         trigger_condition = parsed.strftime('%Y-%m-%dT00:00:00')
                         break
@@ -382,7 +388,7 @@ def extract_from_transcript(transcript_path: str, max_intentions: int = 3) -> li
             trigger_type=trigger_type,
             trigger_condition=trigger_condition,
             priority='medium',
-            expiry_days=14,  # Auto-extracted intentions expire sooner
+            expiry_days=14,
         )
         created.append(intention)
 
