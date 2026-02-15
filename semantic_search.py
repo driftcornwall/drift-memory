@@ -574,6 +574,86 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     results.sort(key=lambda x: x["score"], reverse=True)
     top_results = results[:limit]
 
+    # === STEP 11: SPREADING ACTIVATION (Phase 5: graph-driven candidate generation) ===
+    # Walk KG edges from top results to discover memories that are IMPLIED
+    # by the results but don't match the query embedding directly.
+    # Spread candidates are APPENDED to results (not competing for slots) because
+    # their value is discovering non-obvious connections, not matching embeddings.
+    try:
+        from knowledge_graph import traverse as kg_traverse
+        from q_value_engine import get_q_values as _sa_get_q_values
+
+        existing_ids = {r['id'] for r in top_results}
+        # Collect best path to each reachable node across all seeds
+        # Key: node_id, Value: (score, provenance, relationship, depth)
+        reachable = {}
+
+        # Traverse from top 3 results
+        for seed in top_results[:3]:
+            edges = kg_traverse(seed['id'], hops=2, direction='both', min_confidence=0.5)
+            for edge in edges:
+                # Both ends of each edge are reachable nodes
+                for node_id in (edge['source_id'], edge['target_id']):
+                    if node_id == seed['id'] or node_id in existing_ids:
+                        continue
+                    # Score decays with hops: parent_score * confidence * 0.5^depth
+                    spread_score = seed['score'] * edge['confidence'] * (0.5 ** edge['depth'])
+                    if node_id not in reachable or spread_score > reachable[node_id][0]:
+                        provenance = f"spread_from:{seed['id']} via:{edge['relationship']}"
+                        reachable[node_id] = (spread_score, provenance,
+                                              edge['relationship'], edge['depth'])
+
+        if reachable:
+            spread_candidates = [(nid, *vals) for nid, vals in reachable.items()]
+            # Filter by Q-value: only inject candidates with Q >= 0.4
+            candidate_ids = [c[0] for c in spread_candidates]
+            q_vals = _sa_get_q_values(candidate_ids)
+            filtered = [(cid, score, prov, rel, depth) for cid, score, prov, rel, depth
+                        in spread_candidates if q_vals.get(cid, 0.5) >= 0.4]
+
+            # Cap at 5 spread candidates (highest score first)
+            filtered.sort(key=lambda x: x[1], reverse=True)
+            filtered = filtered[:5]
+
+            if filtered:
+                # Batch-fetch content previews
+                fetch_ids = [c[0] for c in filtered]
+                previews = {}
+                try:
+                    import psycopg2.extras as _sa_extras
+                    with db._conn() as conn:
+                        with conn.cursor(cursor_factory=_sa_extras.RealDictCursor) as cur:
+                            cur.execute(
+                                f"SELECT id, content FROM {db._table('memories')} WHERE id = ANY(%s)",
+                                (fetch_ids,)
+                            )
+                            for row in cur.fetchall():
+                                previews[row['id']] = (row.get('content') or '')[:150]
+                except Exception:
+                    pass
+
+                for cid, score, prov, rel, depth in filtered:
+                    top_results.append({
+                        'id': cid,
+                        'score': score,
+                        'preview': previews.get(cid, ''),
+                        'path': f'db://spread/{cid}.md',
+                        'spread_activated': True,
+                        'spread_provenance': prov,
+                        'spread_relationship': rel,
+                        'spread_depth': depth,
+                        'q_value': q_vals.get(cid, 0.5),
+                    })
+
+                if _expl:
+                    _expl.add_step('spreading_activation', len(filtered), weight=0.15,
+                                   context=f'{len(filtered)} spread candidates from '
+                                           f'{len(reachable)} reachable neighbors (Q>=0.4, top 5)')
+    except ImportError:
+        pass  # KG or Q-value modules not available
+    except Exception:
+        pass  # Don't break search if spreading activation fails
+
     # Register recalls with the memory system
     if register_recall and top_results:
         try:
