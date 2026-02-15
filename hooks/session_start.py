@@ -3,6 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "python-dotenv",
+#     "pyyaml",
+#     "psycopg2-binary",
 # ]
 # ///
 
@@ -656,6 +658,24 @@ def _read_and_clean_episodic(memory_dir, debug):
     return parts
 
 
+def _task_nli_health(memory_dir):
+    """Check NLI contradiction detection service health."""
+    parts = []
+    try:
+        import urllib.request
+        req = urllib.request.Request("http://localhost:8082/health", method='GET')
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            import json as _json
+            data = _json.loads(resp.read().decode('utf-8'))
+            if data.get('status') == 'ready':
+                parts.append("[NLI] Contradiction detection: READY")
+            else:
+                parts.append("[NLI] Contradiction detection: LOADING")
+    except Exception:
+        parts.append("[NLI] Contradiction detection: OFFLINE (docker service not running)")
+    return parts
+
+
 def check_unimplemented_research(memory_dir: Path) -> str:
     """
     Check memories for research that hasn't been acted on.
@@ -792,6 +812,7 @@ def load_drift_memory_context(debug: bool = False) -> str:
             f_vitals = pool.submit(_task_vitals, memory_dir, debug)
             f_priming = pool.submit(_task_priming, memory_dir, debug)
             f_research = pool.submit(check_unimplemented_research, memory_dir)
+            f_nli = pool.submit(_task_nli_health, memory_dir)
 
         # === COLLECT RESULTS (with error handling) ===
         def safe_get(future, default=None):
@@ -815,6 +836,7 @@ def load_drift_memory_context(debug: bool = False) -> str:
         vitals_parts = safe_get(f_vitals, [])
         priming_result = safe_get(f_priming, ([], [], []))
         research_text = safe_get(f_research, '')
+        nli_parts = safe_get(f_nli, [])
 
         # Unpack tuple results
         excavation_parts, excavation_ids = excavation_result if isinstance(excavation_result, tuple) else (excavation_result, [])
@@ -909,6 +931,9 @@ def load_drift_memory_context(debug: bool = False) -> str:
 
         # Vitals alerts
         context_parts.extend(vitals_parts)
+
+        # NLI / Contradiction detection status
+        context_parts.extend(nli_parts)
 
         # Priming candidates
         context_parts.extend(priming_parts)

@@ -1,0 +1,53 @@
+# Memory Consolidation Daemon for Drift + SpindriftMend
+#
+# Replaces the stop hook's subprocess-heavy consolidation pipeline
+# with a persistent service that keeps modules loaded and DB connections warm.
+#
+# Usage:
+#   docker-compose up -d
+#   curl http://localhost:8083/health
+#
+# Both agents connect via POST /consolidate with their cwd.
+
+services:
+  consolidation-daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8083:8083"
+    volumes:
+      # Mount both agents' memory directories (live reload on code changes)
+      - type: bind
+        source: Q:/Codings/ClaudeCodeProjects/LEX/Moltbook/memory
+        target: /app/drift-memory
+        read_only: true
+      - type: bind
+        source: Q:/Codings/ClaudeCodeProjects/LEX/Moltbook2/memory
+        target: /app/spin-memory
+        read_only: true
+      # Mount shared database module
+      - type: bind
+        source: Q:/Codings/ClaudeCodeProjects/LEX/memorydatabase/database
+        target: /app/database
+        read_only: true
+      # Mount claude data for transcript access
+      - type: bind
+        source: C:/Users/lexde/.claude
+        target: /app/claude-data
+        read_only: true
+      # Persistent state (merkle tree, fingerprint cache)
+      - daemon_state:/app/state
+    environment:
+      - DB_HOST=host.docker.internal
+      - DB_PORT=5433
+      - DB_USER=agent_admin
+      - DB_PASSWORD=agent_memory_local_dev
+      - DB_NAME=agent_memory
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  daemon_state:
+    name: drift_consolidation_state

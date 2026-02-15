@@ -3,6 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "python-dotenv",
+#     "pyyaml",
+#     "psycopg2-binary",
 # ]
 # ///
 
@@ -45,6 +47,69 @@ def get_memory_dir(cwd: str = None) -> Path:
     return MOLTBOOK_DIRS[0]
 
 
+def _try_daemon(transcript_path: str, cwd: str, phases: list, debug: bool = False) -> bool:
+    """Try to delegate to the consolidation daemon on port 8083.
+
+    Returns True if daemon accepted the request, False if unavailable.
+    Uses specific phases to avoid suppressing stop.py's full consolidation.
+    """
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "cwd": cwd or str(Path.cwd()),
+            "transcript_path": transcript_path or "",
+            "phases": phases,
+        }).encode('utf-8')
+        req = urllib.request.Request(
+            "http://localhost:8083/consolidate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method='POST'
+        )
+        urllib.request.urlopen(req, timeout=3)
+        if debug:
+            print("DEBUG: [subagent] Delegated to consolidation daemon", file=sys.stderr)
+        return True
+    except Exception as e:
+        if debug:
+            print(f"DEBUG: [subagent] Daemon unavailable ({e}), falling back to local", file=sys.stderr)
+        return False
+
+
+def _update_episodic(memory_dir: Path, transcript_path: str, debug: bool = False):
+    """Update episodic memory with subagent milestones. Runs locally (needs file write)."""
+    transcript_processor = memory_dir / "transcript_processor.py"
+    if not transcript_path or not transcript_processor.exists() or not os.path.exists(transcript_path):
+        return
+    try:
+        result = subprocess.run(
+            ["python", str(transcript_processor), transcript_path, "--milestones-md"],
+            capture_output=True, text=True, timeout=30, cwd=str(memory_dir),
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            milestone_md = result.stdout.strip()
+            episodic_dir = memory_dir / "episodic"
+            episodic_dir.mkdir(exist_ok=True)
+            today = datetime.now().strftime("%Y-%m-%d")
+            session_time = datetime.now().strftime("%H:%M UTC")
+            episodic_file = episodic_dir / f"{today}.md"
+
+            entry = f"\n## Subagent completed (~{session_time})\n\n{milestone_md}\n"
+
+            if episodic_file.exists():
+                with open(episodic_file, "a", encoding="utf-8") as f:
+                    f.write(entry)
+            else:
+                with open(episodic_file, "w", encoding="utf-8") as f:
+                    f.write(f"# {today}\n{entry}")
+
+            if debug:
+                print("DEBUG: [subagent] Episodic updated", file=sys.stderr)
+    except Exception as e:
+        if debug:
+            print(f"DEBUG: [subagent] Episodic error: {e}", file=sys.stderr)
+
+
 def consolidate_subagent_memory(
     transcript_path: str = None,
     cwd: str = None,
@@ -53,11 +118,9 @@ def consolidate_subagent_memory(
     """
     Run memory consolidation for a subagent's work.
 
-    Replicates teammate_idle.py's consolidation pipeline:
-    - Process transcript for thought memories
-    - Run short-term buffer consolidation
-    - Save pending co-occurrences
-    - Update episodic memory with subagent milestones
+    DAEMON-FIRST: Tries consolidation daemon with lightweight+core phases.
+    Falls back to local subprocess pipeline if daemon is unavailable.
+    Episodic update always runs locally (daemon can't write host files).
     """
     try:
         project_dir = cwd if cwd else str(Path.cwd())
@@ -72,25 +135,29 @@ def consolidate_subagent_memory(
                 print(f"DEBUG: Memory dir not found: {memory_dir}", file=sys.stderr)
             return
 
+        # Try daemon first — lightweight+core (skips attestation/finalize/enrichment)
+        if _try_daemon(transcript_path, cwd, ["lightweight", "core"], debug):
+            # Daemon handles transcript + buffer + co-occurrences.
+            # Episodic still needs local file write.
+            _update_episodic(memory_dir, transcript_path, debug)
+            return
+
+        # ===== FALLBACK: Local subprocess pipeline =====
+        if debug:
+            print("DEBUG: [subagent] Running local fallback pipeline", file=sys.stderr)
+
         transcript_processor = memory_dir / "transcript_processor.py"
         auto_memory = memory_dir / "auto_memory_hook.py"
-        memory_manager = memory_dir / "memory_manager.py"
 
         # 1. Process subagent's transcript for thought memories
         if transcript_path and transcript_processor.exists() and os.path.exists(transcript_path):
             try:
                 result = subprocess.run(
                     ["python", str(transcript_processor), transcript_path],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    cwd=str(memory_dir),
+                    capture_output=True, text=True, timeout=30, cwd=str(memory_dir),
                 )
                 if debug:
-                    print(
-                        f"DEBUG: [subagent] Transcript processing: {result.stdout[:500]}",
-                        file=sys.stderr,
-                    )
+                    print(f"DEBUG: [subagent] Transcript processing: {result.stdout[:500]}", file=sys.stderr)
             except Exception as e:
                 if debug:
                     print(f"DEBUG: [subagent] Transcript error: {e}", file=sys.stderr)
@@ -100,76 +167,28 @@ def consolidate_subagent_memory(
             try:
                 result = subprocess.run(
                     ["python", str(auto_memory), "--stop"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    cwd=str(memory_dir),
+                    capture_output=True, text=True, timeout=10, cwd=str(memory_dir),
                 )
                 if debug:
-                    print(
-                        f"DEBUG: [subagent] Buffer consolidation: {result.stdout}",
-                        file=sys.stderr,
-                    )
+                    print(f"DEBUG: [subagent] Buffer consolidation: {result.stdout}", file=sys.stderr)
             except Exception as e:
                 if debug:
                     print(f"DEBUG: [subagent] Buffer error: {e}", file=sys.stderr)
 
-        # 3. Save co-occurrences in-process (save-pending was removed in DB migration)
+        # 3. Save co-occurrences in-process
         try:
             if str(memory_dir) not in sys.path:
                 sys.path.insert(0, str(memory_dir))
             from co_occurrence import end_session_cooccurrence
             result = end_session_cooccurrence()
             if debug:
-                print(
-                    f"DEBUG: [subagent] co-occurrences saved: {len(result)} new links",
-                    file=sys.stderr,
-                )
+                print(f"DEBUG: [subagent] co-occurrences saved: {len(result)} new links", file=sys.stderr)
         except Exception as e:
             if debug:
                 print(f"DEBUG: [subagent] co-occurrence error: {e}", file=sys.stderr)
 
         # 4. Update episodic memory with subagent milestones
-        if transcript_path and transcript_processor.exists() and os.path.exists(transcript_path):
-            try:
-                result = subprocess.run(
-                    [
-                        "python",
-                        str(transcript_processor),
-                        transcript_path,
-                        "--milestones-md",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    cwd=str(memory_dir),
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    milestone_md = result.stdout.strip()
-                    episodic_dir = memory_dir / "episodic"
-                    episodic_dir.mkdir(exist_ok=True)
-                    today = datetime.now().strftime("%Y-%m-%d")
-                    session_time = datetime.now().strftime("%H:%M UTC")
-                    episodic_file = episodic_dir / f"{today}.md"
-
-                    entry = (
-                        f"\n## Subagent completed (~{session_time})\n\n"
-                        f"{milestone_md}\n"
-                    )
-
-                    if episodic_file.exists():
-                        with open(episodic_file, "a", encoding="utf-8") as f:
-                            f.write(entry)
-                    else:
-                        header = f"# {today}\n"
-                        with open(episodic_file, "w", encoding="utf-8") as f:
-                            f.write(header + entry)
-
-                    if debug:
-                        print("DEBUG: [subagent] Episodic updated", file=sys.stderr)
-            except Exception as e:
-                if debug:
-                    print(f"DEBUG: [subagent] Episodic error: {e}", file=sys.stderr)
+        _update_episodic(memory_dir, transcript_path, debug)
 
     except Exception as e:
         if debug:

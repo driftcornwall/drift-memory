@@ -3,6 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "python-dotenv",
+#     "pyyaml",
+#     "psycopg2-binary",
 # ]
 # ///
 
@@ -137,13 +139,37 @@ def _run_script(memory_dir, script_name, args, timeout=15):
         return (-3, "", str(e))
 
 
+def _try_daemon(transcript_path: str, cwd: str, phases: list) -> bool:
+    """Try to delegate to the consolidation daemon on port 8083.
+
+    Returns True if daemon accepted the request, False if unavailable.
+    Uses specific phases to avoid suppressing stop.py's full consolidation.
+    """
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "cwd": cwd or str(Path.cwd()),
+            "transcript_path": transcript_path or "",
+            "phases": phases,
+        }).encode('utf-8')
+        req = urllib.request.Request(
+            "http://localhost:8083/consolidate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method='POST'
+        )
+        urllib.request.urlopen(req, timeout=3)
+        return True
+    except Exception:
+        return False
+
+
 def process_memories_before_compaction(transcript_path: str, cwd: str = None):
     """
     Extract memories from transcript BEFORE compaction destroys them.
-    Parallelized in 2 phases:
 
-    Phase 1 (parallel): transcript, auto_memory, save-pending
-    Phase 2 (parallel): lesson mining x3
+    DAEMON-FIRST: Tries consolidation daemon with lightweight+core+enrichment phases.
+    Falls back to local subprocess pipeline if daemon is unavailable.
 
     The transcript_processor has hash-based dedup, so running it here
     AND again at session end (stop.py) is safe — no double-counting.
@@ -156,6 +182,12 @@ def process_memories_before_compaction(transcript_path: str, cwd: str = None):
         memory_dir = get_memory_dir(cwd)
         if not memory_dir.exists():
             return
+
+        # Try daemon first — lightweight+core+enrichment (skips attestation/finalize)
+        if _try_daemon(transcript_path, cwd, ["lightweight", "core", "enrichment"]):
+            return  # Daemon handles it
+
+        # ===== FALLBACK: Local subprocess pipeline =====
 
         # Phase 1: transcript + consolidation + save-pending (all independent)
         with ThreadPoolExecutor(max_workers=3) as pool:

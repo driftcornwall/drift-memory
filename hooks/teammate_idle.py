@@ -3,6 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "python-dotenv",
+#     "pyyaml",
+#     "psycopg2-binary",
 # ]
 # ///
 
@@ -63,6 +65,73 @@ def get_memory_dir(cwd: str = None) -> Path:
     return MOLTBOOK_DIRS[0]
 
 
+def _try_daemon(transcript_path: str, cwd: str, phases: list, debug: bool = False) -> bool:
+    """Try to delegate to the consolidation daemon on port 8083.
+
+    Returns True if daemon accepted the request, False if unavailable.
+    Uses specific phases to avoid suppressing stop.py's full consolidation.
+    """
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "cwd": cwd or str(Path.cwd()),
+            "transcript_path": transcript_path or "",
+            "phases": phases,
+        }).encode('utf-8')
+        req = urllib.request.Request(
+            "http://localhost:8083/consolidate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method='POST'
+        )
+        urllib.request.urlopen(req, timeout=3)
+        if debug:
+            print("DEBUG: [teammate] Delegated to consolidation daemon", file=sys.stderr)
+        return True
+    except Exception as e:
+        if debug:
+            print(f"DEBUG: [teammate] Daemon unavailable ({e}), falling back to local", file=sys.stderr)
+        return False
+
+
+def _update_episodic(memory_dir: Path, teammate_name: str, team_name: str,
+                     transcript_path: str, debug: bool = False):
+    """Update episodic memory with teammate milestones. Runs locally (needs file write)."""
+    transcript_processor = memory_dir / "transcript_processor.py"
+    if not transcript_path or not transcript_processor.exists():
+        return
+    try:
+        result = subprocess.run(
+            ["python", str(transcript_processor), transcript_path, "--milestones-md"],
+            capture_output=True, text=True, timeout=30, cwd=str(memory_dir),
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            milestone_md = result.stdout.strip()
+            episodic_dir = memory_dir / "episodic"
+            episodic_dir.mkdir(exist_ok=True)
+            today = datetime.now().strftime("%Y-%m-%d")
+            session_time = datetime.now().strftime("%H:%M UTC")
+            episodic_file = episodic_dir / f"{today}.md"
+
+            entry = (
+                f"\n## Teammate '{teammate_name}' ({team_name}) "
+                f"idle (~{session_time})\n\n{milestone_md}\n"
+            )
+
+            if episodic_file.exists():
+                with open(episodic_file, "a", encoding="utf-8") as f:
+                    f.write(entry)
+            else:
+                with open(episodic_file, "w", encoding="utf-8") as f:
+                    f.write(f"# {today}\n{entry}")
+
+            if debug:
+                print(f"DEBUG: [{teammate_name}] Episodic updated", file=sys.stderr)
+    except Exception as e:
+        if debug:
+            print(f"DEBUG: [{teammate_name}] Episodic error: {e}", file=sys.stderr)
+
+
 def consolidate_teammate_memory(
     teammate_name: str,
     team_name: str,
@@ -73,23 +142,17 @@ def consolidate_teammate_memory(
     """
     Run memory consolidation for a teammate's work.
 
-    Replicates stop.py's consolidate_drift_memory() pipeline but:
-    - Tags extracted memories with teammate origin
-    - Skips attestations (those are session-level, not per-teammate)
-    - Focuses on transcript processing + co-occurrence save
+    DAEMON-FIRST: Tries consolidation daemon with lightweight+core phases.
+    Falls back to local subprocess pipeline if daemon is unavailable.
+    Episodic update always runs locally (daemon can't write host files).
 
-    Args:
-        teammate_name: Name of the teammate that went idle
-        team_name: Name of the team
-        transcript_path: Path to teammate's transcript
-        cwd: Working directory
-        debug: Enable debug output
+    Skips attestations — those are session-level, not per-teammate.
     """
     try:
         project_dir = cwd if cwd else str(Path.cwd())
         if "Moltbook" not in project_dir and "moltbook" not in project_dir.lower():
             if debug:
-                print(f"DEBUG: Not in Moltbook project, skipping", file=sys.stderr)
+                print("DEBUG: Not in Moltbook project, skipping", file=sys.stderr)
             return
 
         memory_dir = get_memory_dir(cwd)
@@ -98,8 +161,18 @@ def consolidate_teammate_memory(
                 print(f"DEBUG: Memory dir not found: {memory_dir}", file=sys.stderr)
             return
 
+        # Try daemon first — lightweight+core (skips attestation/finalize/enrichment)
+        if _try_daemon(transcript_path, cwd, ["lightweight", "core"], debug):
+            # Daemon handles transcript + buffer + co-occurrences.
+            # Episodic still needs local file write.
+            _update_episodic(memory_dir, teammate_name, team_name, transcript_path, debug)
+            return
+
+        # ===== FALLBACK: Local subprocess pipeline =====
+        if debug:
+            print(f"DEBUG: [{teammate_name}] Running local fallback pipeline", file=sys.stderr)
+
         auto_memory = memory_dir / "auto_memory_hook.py"
-        memory_manager = memory_dir / "memory_manager.py"
         transcript_processor = memory_dir / "transcript_processor.py"
 
         # 1. Process teammate's transcript for thought memories
@@ -107,124 +180,45 @@ def consolidate_teammate_memory(
             try:
                 result = subprocess.run(
                     ["python", str(transcript_processor), transcript_path],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    cwd=str(memory_dir),
+                    capture_output=True, text=True, timeout=30, cwd=str(memory_dir),
                 )
                 if debug:
-                    print(
-                        f"DEBUG: [{teammate_name}] Transcript processing: "
-                        f"{result.stdout[:500]}",
-                        file=sys.stderr,
-                    )
+                    print(f"DEBUG: [{teammate_name}] Transcript processing: {result.stdout[:500]}", file=sys.stderr)
             except Exception as e:
                 if debug:
-                    print(
-                        f"DEBUG: [{teammate_name}] Transcript error: {e}",
-                        file=sys.stderr,
-                    )
+                    print(f"DEBUG: [{teammate_name}] Transcript error: {e}", file=sys.stderr)
 
         # 2. Run short-term buffer consolidation
         if auto_memory.exists():
             try:
                 result = subprocess.run(
                     ["python", str(auto_memory), "--stop"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    cwd=str(memory_dir),
+                    capture_output=True, text=True, timeout=10, cwd=str(memory_dir),
                 )
                 if debug:
-                    print(
-                        f"DEBUG: [{teammate_name}] Buffer consolidation: "
-                        f"{result.stdout}",
-                        file=sys.stderr,
-                    )
+                    print(f"DEBUG: [{teammate_name}] Buffer consolidation: {result.stdout}", file=sys.stderr)
             except Exception as e:
                 if debug:
-                    print(
-                        f"DEBUG: [{teammate_name}] Buffer error: {e}",
-                        file=sys.stderr,
-                    )
+                    print(f"DEBUG: [{teammate_name}] Buffer error: {e}", file=sys.stderr)
 
-        # 3. Save co-occurrences in-process (save-pending was removed in DB migration)
+        # 3. Save co-occurrences in-process
         try:
             if str(memory_dir) not in sys.path:
                 sys.path.insert(0, str(memory_dir))
             from co_occurrence import end_session_cooccurrence
             result = end_session_cooccurrence()
             if debug:
-                print(
-                    f"DEBUG: [{teammate_name}] co-occurrences saved: {len(result)} new links",
-                    file=sys.stderr,
-                )
+                print(f"DEBUG: [{teammate_name}] co-occurrences saved: {len(result)} new links", file=sys.stderr)
         except Exception as e:
             if debug:
-                print(
-                    f"DEBUG: [{teammate_name}] co-occurrence error: {e}",
-                    file=sys.stderr,
-                )
+                print(f"DEBUG: [{teammate_name}] co-occurrence error: {e}", file=sys.stderr)
 
         # 4. Update episodic memory with teammate's milestones
-        if transcript_path and transcript_processor.exists():
-            try:
-                result = subprocess.run(
-                    [
-                        "python",
-                        str(transcript_processor),
-                        transcript_path,
-                        "--milestones-md",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    cwd=str(memory_dir),
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    milestone_md = result.stdout.strip()
-                    episodic_dir = memory_dir / "episodic"
-                    episodic_dir.mkdir(exist_ok=True)
-                    today = datetime.now().strftime("%Y-%m-%d")
-                    session_time = datetime.now().strftime("%H:%M UTC")
-                    episodic_file = episodic_dir / f"{today}.md"
-
-                    entry = (
-                        f"\n## Teammate '{teammate_name}' ({team_name}) "
-                        f"idle (~{session_time})\n\n{milestone_md}\n"
-                    )
-
-                    if episodic_file.exists():
-                        with open(episodic_file, "a", encoding="utf-8") as f:
-                            f.write(entry)
-                    else:
-                        header = f"# {today}\n"
-                        with open(episodic_file, "w", encoding="utf-8") as f:
-                            f.write(header + entry)
-
-                    if debug:
-                        print(
-                            f"DEBUG: [{teammate_name}] Episodic updated",
-                            file=sys.stderr,
-                        )
-            except Exception as e:
-                if debug:
-                    print(
-                        f"DEBUG: [{teammate_name}] Episodic error: {e}",
-                        file=sys.stderr,
-                    )
-
-        # NOTE: We skip merkle attestation, cognitive fingerprint, and taste
-        # attestation here. Those are expensive and should only run at main
-        # session end (stop.py), not per-teammate-idle. The co-occurrence
-        # data saved above will be included in the next main attestation.
+        _update_episodic(memory_dir, teammate_name, team_name, transcript_path, debug)
 
     except Exception as e:
         if debug:
-            print(
-                f"DEBUG: [{teammate_name}] Memory consolidation error: {e}",
-                file=sys.stderr,
-            )
+            print(f"DEBUG: [{teammate_name}] Memory consolidation error: {e}", file=sys.stderr)
 
 
 def main():

@@ -3,6 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "python-dotenv",
+#     "pyyaml",
+#     "psycopg2-binary",
 # ]
 # ///
 
@@ -516,15 +518,81 @@ def _task_vitals(memory_dir):
     return _run_script(memory_dir, "system_vitals.py", ["record"], timeout=15)
 
 
+CONSOLIDATION_DEBOUNCE_SECONDS = 60  # 1 minute — catches session-end while avoiding mid-turn repeats
+
+
+def _should_run_full_consolidation(memory_dir: Path, debug: bool = False) -> bool:
+    """Check if we should run the full (expensive) consolidation pipeline.
+
+    Uses a timestamp file to debounce. Returns True if >= 5 min since last full run.
+    Lightweight tasks (co-occurrence save, session state) always run regardless.
+    """
+    marker = memory_dir / ".last_full_consolidation"
+    try:
+        if marker.exists():
+            last_run = float(marker.read_text().strip())
+            elapsed = datetime.now().timestamp() - last_run
+            if elapsed < CONSOLIDATION_DEBOUNCE_SECONDS:
+                if debug:
+                    print(f"DEBUG: Skipping full consolidation ({elapsed:.0f}s < {CONSOLIDATION_DEBOUNCE_SECONDS}s debounce)",
+                          file=sys.stderr)
+                return False
+    except Exception:
+        pass  # If marker is corrupt, run anyway
+    return True
+
+
+def _mark_full_consolidation(memory_dir: Path):
+    """Mark that a full consolidation just completed."""
+    marker = memory_dir / ".last_full_consolidation"
+    try:
+        marker.write_text(str(datetime.now().timestamp()))
+    except Exception:
+        pass
+
+
+def _try_daemon_consolidation(transcript_path: str, cwd: str, debug: bool) -> bool:
+    """Try to delegate consolidation to the daemon on port 8083.
+
+    Returns True if daemon accepted the request, False if unavailable.
+    The daemon runs the full pipeline in-process with incremental computation.
+    """
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "cwd": cwd or str(Path.cwd()),
+            "transcript_path": transcript_path or "",
+        }).encode('utf-8')
+        req = urllib.request.Request(
+            "http://localhost:8083/consolidate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method='POST'
+        )
+        resp = urllib.request.urlopen(req, timeout=3)
+        if debug:
+            body = json.loads(resp.read())
+            print(f"DEBUG: Consolidation delegated to daemon (job: {body.get('job_id')})", file=sys.stderr)
+        return True
+    except Exception as e:
+        if debug:
+            print(f"DEBUG: Daemon unavailable ({e}), falling back to local", file=sys.stderr)
+        return False
+
+
 def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug: bool = False):
     """
     Run Drift's memory consolidation at session end.
-    Parallelized in 4 phases with dependency ordering:
 
-    Phase 1 (parallel): transcript, auto_memory, save-pending, maintenance
-    Phase 2 (parallel): episodic, store-summary, lesson mining x3
-    Phase 3 (parallel): merkle, fingerprint, taste attestation
-    Phase 4 (sequential): vitals record, session state clear
+    DAEMON-FIRST: Tries to delegate to consolidation daemon (port 8083).
+    If daemon is unavailable, falls back to the local pipeline.
+
+    Local pipeline (fallback):
+    Phase 0 (always):   save-pending co-occurrences, session state
+    Phase 1 (debounced): transcript, auto_memory, maintenance, behavioral, Q-update
+    Phase 2 (debounced): episodic, store-summary, lesson mining, 5W rebuild, Gemma
+    Phase 3 (debounced): merkle, fingerprint, taste attestation
+    Phase 4 (debounced): vitals record, cognitive state end, session state clear
 
     Fails gracefully - should never break the stop hook.
     """
@@ -541,6 +609,21 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
             if debug:
                 print(f"DEBUG: {msg}", file=sys.stderr)
 
+        # Try daemon first — if it accepts, we're done (~50ms)
+        if _try_daemon_consolidation(transcript_path, cwd, debug):
+            # Daemon handles everything including debounce.
+            # Still run episodic locally since it needs file write access.
+            is_subagent = bool(os.environ.get("CLAUDE_CODE_AGENT_ID"))
+            if not is_subagent and transcript_path:
+                try:
+                    update_episodic_memory(memory_dir, transcript_path, debug)
+                except Exception as e:
+                    _debug(f"Episodic (with daemon): {e}")
+            return
+
+        # ===== FALLBACK: Local pipeline (daemon unavailable) =====
+        _debug("Running local consolidation pipeline")
+
         def _log_result(name, result):
             if result is None:
                 return
@@ -553,8 +636,6 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
                 _debug(f"{name}: rc={rc} stderr={stderr[:200]}")
 
         # Pre-load session_state ONCE to trigger deferred processing
-        # (pending co-occurrences + semantic indexing from previous session).
-        # Without this, every Phase that touches session_state re-triggers it.
         try:
             if str(memory_dir) not in sys.path:
                 sys.path.insert(0, str(memory_dir))
@@ -564,18 +645,26 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
         except Exception as e:
             _debug(f"Session state pre-load error: {e}")
 
+        # ===== LIGHTWEIGHT TASKS (run every stop, ~1-2s) =====
+        save_result = _task_save_pending(memory_dir)
+        _log_result("Save-pending", save_result)
+
+        # Check debounce — skip expensive phases if ran recently
+        run_full = _should_run_full_consolidation(memory_dir, debug)
+        if not run_full:
+            _debug("Debounced: only lightweight tasks ran")
+            return
+
         # ===== PHASE 1: Independent consolidation tasks =====
-        with ThreadPoolExecutor(max_workers=6) as pool:
+        with ThreadPoolExecutor(max_workers=5) as pool:
             f_transcript = pool.submit(_task_transcript, memory_dir, transcript_path)
             f_auto_mem = pool.submit(_task_auto_memory, memory_dir)
-            f_save = pool.submit(_task_save_pending, memory_dir)
             f_maint = pool.submit(_task_maintenance, memory_dir)
             f_behavioral = pool.submit(_task_behavioral_rejections, memory_dir)
             f_qupdate = pool.submit(_task_q_update, memory_dir)
 
         _log_result("Transcript", f_transcript.result())
         _log_result("Auto-memory", f_auto_mem.result())
-        _log_result("Save-pending", f_save.result())
         _log_result("Maintenance", f_maint.result())
         _log_result("Behavioral", f_behavioral.result())
         _log_result("Q-update", f_qupdate.result())
@@ -605,13 +694,9 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
             futures["Lesson-hubs"] = pool.submit(
                 _task_lesson_mine, memory_dir, "mine-hubs"
             )
-            # Rebuild 5W context graphs in-process (moved from session_start)
-            # Runs in parallel with lessons so doesn't add wall time
             futures["Rebuild-5W"] = pool.submit(
                 _task_rebuild_5w_inproc, memory_dir
             )
-            # Gemma vocabulary expansion + WHAT classification
-            # Scans dead memories for novel bridge terms, classifies untagged memories
             futures["Gemma-vocab"] = pool.submit(
                 _task_gemma_vocab_scan, memory_dir
             )
@@ -629,13 +714,12 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
                         _debug(f"{name}: {result[1]}")
                     else:
                         _debug(f"{name}: {result}")
-                elif name != "Episodic":  # episodic returns None
+                elif name != "Episodic":
                     _log_result(name, result)
             except Exception as e:
                 _debug(f"{name} error: {e}")
 
         # ===== PHASE 3: Attestations (in-process for speed) =====
-        # In-process calls share DB connection pool, avoiding 20s+ subprocess startup
         if str(memory_dir) not in sys.path:
             sys.path.insert(0, str(memory_dir))
 
@@ -649,7 +733,6 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
         _log_result("Taste", f_taste.result())
 
         # ===== PHASE 4: Vitals + cleanup (in-process) =====
-        # End cognitive state session BEFORE vitals (so vitals captures final state)
         try:
             if str(memory_dir) not in sys.path:
                 sys.path.insert(0, str(memory_dir))
@@ -673,7 +756,6 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
             _log_result("Vitals", vitals_result)
 
         # End session AFTER vitals has captured recall counts
-        # Works for both SpindriftMend (DB-backed: end()) and DriftCornwall (file-backed: save()+clear())
         try:
             import session_state as _ss_end
             if hasattr(_ss_end, 'end'):
@@ -693,6 +775,9 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
                 _debug("Legacy session state file cleaned up")
             except Exception as e:
                 _debug(f"Session state clear error: {e}")
+
+        # Mark successful full consolidation for debounce
+        _mark_full_consolidation(memory_dir)
 
     except Exception as e:
         if debug:
@@ -930,6 +1015,24 @@ def _collect_session_stats(project_cwd, debug=False):
             except Exception:
                 pass
 
+        # Contradiction detection stats
+        try:
+            import psycopg2.extras as _extras
+            with db._conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"""
+                        SELECT COUNT(*) FROM {db._table('typed_edges')}
+                        WHERE relationship = 'contradicts'
+                    """)
+                    stats['contradictions'] = cur.fetchone()[0]
+                    cur.execute(f"""
+                        SELECT COUNT(*) FROM {db._table('typed_edges')}
+                        WHERE relationship = 'supports'
+                    """)
+                    stats['supports'] = cur.fetchone()[0]
+        except Exception:
+            pass
+
         # Vitals alerts (system_vitals.py is fully DB-backed)
         try:
             result = subprocess.run(
@@ -1012,6 +1115,15 @@ def _format_stats_block(stats):
         row2.append(f"Drift:{stats['drift_score']:.3f}")
     if row2:
         lines.append(' | '.join(row2))
+
+    # Contradiction detection stats
+    row3 = []
+    if stats.get('contradictions', 0) > 0:
+        row3.append(f"Contradictions:{stats['contradictions']}")
+    if stats.get('supports', 0) > 0:
+        row3.append(f"Supports:{stats['supports']}")
+    if row3:
+        lines.append(' | '.join(row3))
 
     # Alerts (ERR first, then WARN — compact)
     alerts = stats.get('alerts', [])
