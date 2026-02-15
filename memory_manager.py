@@ -77,13 +77,18 @@ from decay_evolution import (
 # parse_memory_file, write_memory_file -> memory_common module (Phase 2)
 
 
-def recall_memory(memory_id: str) -> Optional[tuple[dict, str]]:
+def recall_memory(memory_id: str, query_context: str = '',
+                  co_active_ids: list = None) -> Optional[tuple[dict, str]]:
     """
     Recall a memory by ID, updating its metadata. DB-only.
     Tracks co-occurrence with other memories retrieved this session.
     Session state persists to disk so it survives Python process restarts.
+
+    Phase 3 (Reconsolidation Stage 1): also appends recall context to
+    extra_metadata for future revision decisions.
     """
     from db_adapter import get_db, db_to_file_metadata
+    from datetime import datetime
 
     session_state.load()
 
@@ -104,15 +109,46 @@ def recall_memory(memory_id: str) -> Optional[tuple[dict, str]]:
     if recall_count > 0 and recall_count % 10 == 0:
         new_importance = min(1.0, current_importance + 0.02)
 
+    # --- Reconsolidation Stage 1: Recall Context Tracking ---
+    extra = row.get('extra_metadata') or {}
+    if not isinstance(extra, dict):
+        extra = {}
+
+    # Append recall context (capped at 20 to prevent bloat)
+    if query_context:
+        contexts = extra.get('recall_contexts', [])
+        contexts.append({
+            'query': query_context[:200],
+            'co_active': (co_active_ids or [])[:10],
+            'ts': datetime.now().strftime('%Y-%m-%dT%H:%M'),
+        })
+        extra['recall_contexts'] = contexts[-20:]  # Keep last 20
+
+    # Increment recall_count_since_revision
+    extra['recall_count_since_revision'] = extra.get('recall_count_since_revision', 0) + 1
+
+    # Check for contradiction signals (lightweight: just count, don't fetch details)
+    try:
+        from knowledge_graph import get_edges_from, get_edges_to
+        contra_out = get_edges_from(memory_id, 'contradicts')
+        contra_in = get_edges_to(memory_id, 'contradicts')
+        contra_count = len(contra_out) + len(contra_in)
+        if contra_count > 0:
+            extra['contradiction_signals'] = contra_count
+    except Exception:
+        pass
+
     db.update_memory(
         memory_id,
         emotional_weight=new_weight,
         freshness=1.0,
         importance=new_importance,
+        extra_metadata=extra,
     )
     row['emotional_weight'] = new_weight
     row['freshness'] = 1.0
     row['importance'] = new_importance
+    row['extra_metadata'] = extra
 
     session_state.add_retrieved(memory_id)
     session_state.save()

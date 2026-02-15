@@ -654,12 +654,14 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     except Exception:
         pass  # Don't break search if spreading activation fails
 
-    # Register recalls with the memory system
+    # Register recalls with the memory system (+ reconsolidation context)
     if register_recall and top_results:
         try:
             from memory_manager import recall_memory
+            co_active = [r['id'] for r in top_results[:10]]
             for r in top_results:
-                recall_memory(r["id"])
+                recall_memory(r["id"], query_context=query,
+                              co_active_ids=[x for x in co_active if x != r['id']])
         except Exception:
             pass
 

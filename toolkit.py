@@ -147,6 +147,10 @@ def build_registry():
         Command("intentions", "memory", "List pending intentions", "temporal_intentions", "list"),
         Command("check-intentions", "memory", "Check triggered intentions", "temporal_intentions", "check"),
         Command("complete-intention", "memory", "Mark intention done", "temporal_intentions", "complete", "<id> [--outcome text]"),
+        Command("recon-candidates", "memory", "Reconsolidation candidates", "reconsolidation", "candidates"),
+        Command("recon-queue", "memory", "Queue candidates for revision", "reconsolidation", "queue"),
+        Command("recon-stats", "memory", "Reconsolidation statistics", "reconsolidation", "stats"),
+        Command("recon-history", "memory", "Revision history for a memory", "reconsolidation", "history", "<id>"),
         Command("export", "memory", "Secure memory export", "memory_interop", "export"),
         Command("import", "memory", "Import with quarantine", "memory_interop", "import"),
     ]
