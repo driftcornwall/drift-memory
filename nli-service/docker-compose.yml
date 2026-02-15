@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  nli-inference:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"
+    volumes:
+      - hf_nli_cache:/root/.cache/huggingface
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  hf_nli_cache:
+    name: drift_nli_cache

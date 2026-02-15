@@ -258,6 +258,34 @@ def store_memory(
     except Exception:
         pass
 
+    # Classify evidence type (instant heuristic — no external service needed)
+    try:
+        from memory_validation import classify_evidence_type, record_claim
+        evidence_type, _confidence = classify_evidence_type(content, tags=tags or [])
+        db.update_memory(memory_id, extra_metadata={
+            **(db.get_memory(memory_id) or {}).get('extra_metadata', {}) or {},
+            'evidence_type': evidence_type,
+        })
+        if evidence_type == 'claim':
+            # Track source for reliability scoring
+            source = (tags[0] if tags else 'unknown')
+            record_claim(source)
+    except Exception:
+        pass  # Evidence classification failure shouldn't block store
+
+    # Contradiction check (background thread — needs embedding index, runs after embed)
+    try:
+        import threading
+        def _contradict_bg(mid, text):
+            try:
+                from contradiction_detector import check_contradictions
+                check_contradictions(text, mid)
+            except Exception:
+                pass
+        threading.Thread(target=_contradict_bg, args=(memory_id, content), daemon=True).start()
+    except Exception:
+        pass
+
     return memory_id, display_name
 
 

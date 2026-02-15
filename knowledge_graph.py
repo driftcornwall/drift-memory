@@ -42,6 +42,7 @@ RELATIONSHIP_TYPES = {
     'temporal_after':  {'symbol': '> ', 'description': 'A happened after B'},
     'references':      {'symbol': '->', 'description': 'A mentions/cites B'},
     'resolves':        {'symbol': 'ok', 'description': 'A fixes the problem in B'},
+    'supports':        {'symbol': '++', 'description': 'A provides evidence for B'},
 }
 
 

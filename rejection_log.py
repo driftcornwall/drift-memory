@@ -50,6 +50,7 @@ VALID_CATEGORIES = [
     'memory_decay',    # Memories allowed to fade
     'decision',        # Explicit "no" decisions
     'collaboration',   # Requests/offers declined
+    'contradiction_detected',  # NLI-detected memory contradictions
 ]
 
 

@@ -210,6 +210,18 @@ def build_registry():
         Command("kg-path", "dashboard", "Find shortest typed path", "knowledge_graph", "path", "<id1> <id2>"),
     ]
 
+    # === CONTRADICTION DETECTION & VALIDATION ===
+    cmds += [
+        Command("contradict-status", "search", "NLI service status", "contradiction_detector", "status"),
+        Command("contradict-check", "search", "Check memory for contradictions", "contradiction_detector", "check", "<id>"),
+        Command("contradict-scan", "search", "Batch scan for contradictions", "contradiction_detector", "scan", "[limit]"),
+        Command("contradict-report", "search", "Show all detected contradictions", "contradiction_detector", "report"),
+        Command("validate", "search", "Classify evidence type of text", "memory_validation", "classify", "<text>"),
+        Command("source-reliability", "search", "Source reliability scores", "memory_validation", "reliability", "[source]"),
+        Command("verify-memory", "search", "Mark memory as verified", "memory_validation", "verify", "<id>"),
+        Command("dispute-memory", "search", "Mark memory as disputed", "memory_validation", "dispute", "<id> [reason]"),
+    ]
+
     # === Q-VALUE LEARNING (MemRL) ===
     cmds += [
         Command("q-stats", "dashboard", "Q-value distribution", "q_value_engine", "stats"),
@@ -565,6 +577,8 @@ def cmd_health():
         ("explanation", "Explainability interface"),
         ("cognitive_state", "Cognitive state tracker"),
         ("knowledge_graph", "Knowledge graph (typed relationships)"),
+        ("contradiction_detector", "NLI contradiction detection"),
+        ("memory_validation", "Evidence classification & source reliability"),
         ("q_value_engine", "Q-value learning (MemRL)"),
     ]
 
