@@ -391,6 +391,35 @@ def _task_extract_intentions(memory_dir, transcript_path):
         return (-3, "", f"Intention extraction error: {e}")
 
 
+def _task_generative_sleep(memory_dir):
+    """Run one dream cycle — novel association through memory replay (Phase 6)."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from generative_sleep import dream
+        result = dream(dry_run=False)
+        status = result.get('status', '?')
+        synth_id = result.get('synthesis_id', '')
+        msg = f"Dream: {status}"
+        if synth_id:
+            msg += f" -> {synth_id}"
+        return (0, msg, "")
+    except Exception as e:
+        return (-3, "", f"Generative sleep error: {e}")
+
+
+def _task_mine_explanations(memory_dir):
+    """Mine strategy heuristics from explanation traces (Phase 5)."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from explanation_miner import mine_strategies
+        strategies = mine_strategies(limit=100)
+        return (0, f"Mined {len(strategies)} strategy heuristic(s)", "")
+    except Exception as e:
+        return (-3, "", f"Explanation mining error: {e}")
+
+
 def _task_rebuild_5w_inproc(memory_dir):
     """Rebuild 5W context graphs in-process (moved from session_start)."""
     try:
@@ -716,6 +745,12 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
             )
             futures["Intentions"] = pool.submit(
                 _task_extract_intentions, memory_dir, transcript_path
+            )
+            futures["Strategies"] = pool.submit(
+                _task_mine_explanations, memory_dir
+            )
+            futures["Dream"] = pool.submit(
+                _task_generative_sleep, memory_dir
             )
             futures["Gemma-vocab"] = pool.submit(
                 _task_gemma_vocab_scan, memory_dir

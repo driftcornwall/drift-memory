@@ -154,6 +154,12 @@ def build_registry():
         Command("adapt", "memory", "Run adaptive behavior loop", "adaptive_behavior", "adapt"),
         Command("adapt-current", "memory", "Active adaptations", "adaptive_behavior", "current"),
         Command("adapt-stats", "memory", "Adaptation statistics", "adaptive_behavior", "stats"),
+        Command("mine-strategies", "search", "Extract strategies from traces", "explanation_miner", "mine"),
+        Command("strategies", "search", "Active strategy heuristics", "explanation_miner", "strategies"),
+        Command("strategy-stats", "search", "Mining statistics", "explanation_miner", "stats"),
+        Command("dream", "memory", "Run generative sleep cycle", "generative_sleep", "dream"),
+        Command("dream-sample", "memory", "Preview dream sampling", "generative_sleep", "sample"),
+        Command("dream-stats", "memory", "Dream statistics", "generative_sleep", "stats"),
         Command("export", "memory", "Secure memory export", "memory_interop", "export"),
         Command("import", "memory", "Import with quarantine", "memory_interop", "import"),
     ]
