@@ -341,6 +341,22 @@ def get_priming_candidates(
     except Exception:
         pass
 
+    # === ADAPTIVE BEHAVIOR: Override parameters from vitals-driven control loop ===
+    _adaptive_extra_curiosity = 0
+    _adaptive_extra_excavation = 0
+    try:
+        from adaptive_behavior import get_current, DEFAULTS
+        ab = get_current()
+        if ab.get('curiosity_target_count', DEFAULTS['curiosity_target_count']) > DEFAULTS['curiosity_target_count']:
+            _adaptive_extra_curiosity = ab['curiosity_target_count'] - DEFAULTS['curiosity_target_count']
+        if ab.get('excavation_count', DEFAULTS['excavation_count']) > DEFAULTS['excavation_count']:
+            _adaptive_extra_excavation = ab['excavation_count'] - DEFAULTS['excavation_count']
+        if ab.get('priming_candidate_count', DEFAULTS['priming_candidate_count']) > DEFAULTS['priming_candidate_count']:
+            activation_count = max(activation_count,
+                                   ab['priming_candidate_count'])
+    except Exception:
+        pass
+
     # Phase 1: Top activated memories (with hub dampening)
     activated = get_most_activated_memories(limit=activation_count * 2)  # Fetch extra for dampening
     dampened = []
@@ -424,7 +440,7 @@ def get_priming_candidates(
     result['curiosity'] = []
     try:
         from curiosity_engine import get_curiosity_targets, log_curiosity_surfaced
-        curiosity_count = 3 + _cog_extra_curiosity
+        curiosity_count = 3 + _cog_extra_curiosity + _adaptive_extra_curiosity
         curiosity_targets = get_curiosity_targets(count=curiosity_count)
         surfaced_ids = []
         for target in curiosity_targets:

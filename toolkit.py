@@ -151,6 +151,9 @@ def build_registry():
         Command("recon-queue", "memory", "Queue candidates for revision", "reconsolidation", "queue"),
         Command("recon-stats", "memory", "Reconsolidation statistics", "reconsolidation", "stats"),
         Command("recon-history", "memory", "Revision history for a memory", "reconsolidation", "history", "<id>"),
+        Command("adapt", "memory", "Run adaptive behavior loop", "adaptive_behavior", "adapt"),
+        Command("adapt-current", "memory", "Active adaptations", "adaptive_behavior", "current"),
+        Command("adapt-stats", "memory", "Adaptation statistics", "adaptive_behavior", "stats"),
         Command("export", "memory", "Secure memory export", "memory_interop", "export"),
         Command("import", "memory", "Import with quarantine", "memory_interop", "import"),
     ]

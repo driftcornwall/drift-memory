@@ -658,6 +658,24 @@ def _read_and_clean_episodic(memory_dir, debug):
     return parts
 
 
+def _task_adaptive_behavior(memory_dir):
+    """Run adaptive behavior loop — map vitals alerts to parameter adjustments."""
+    parts = []
+    try:
+        sys.path.insert(0, str(memory_dir))
+        from adaptive_behavior import adapt
+        result = adapt()
+        if result['adaptations']:
+            parts.append(f"=== ADAPTIVE BEHAVIOR ({len(result['adaptations'])} adjustment(s)) ===")
+            for param, value in result['adaptations'].items():
+                reason = result['reasons'].get(param, '')[:60]
+                parts.append(f"  {param}: {value} (because: {reason})")
+            parts.append('')
+    except Exception:
+        pass
+    return parts
+
+
 def _task_intentions(memory_dir):
     """Check prospective memory — temporal intentions triggered this session."""
     parts = []
@@ -830,6 +848,7 @@ def load_drift_memory_context(debug: bool = False) -> str:
             f_research = pool.submit(check_unimplemented_research, memory_dir)
             f_nli = pool.submit(_task_nli_health, memory_dir)
             f_intentions = pool.submit(_task_intentions, memory_dir)
+            f_adaptive = pool.submit(_task_adaptive_behavior, memory_dir)
 
         # === COLLECT RESULTS (with error handling) ===
         def safe_get(future, default=None):
@@ -855,6 +874,7 @@ def load_drift_memory_context(debug: bool = False) -> str:
         research_text = safe_get(f_research, '')
         nli_parts = safe_get(f_nli, [])
         intentions_parts = safe_get(f_intentions, [])
+        adaptive_parts = safe_get(f_adaptive, [])
 
         # Unpack tuple results
         excavation_parts, excavation_ids = excavation_result if isinstance(excavation_result, tuple) else (excavation_result, [])
@@ -952,6 +972,9 @@ def load_drift_memory_context(debug: bool = False) -> str:
 
         # Vitals alerts
         context_parts.extend(vitals_parts)
+
+        # Adaptive behavior (responds to vitals alerts)
+        context_parts.extend(adaptive_parts)
 
         # NLI / Contradiction detection status
         context_parts.extend(nli_parts)
