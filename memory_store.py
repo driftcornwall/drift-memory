@@ -262,12 +262,11 @@ def store_memory(
     try:
         from memory_validation import classify_evidence_type, record_claim
         evidence_type, _confidence = classify_evidence_type(content, tags=tags or [])
-        db.update_memory(memory_id, extra_metadata={
-            **(db.get_memory(memory_id) or {}).get('extra_metadata', {}) or {},
-            'evidence_type': evidence_type,
-        })
+        row = db.get_memory(memory_id) or {}
+        existing_extra = row.get('extra_metadata') or {}
+        existing_extra['evidence_type'] = evidence_type
+        db.update_memory(memory_id, extra_metadata=existing_extra)
         if evidence_type == 'claim':
-            # Track source for reliability scoring
             source = (tags[0] if tags else 'unknown')
             record_claim(source)
     except Exception:
