@@ -374,6 +374,23 @@ def _task_lesson_mine(memory_dir, mine_cmd):
     return _run_script(memory_dir, "lesson_extractor.py", [mine_cmd], timeout=15)
 
 
+def _task_extract_intentions(memory_dir, transcript_path):
+    """Extract temporal intentions from transcript (Phase 2b: prospective memory)."""
+    if not transcript_path:
+        return None
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from temporal_intentions import extract_from_transcript
+        created = extract_from_transcript(transcript_path, max_intentions=3)
+        if created:
+            ids = [i['id'] for i in created]
+            return (0, f"Extracted {len(created)} intention(s): {', '.join(ids)}", "")
+        return (0, "No intentions extracted", "")
+    except Exception as e:
+        return (-3, "", f"Intention extraction error: {e}")
+
+
 def _task_rebuild_5w_inproc(memory_dir):
     """Rebuild 5W context graphs in-process (moved from session_start)."""
     try:
@@ -696,6 +713,9 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
             )
             futures["Rebuild-5W"] = pool.submit(
                 _task_rebuild_5w_inproc, memory_dir
+            )
+            futures["Intentions"] = pool.submit(
+                _task_extract_intentions, memory_dir, transcript_path
             )
             futures["Gemma-vocab"] = pool.submit(
                 _task_gemma_vocab_scan, memory_dir

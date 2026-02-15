@@ -658,6 +658,22 @@ def _read_and_clean_episodic(memory_dir, debug):
     return parts
 
 
+def _task_intentions(memory_dir):
+    """Check prospective memory — temporal intentions triggered this session."""
+    parts = []
+    try:
+        sys.path.insert(0, str(memory_dir))
+        from temporal_intentions import check_and_format
+        # Context includes current date + platform info
+        context = f"date={datetime.now().strftime('%Y-%m-%d')} session_start"
+        output = check_and_format(context)
+        if output:
+            parts.append(output)
+    except Exception:
+        pass
+    return parts
+
+
 def _task_nli_health(memory_dir):
     """Check NLI contradiction detection service health."""
     parts = []
@@ -813,6 +829,7 @@ def load_drift_memory_context(debug: bool = False) -> str:
             f_priming = pool.submit(_task_priming, memory_dir, debug)
             f_research = pool.submit(check_unimplemented_research, memory_dir)
             f_nli = pool.submit(_task_nli_health, memory_dir)
+            f_intentions = pool.submit(_task_intentions, memory_dir)
 
         # === COLLECT RESULTS (with error handling) ===
         def safe_get(future, default=None):
@@ -837,6 +854,7 @@ def load_drift_memory_context(debug: bool = False) -> str:
         priming_result = safe_get(f_priming, ([], [], []))
         research_text = safe_get(f_research, '')
         nli_parts = safe_get(f_nli, [])
+        intentions_parts = safe_get(f_intentions, [])
 
         # Unpack tuple results
         excavation_parts, excavation_ids = excavation_result if isinstance(excavation_result, tuple) else (excavation_result, [])
@@ -919,6 +937,9 @@ def load_drift_memory_context(debug: bool = False) -> str:
 
         # Social context
         context_parts.extend(social_parts)
+
+        # Prospective memory (temporal intentions)
+        context_parts.extend(intentions_parts)
 
         # Session continuity (episodic)
         context_parts.extend(episodic_parts)
