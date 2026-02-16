@@ -404,7 +404,7 @@ def track_engagement(tool_input: dict, tool_result: str, debug: bool = False):
 
     try:
         from datetime import datetime, timezone
-        db_mod = _get_mod("db_adapter")
+        db_mod = (_get_mod("memory_common") or _get_mod("db_adapter"))
         if not db_mod:
             return
         db = db_mod.get_db()
@@ -443,7 +443,7 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
         if api_type != "unknown":
             try:
                 from datetime import datetime, timezone
-                db_mod = _get_mod("db_adapter")
+                db_mod = (_get_mod("memory_common") or _get_mod("db_adapter"))
                 if db_mod:
                     db = db_mod.get_db()
                     raw = db.kv_get('.session_platforms')
@@ -472,7 +472,7 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
 
             if mentions:
                 from datetime import datetime, timezone
-                db_mod = _get_mod("db_adapter")
+                db_mod = (_get_mod("memory_common") or _get_mod("db_adapter"))
                 if db_mod:
                     db = db_mod.get_db()
                     raw = db.kv_get('.session_contacts')
@@ -508,7 +508,7 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
                     passing = arl.extract_seen_posts(api_type, tool_result)
                     if passing:
                         from datetime import datetime, timezone
-                        db_mod = _get_mod("db_adapter")
+                        db_mod = (_get_mod("memory_common") or _get_mod("db_adapter"))
                         if db_mod:
                             db = db_mod.get_db()
                             raw = db.kv_get('.feed_seen') or {}
