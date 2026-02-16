@@ -329,7 +329,13 @@ def compute_curiosity_scores(limit: int = CURIOSITY_TOP_N) -> list[dict]:
             SURVIVOR_WEIGHT * srv
         )
 
-        if composite < 0.1:
+        # R8 wiring: adaptive threshold offset lowers/raises the curiosity bar
+        try:
+            from adaptive_behavior import get_adaptation
+            threshold_offset = get_adaptation('curiosity_threshold_offset', 0.0)
+        except Exception:
+            threshold_offset = 0.0
+        if composite < (0.1 + threshold_offset):
             continue  # Not curious enough
 
         # Determine primary reason

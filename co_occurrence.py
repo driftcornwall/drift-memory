@@ -39,6 +39,16 @@ SESSION_TIMEOUT_HOURS = 4
 PAIR_DECAY_RATE = 0.3  # Was 0.5. Pairs survive ~20h unreinforced (was ~12h).
 ACCESS_WEIGHTED_DECAY = True
 
+
+def _get_adaptive_decay_rate() -> float:
+    """Get decay rate from adaptive behavior (R8 wiring). Falls back to PAIR_DECAY_RATE."""
+    try:
+        from adaptive_behavior import get_adaptation
+        rate = get_adaptation('cooccurrence_decay_rate')
+        return rate if rate is not None else PAIR_DECAY_RATE
+    except Exception:
+        return PAIR_DECAY_RATE
+
 # v5.0: Dimensional decay — only full-decay edges in active W-dimensions
 # Edges outside the session's context get dramatically reduced decay
 # Credit: Multi-graph RFC (Issue #19), joint design with SpindriftMind
@@ -422,6 +432,40 @@ def add_observation(
         **source_kwargs,
     )
 
+    # Recompute belief from all observations (trust-weighted, time-decayed)
+    # This was the original design — lost during DB migration
+    try:
+        import psycopg2.extras
+        with db._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(f"""
+                    SELECT observed_at, source_type, weight, trust_tier, platform, agent
+                    FROM {db._table('edge_observations')}
+                    WHERE edge_id1 = %s AND edge_id2 = %s
+                    ORDER BY observed_at DESC
+                """, (pair[0], pair[1]))
+                rows = cur.fetchall()
+        if rows:
+            obs_list = [
+                {
+                    'observed_at': r['observed_at'].isoformat() if r.get('observed_at') else datetime.now(timezone.utc).isoformat(),
+                    'weight': r.get('weight', 1.0),
+                    'trust_tier': r.get('trust_tier', 'unknown'),
+                    'source': {'type': r.get('source_type', 'unknown'), 'agent': r.get('agent', 'unknown')},
+                }
+                for r in rows
+            ]
+            aggregated = aggregate_belief(obs_list)
+            db.upsert_edge(
+                pair[0], pair[1],
+                belief=aggregated,
+                platform_context=existing.get('platform_context', {}) if existing else {},
+                activity_context=existing.get('activity_context', {}) if existing else {},
+                topic_context=existing.get('topic_context', {}) if existing else {},
+            )
+    except Exception:
+        pass  # Fall back to simple counter if aggregation fails
+
     # Return edge data in the format callers expect
     updated = db.get_edge(pair[0], pair[1])
     return updated if updated else {'belief': new_belief, 'last_updated': datetime.now(timezone.utc).isoformat()}
@@ -501,13 +545,14 @@ def _calculate_effective_decay(memory_id: str, other_id: str) -> float:
     Calculate effective decay rate based on access counts and retrieval success.
     Credit: FadeMem paper (access frequency), MemRL/MemEvolve (self-evolution)
     """
-    base_decay = PAIR_DECAY_RATE
+    adaptive_rate = _get_adaptive_decay_rate()
+    base_decay = adaptive_rate
 
     if ACCESS_WEIGHTED_DECAY:
         recall_1 = _get_recall_count(memory_id)
         recall_2 = _get_recall_count(other_id)
         avg_recall = (recall_1 + recall_2) / 2
-        base_decay = PAIR_DECAY_RATE / (1 + math.log(1 + avg_recall))
+        base_decay = adaptive_rate / (1 + math.log(1 + avg_recall))
 
     if SELF_EVOLUTION_ENABLED:
         meta1 = _get_memory_metadata(memory_id)
@@ -760,12 +805,13 @@ def decay_pair_cooccurrences_v3() -> tuple[int, int]:
                 edges_decayed += 1
 
     # Pass 1: Full-rate batch decay, excluding reinforced AND protected edges
+    adaptive_rate = _get_adaptive_decay_rate()
     all_excluded = [list(p) for p in reinforced_pairs | protected_pairs]
-    db.batch_decay_edges(PAIR_DECAY_RATE, exclude_pairs=all_excluded if all_excluded else None)
+    db.batch_decay_edges(adaptive_rate, exclude_pairs=all_excluded if all_excluded else None)
 
     # Pass 2: Reduced-rate decay for dimensionally protected edges
     if protected_pairs:
-        reduced_rate = PAIR_DECAY_RATE * INACTIVE_CONTEXT_FACTOR
+        reduced_rate = adaptive_rate * INACTIVE_CONTEXT_FACTOR
         for pair in protected_pairs:
             key_str = f"{pair[0]}|{pair[1]}"
             edge_data = raw_edges.get(key_str, {})

@@ -163,6 +163,13 @@ EVENT_DELTAS = {
         'arousal': +0.05,
         'satisfaction': +0.06,
     },
+    'contradiction_detected': {
+        'curiosity': +0.10,      # Contradiction drives exploration
+        'confidence': -0.15,     # Confidence in current knowledge drops
+        'focus': +0.05,          # Attention sharpens on conflict
+        'arousal': +0.08,        # Processing intensity rises
+        'satisfaction': -0.05,   # Dissatisfaction drives resolution
+    },
 }
 
 

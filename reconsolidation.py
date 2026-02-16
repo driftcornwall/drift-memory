@@ -36,6 +36,18 @@ MAX_REVISIONS_PER_SESSION = 5      # Safety cap
 MAX_CANDIDATES = 20                # Limit candidate scan
 
 
+def _get_adaptive_candidate_limit() -> int:
+    """Scale candidate limit by adaptive reconsolidation_frequency (R8 wiring)."""
+    try:
+        from adaptive_behavior import get_adaptation, DEFAULTS
+        freq = get_adaptation('reconsolidation_frequency')
+        default_freq = DEFAULTS.get('reconsolidation_frequency', 1.0)
+        # Higher frequency = more candidates (scale linearly)
+        return max(5, int(MAX_CANDIDATES * (freq / default_freq)))
+    except Exception:
+        return MAX_CANDIDATES
+
+
 def _get_db():
     from db_adapter import get_db
     return get_db()
@@ -49,9 +61,10 @@ def _now_iso():
 # Stage 2: Revision Candidate Detection
 # ============================================================
 
-def find_candidates(limit: int = MAX_CANDIDATES) -> list[dict]:
+def find_candidates(limit: int = None) -> list[dict]:
     """
     Find memories that are candidates for reconsolidation.
+    Limit defaults to adaptive candidate count (R8 wiring).
 
     Two paths to candidacy:
     1. Standard: recall_count_since_revision >= MIN_RECALLS and diverse queries
@@ -59,6 +72,8 @@ def find_candidates(limit: int = MAX_CANDIDATES) -> list[dict]:
 
     Returns list of candidate dicts with id, reason, recall_count, context_diversity, etc.
     """
+    if limit is None:
+        limit = _get_adaptive_candidate_limit()
     db = _get_db()
     candidates = []
 

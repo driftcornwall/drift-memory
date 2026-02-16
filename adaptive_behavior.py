@@ -172,6 +172,7 @@ def adapt(alerts: list[dict] = None) -> dict:
         'adaptations': adaptations,
         'reasons': reasons,
         'alert_count': alert_count,
+        'triggered_by_metrics': [a.get('metric', '') for a in alerts if _map_alert_to_adaptations(a)],
         'timestamp': _now_iso(),
     }
 
@@ -207,6 +208,53 @@ def get_adaptation(param: str, default=None):
     """Get a single adaptation parameter. Used by consuming modules."""
     current = get_current()
     return current.get(param, default if default is not None else DEFAULTS.get(param))
+
+
+def evaluate_adaptations() -> dict:
+    """
+    Evaluate whether adaptations from this session actually helped (R7).
+    Called at session end. Compares: did the alerts that triggered
+    adaptations resolve by the end of the session?
+    """
+    db = _get_db()
+    current = db.kv_get(KV_CURRENT) or {}
+    if not current.get('adaptations'):
+        return {'evaluated': False, 'reason': 'no_adaptations'}
+
+    # What metrics triggered adaptations?
+    original_metrics = set(current.get('triggered_by_metrics', []))
+    if not original_metrics:
+        return {'evaluated': False, 'reason': 'no_trigger_metrics'}
+
+    # Are those same alerts still firing at session end?
+    try:
+        from system_vitals import check_alerts
+        end_alerts = check_alerts()
+        end_metrics = {a.get('metric', '') for a in end_alerts}
+    except Exception:
+        return {'evaluated': False, 'reason': 'vitals_unavailable'}
+
+    resolved = original_metrics - end_metrics
+    persisting = original_metrics & end_metrics
+
+    effectiveness = len(resolved) / max(1, len(original_metrics))
+    result = {
+        'evaluated': True,
+        'adaptations_count': len(current['adaptations']),
+        'original_alerts': len(original_metrics),
+        'resolved': len(resolved),
+        'persisting': len(persisting),
+        'effectiveness': round(effectiveness, 2),
+        'timestamp': _now_iso(),
+    }
+
+    # Annotate the most recent history entry with evaluation
+    history = db.kv_get(KV_HISTORY) or {'entries': []}
+    if history['entries']:
+        history['entries'][-1]['evaluation'] = result
+        db.kv_set(KV_HISTORY, history)
+
+    return result
 
 
 def get_history() -> list[dict]:

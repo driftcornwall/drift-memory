@@ -385,7 +385,7 @@ def apply_lessons(situation):
                     (rid,)
                 )
 
-    return [l for _, l in scored[:5]]
+    return scored[:5]  # list of (score, lesson_dict) tuples — callers expect this format
 
 
 def get_priming_lessons(context_keywords=None, max_lessons=5):

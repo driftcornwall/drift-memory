@@ -443,6 +443,35 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     except Exception:
         pass
 
+    # === STRATEGY-GUIDED ADJUSTMENT (explanation mining feedback) ===
+    try:
+        from explanation_miner import get_strategies
+        strategies = get_strategies()
+        strategy_adjusted = 0
+        if strategies:
+            for strategy in strategies:
+                if strategy.get('type') != 'factor_impact':
+                    continue
+                delta = strategy.get('delta', 0)
+                if abs(delta) < 0.03:
+                    continue  # Skip weak signals
+                factor = strategy.get('factor', '')
+                direction = strategy.get('direction', '')
+                for result in results:
+                    # Check if this result's provenance mentions the factor
+                    prov = str(result.get('provenance', '')) + str(result.get('boosted_by', ''))
+                    if factor.lower() in prov.lower():
+                        multiplier = 1.0 + min(0.15, abs(delta))
+                        if direction == 'negative':
+                            multiplier = 1.0 / multiplier
+                        result['score'] *= multiplier
+                        strategy_adjusted += 1
+            if _expl and strategy_adjusted:
+                _expl.add_step('strategy_adjustment', strategy_adjusted, weight=0.2,
+                               context=f'{strategy_adjusted} results adjusted by {len(strategies)} learned strategies')
+    except Exception:
+        pass
+
     # === RESOLUTION BOOSTING ===
     for result in results:
         tags = load_memory_tags(result["id"])
@@ -455,6 +484,26 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
         if boosted_count:
             _expl.add_step('resolution_boost', boosted_count, weight=0.25,
                            context=f'{boosted_count} results boosted ({RESOLUTION_BOOST}x) for resolution tags')
+
+    # === EVIDENCE TYPE SCORING (epistemic weight) ===
+    EVIDENCE_MULTIPLIERS = {'verified': 1.20, 'observation': 1.10, 'inference': 1.00, 'claim': 0.85}
+    try:
+        evidence_scored = 0
+        for result in results:
+            row = db.get_memory(result['id'])
+            if row:
+                extra = row.get('extra_metadata') or {}
+                etype = extra.get('evidence_type', 'claim')
+                mult = EVIDENCE_MULTIPLIERS.get(etype, 1.0)
+                if mult != 1.0:
+                    result['score'] *= mult
+                    result['evidence_type'] = etype
+                    evidence_scored += 1
+        if _expl and evidence_scored:
+            _expl.add_step('evidence_type_scoring', evidence_scored, weight=0.15,
+                           context=f'{evidence_scored} results weighted by evidence type')
+    except Exception:
+        pass
 
     # === IMPORTANCE/FRESHNESS SCORING ===
     # Detect query context and apply importance/freshness weights to boost scores
@@ -549,12 +598,16 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
             _expl.add_step('dimensional_boost', dim_boosted, weight=0.1,
                            context=f'{dim_boosted} results boosted in {dimension} dimension')
 
-    # === TYPED EDGE EXPANSION (Phase 4: knowledge graph enrichment) ===
-    # For top results, check if they have causal/resolves relationships
-    # and flag them for context (don't add new results, just annotate)
+    # === TYPED EDGE EXPANSION + INFERENCE (Phase 4: knowledge graph reasoning) ===
+    # Annotate results with typed edges AND apply inference rules:
+    #   - 'contradicts' edges REDUCE score (conflicting memories less reliable)
+    #   - 'supports' edges BOOST score (corroborated memories more reliable)
+    #   - 'supersedes' edges PENALIZE the superseded memory
     try:
-        from knowledge_graph import get_edges_from
+        from knowledge_graph import get_edges_from, get_edges_to
         kg_annotated = 0
+        kg_inferred = 0
+        result_ids = {r['id'] for r in results}
         for result in results[:20]:  # Only check top 20 candidates
             edges = get_edges_from(result['id'], 'causes')
             if edges:
@@ -564,9 +617,38 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
             if res_edges:
                 result['kg_resolves'] = len(res_edges)
                 kg_annotated += 1
-        if _expl and kg_annotated:
-            _expl.add_step('knowledge_graph_annotation', kg_annotated, weight=0.05,
-                           context=f'{kg_annotated} results annotated with typed edges')
+
+            # Inference: contradicts edges penalize
+            contra_out = get_edges_from(result['id'], 'contradicts')
+            contra_in = get_edges_to(result['id'], 'contradicts')
+            if contra_out or contra_in:
+                # Penalize based on how many contradictions touch other results
+                contra_targets = {e['target_id'] for e in contra_out} | {e['source_id'] for e in contra_in}
+                in_result_set = contra_targets & result_ids
+                if in_result_set:
+                    result['score'] *= max(0.6, 0.85 ** len(in_result_set))
+                    result['kg_contradictions'] = len(contra_out) + len(contra_in)
+                    kg_inferred += 1
+
+            # Inference: supports edges boost
+            support_out = get_edges_from(result['id'], 'supports')
+            support_in = get_edges_to(result['id'], 'supports')
+            support_count = len(support_out) + len(support_in)
+            if support_count > 0:
+                result['score'] *= min(1.5, 1.0 + 0.10 * support_count)
+                result['kg_supports'] = support_count
+                kg_inferred += 1
+
+            # Inference: superseded memories penalized
+            superseded_by = get_edges_to(result['id'], 'supersedes')
+            if superseded_by:
+                result['score'] *= 0.5  # Heavy penalty — this memory is outdated
+                result['kg_superseded'] = True
+                kg_inferred += 1
+
+        if _expl and (kg_annotated or kg_inferred):
+            _expl.add_step('knowledge_graph_inference', kg_annotated + kg_inferred, weight=0.15,
+                           context=f'{kg_annotated} annotated, {kg_inferred} scored by edge type')
     except Exception:
         pass  # Don't break search if knowledge graph unavailable
 
@@ -597,7 +679,18 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                     if node_id == seed['id'] or node_id in existing_ids:
                         continue
                     # Score decays with hops: parent_score * confidence * 0.5^depth
-                    spread_score = seed['score'] * edge['confidence'] * (0.5 ** edge['depth'])
+                    # R13: Relationship type modifies spread score
+                    rel_type = edge.get('relationship', '')
+                    type_mult = 1.0
+                    if rel_type == 'contradicts':
+                        type_mult = -0.3  # Contradictions spread as negative signal
+                    elif rel_type == 'supports':
+                        type_mult = 1.3
+                    elif rel_type == 'supersedes':
+                        type_mult = 0.3  # Superseded paths are weak
+                    spread_score = seed['score'] * edge['confidence'] * (0.5 ** edge['depth']) * abs(type_mult)
+                    if type_mult < 0:
+                        continue  # Don't spread through contradictions
                     if node_id not in reachable or spread_score > reachable[node_id][0]:
                         provenance = f"spread_from:{seed['id']} via:{edge['relationship']}"
                         reachable[node_id] = (spread_score, provenance,

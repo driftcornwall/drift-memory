@@ -241,6 +241,13 @@ def build_registry():
         Command("dispute-memory", "search", "Mark memory as disputed", "memory_validation", "dispute", "<id> [reason]"),
     ]
 
+    # === SELF-NARRATIVE (Higher-Order Thought, R9) ===
+    cmds += [
+        Command("self", "identity", "Generate self-narrative", "self_narrative", "narrative"),
+        Command("self-model", "identity", "Full self-model (JSON)", "self_narrative", "generate"),
+        Command("self-query", "identity", "Query self-state", "self_narrative", "query", "<question>"),
+    ]
+
     # === Q-VALUE LEARNING (MemRL) ===
     cmds += [
         Command("q-stats", "dashboard", "Q-value distribution", "q_value_engine", "stats"),

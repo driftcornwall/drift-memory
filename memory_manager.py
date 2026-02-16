@@ -468,8 +468,8 @@ def get_priming_candidates(
                     SELECT id, content, sessions_since_recall FROM {db._table('memories')}
                     WHERE type = 'active' AND recall_count = 0
                     AND sessions_since_recall > %s
-                    ORDER BY RANDOM() LIMIT 2
-                """, (GRACE_PERIOD_SESSIONS,))
+                    ORDER BY RANDOM() LIMIT %s
+                """, (GRACE_PERIOD_SESSIONS, 2 + _adaptive_extra_excavation))
                 for row in cur.fetchall():
                     mem_id = row['id']
                     if mem_id not in seen_ids:
