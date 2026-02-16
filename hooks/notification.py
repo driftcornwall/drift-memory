@@ -3,6 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "python-dotenv",
+#     "pyyaml",
+#     "psycopg2-binary",
 # ]
 # ///
 
@@ -25,6 +27,39 @@ try:
         load_dotenv()  # Fallback to default
 except ImportError:
     pass  # dotenv is optional
+
+
+def _resolve_telegram_bot(cwd=None):
+    """Find the correct telegram_bot.py for the running project."""
+    project_dir = cwd or str(Path.cwd())
+    base = Path("Q:/Codings/ClaudeCodeProjects/LEX")
+
+    if "Moltbook2" in project_dir:
+        own, other = base / "Moltbook2", base / "Moltbook"
+    else:
+        own, other = base / "Moltbook", base / "Moltbook2"
+
+    for proj in [own, other]:
+        for sub in ["telegram_bot.py", "memory/telegram_bot.py"]:
+            p = proj / sub
+            if p.exists():
+                return p
+    return None
+
+
+def send_telegram(text, cwd=None):
+    """Send a short Telegram notification via the correct project's bot."""
+    try:
+        import subprocess
+        bot = _resolve_telegram_bot(cwd)
+        if bot:
+            subprocess.run(
+                ["python", str(bot), "send", text],
+                timeout=10,
+                capture_output=True,
+            )
+    except Exception:
+        pass  # Never break the hook for a notification
 
 
 def get_tts_script_path():
@@ -149,7 +184,14 @@ def main():
 
         if args.notify:
             announce_notification()
-        
+
+        # Send Telegram notification so Lex sees it on phone
+        message = input_data.get('message', 'Agent needs input')
+        cwd = input_data.get('cwd', '')
+        from datetime import datetime
+        now = datetime.now().strftime('%H:%M UTC')
+        send_telegram(f'Agent needs input ({now}): {message[:200]}', cwd=cwd)
+
         sys.exit(0)
         
     except json.JSONDecodeError:
