@@ -359,6 +359,32 @@ def _task_q_update(memory_dir):
         return (-3, "", f"Q-update error: {e}")
 
 
+def _task_score_predictions(memory_dir):
+    """R11: Score session predictions against actuals."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from prediction_module import score_predictions
+        result = score_predictions()
+        if 'error' in result:
+            return (0, f"Predictions: {result['error']}", "")
+        return (0, f"Predictions: {result.get('accuracy', 0):.0%} accuracy ({result.get('confirmed', 0)}/{result.get('scored', 0)})", "")
+    except Exception as e:
+        return (-3, "", f"Prediction scoring error: {e}")
+
+
+def _task_contact_models(memory_dir):
+    """R14: Update contact engagement models."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from contact_models import update_all
+        result = update_all()
+        return (0, f"Contact models: {result.get('total', 0)} contacts updated", "")
+    except Exception as e:
+        return (-3, "", f"Contact models error: {e}")
+
+
 # --- Phase 2 tasks (after phase 1) ---
 
 def _task_store_summary(memory_dir, transcript_path):
@@ -406,6 +432,22 @@ def _task_generative_sleep(memory_dir):
         return (0, msg, "")
     except Exception as e:
         return (-3, "", f"Generative sleep error: {e}")
+
+
+def _task_reconsolidation(memory_dir):
+    """Find reconsolidation candidates and revise top memories (Phase 3b)."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from reconsolidation import find_candidates, process_revisions
+        candidates = find_candidates(limit=5)
+        if candidates:
+            results = process_revisions(dry_run=False, max_revisions=2)
+            revised = sum(1 for r in results if r.get('action') == 'revised')
+            return (0, f"Reconsolidation: {len(candidates)} candidates, {revised} revised", "")
+        return (0, "Reconsolidation: no candidates", "")
+    except Exception as e:
+        return (-3, "", f"Reconsolidation error: {e}")
 
 
 def _task_mine_explanations(memory_dir):
@@ -702,18 +744,20 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
             return
 
         # ===== PHASE 1: Independent consolidation tasks =====
-        with ThreadPoolExecutor(max_workers=5) as pool:
+        with ThreadPoolExecutor(max_workers=6) as pool:
             f_transcript = pool.submit(_task_transcript, memory_dir, transcript_path)
             f_auto_mem = pool.submit(_task_auto_memory, memory_dir)
             f_maint = pool.submit(_task_maintenance, memory_dir)
             f_behavioral = pool.submit(_task_behavioral_rejections, memory_dir)
             f_qupdate = pool.submit(_task_q_update, memory_dir)
+            f_predictions = pool.submit(_task_score_predictions, memory_dir)
 
         _log_result("Transcript", f_transcript.result())
         _log_result("Auto-memory", f_auto_mem.result())
         _log_result("Maintenance", f_maint.result())
         _log_result("Behavioral", f_behavioral.result())
         _log_result("Q-update", f_qupdate.result())
+        _log_result("Predictions", f_predictions.result())
 
         # ===== PHASE 2: Episodic + summaries + lessons + rebuild_all (after phase 1) =====
         is_subagent = bool(os.environ.get("CLAUDE_CODE_AGENT_ID"))
@@ -752,11 +796,17 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
             futures["Dream"] = pool.submit(
                 _task_generative_sleep, memory_dir
             )
+            futures["Reconsolidation"] = pool.submit(
+                _task_reconsolidation, memory_dir
+            )
             futures["Gemma-vocab"] = pool.submit(
                 _task_gemma_vocab_scan, memory_dir
             )
             futures["Gemma-classify"] = pool.submit(
                 _task_gemma_classify_untagged, memory_dir
+            )
+            futures["Contact-models"] = pool.submit(
+                _task_contact_models, memory_dir
             )
 
         for name, fut in futures.items():
@@ -798,6 +848,16 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
                    f"volatility={cog_summary.get('volatility', 0):.4f}")
         except Exception as e:
             _debug(f"Cognitive state end error: {e}")
+
+        # R7: Evaluate whether adaptations from this session helped
+        try:
+            from adaptive_behavior import evaluate_adaptations
+            eval_result = evaluate_adaptations()
+            if eval_result.get('evaluated'):
+                _debug(f"Adaptation eval: {eval_result.get('resolved_count', 0)}/{eval_result.get('adaptations', 0)} "
+                       f"resolved ({eval_result.get('unresolved_count', 0)} unresolved)")
+        except Exception as e:
+            _debug(f"Adaptation eval error: {e}")
 
         try:
             if str(memory_dir) not in sys.path:

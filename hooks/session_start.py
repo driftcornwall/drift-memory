@@ -676,6 +676,20 @@ def _task_adaptive_behavior(memory_dir):
     return parts
 
 
+def _task_predictions(memory_dir):
+    """R11: Generate session predictions from forward model."""
+    parts = []
+    try:
+        sys.path.insert(0, str(memory_dir))
+        from prediction_module import generate_predictions, format_predictions_context
+        predictions = generate_predictions()
+        if predictions:
+            parts.append(format_predictions_context(predictions))
+    except Exception:
+        pass
+    return parts
+
+
 def _task_intentions(memory_dir):
     """Check prospective memory — temporal intentions triggered this session."""
     parts = []
@@ -849,6 +863,7 @@ def load_drift_memory_context(debug: bool = False) -> str:
             f_nli = pool.submit(_task_nli_health, memory_dir)
             f_intentions = pool.submit(_task_intentions, memory_dir)
             f_adaptive = pool.submit(_task_adaptive_behavior, memory_dir)
+            f_predictions = pool.submit(_task_predictions, memory_dir)
 
         # === COLLECT RESULTS (with error handling) ===
         def safe_get(future, default=None):
@@ -875,6 +890,7 @@ def load_drift_memory_context(debug: bool = False) -> str:
         nli_parts = safe_get(f_nli, [])
         intentions_parts = safe_get(f_intentions, [])
         adaptive_parts = safe_get(f_adaptive, [])
+        predictions_parts = safe_get(f_predictions, [])
 
         # Unpack tuple results
         excavation_parts, excavation_ids = excavation_result if isinstance(excavation_result, tuple) else (excavation_result, [])
@@ -976,8 +992,21 @@ def load_drift_memory_context(debug: bool = False) -> str:
         # Adaptive behavior (responds to vitals alerts)
         context_parts.extend(adaptive_parts)
 
+        # Session predictions (R11 forward model)
+        context_parts.extend(predictions_parts)
+
         # NLI / Contradiction detection status
         context_parts.extend(nli_parts)
+
+        # Self-narrative (R9: Higher-Order Thought)
+        try:
+            from self_narrative import generate as _gen_self, format_for_context as _fmt_self
+            self_model = _gen_self()
+            self_ctx = _fmt_self(self_model)
+            if self_ctx:
+                context_parts.append(self_ctx)
+        except Exception:
+            pass
 
         # Priming candidates
         context_parts.extend(priming_parts)
