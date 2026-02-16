@@ -461,20 +461,30 @@ def get_trends(window=10):
 
 
 def _dedupe_by_session(log):
-    """Pick one snapshot per session (last entry before a >1hr gap or end of log)."""
+    """Pick one snapshot per session — the one with MAX session_recalls.
+
+    Groups snapshots by >1hr gaps. Within each group, picks the entry with
+    the highest session_recalls (not the last entry, which may be post-clear).
+    """
     if not log:
         return []
     sessions = []
-    for i, entry in enumerate(log):
-        ts = datetime.fromisoformat(entry["timestamp"])
-        is_last = (i == len(log) - 1)
-        if not is_last:
-            next_ts = datetime.fromisoformat(log[i + 1]["timestamp"])
-            gap_hours = (next_ts - ts).total_seconds() / 3600
-            if gap_hours >= 1.0:
-                sessions.append(entry)
+    current_group = [log[0]]
+    for i in range(1, len(log)):
+        prev_ts = datetime.fromisoformat(log[i - 1]["timestamp"])
+        curr_ts = datetime.fromisoformat(log[i]["timestamp"])
+        gap_hours = (curr_ts - prev_ts).total_seconds() / 3600
+        if gap_hours >= 1.0:
+            # End of session group — pick best snapshot
+            best = max(current_group, key=lambda e: e.get("metrics", {}).get("session_recalls", 0))
+            sessions.append(best)
+            current_group = [log[i]]
         else:
-            sessions.append(entry)
+            current_group.append(log[i])
+    # Final group
+    if current_group:
+        best = max(current_group, key=lambda e: e.get("metrics", {}).get("session_recalls", 0))
+        sessions.append(best)
     return sessions
 
 
@@ -534,7 +544,13 @@ def check_alerts():
 
     # Session recalls = 0 streak (use session-deduped data)
     recall_values = [s["metrics"].get("session_recalls", 0) for s in recent]
-    zero_streak = sum(1 for v in reversed(recall_values) if v == 0)
+    # Count consecutive trailing zeros (not total zeros in window)
+    zero_streak = 0
+    for v in reversed(recall_values):
+        if v == 0:
+            zero_streak += 1
+        else:
+            break
     if zero_streak >= 3:
         alerts.append({
             "metric": "session_recalls",
@@ -543,9 +559,9 @@ def check_alerts():
             "values": recall_values
         })
 
-    # Per-path recall health (check latest snapshot only)
-    if log:
-        latest_m = log[-1].get("metrics", {})
+    # Per-path recall health (use best snapshot from current session, not last raw entry)
+    if recent:
+        latest_m = recent[-1].get("metrics", {})
         paths = {
             "manual": latest_m.get("recalls_manual", 0),
             "start_priming": latest_m.get("recalls_start_priming", 0),
