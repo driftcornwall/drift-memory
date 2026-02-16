@@ -120,22 +120,24 @@ def build_graph(activity_filter: str = None) -> dict:
                     else:
                         edges[pair] = max(edges[pair], weight)
     else:
-        # Standard graph: use co_occurrences table
+        # Standard graph: use edges_v3 table (all edges, no activity filter)
         with db._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
-                    SELECT memory_id, other_id, count
-                    FROM {db._table('co_occurrences')}
-                    WHERE count > 0
+                    SELECT id1, id2, belief
+                    FROM {db._table('edges_v3')}
+                    WHERE belief > 0
                 """)
                 for row in cur.fetchall():
-                    mem_id, other_id, count = row
-                    adjacency[mem_id][other_id] = count
-                    pair = tuple(sorted([mem_id, other_id]))
+                    id1, id2, belief = row
+                    belief = float(belief)
+                    adjacency[id1][id2] = belief
+                    adjacency[id2][id1] = belief
+                    pair = tuple(sorted([id1, id2]))
                     if pair not in edges:
-                        edges[pair] = count
+                        edges[pair] = belief
                     else:
-                        edges[pair] = max(edges[pair], count)
+                        edges[pair] = max(edges[pair], belief)
 
     return {
         'nodes': nodes,
@@ -1437,10 +1439,10 @@ def generate_standardized_export(agent_name: str = None) -> dict:
             cur.execute(f"""
                 SELECT COUNT(DISTINCT m.id)
                 FROM {db._table('memories')} m
-                JOIN {db._table('co_occurrences')} c
-                    ON (m.id = c.memory_id OR m.id = c.other_id)
+                JOIN {db._table('edges_v3')} e
+                    ON (m.id = e.id1 OR m.id = e.id2)
                 WHERE m.type IN ('core', 'active', 'archive')
-                    AND c.count > 0
+                    AND e.belief > 0
             """)
             files_with_edges = cur.fetchone()[0]
 
@@ -1513,10 +1515,10 @@ def generate_standardized_export(agent_name: str = None) -> dict:
         "agent": agent_name,
         "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         "methodology": {
-            "source": "postgresql_co_occurrences",
-            "description": "All co-occurrence pairs from PostgreSQL co_occurrences table with count > 0",
+            "source": "postgresql_edges_v3",
+            "description": "All co-occurrence pairs from PostgreSQL edges_v3 table with belief > 0",
             "graph_nodes_definition": "Unique memory IDs appearing in at least one edge (bilateral)",
-            "memories_with_edges_definition": "Memories appearing in at least one co_occurrences row with count > 0",
+            "memories_with_edges_definition": "Memories appearing in at least one edges_v3 row with belief > 0",
         },
         "scale": {
             "total_memory_files": total_files,
