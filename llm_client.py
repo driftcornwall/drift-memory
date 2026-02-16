@@ -7,7 +7,7 @@ Used by reconsolidation (Phase 3) and generative sleep (Phase 6).
 
 Priority order:
 1. Local Ollama (http://localhost:11434/v1) — free, private
-2. OpenAI GPT-4o-mini fallback — cheap ($0.0003/call), fast
+2. OpenAI GPT-5-mini fallback — reasoning model ($0.25/1M in, $2/1M out)
 
 Usage:
     python llm_client.py test                    # Test connectivity + generation
@@ -31,7 +31,7 @@ if str(MEMORY_DIR) not in sys.path:
 # Configuration
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
 OLLAMA_MODEL = "gemma3:4b"   # 4B param, good at synthesis. Already downloaded.
-OPENAI_MODEL = "gpt-4o-mini"
+OPENAI_MODEL = "gpt-5-mini"  # Reasoning model: no temperature, uses max_completion_tokens
 OPENAI_CREDS_PATH = Path.home() / ".config" / "openai" / "drift-credentials.json"
 
 # Timeouts
@@ -191,7 +191,9 @@ def _try_local(messages: list, max_tokens: int, temperature: float) -> dict | No
 
 
 def _try_openai(messages: list, max_tokens: int, temperature: float) -> dict | None:
-    """Try OpenAI API inference."""
+    """Try OpenAI API inference. gpt-5-mini is a reasoning model:
+    no temperature support, uses max_completion_tokens (not max_tokens),
+    and reasoning tokens eat into the budget (~3x overhead)."""
     api_key = _load_openai_key()
     if not api_key:
         return None
@@ -199,12 +201,18 @@ def _try_openai(messages: list, max_tokens: int, temperature: float) -> dict | N
     try:
         import urllib.request
 
-        payload = json.dumps({
+        # gpt-5-mini: reasoning model needs ~3x token budget for internal reasoning
+        body = {
             "model": OPENAI_MODEL,
             "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }).encode('utf-8')
+            "max_completion_tokens": max_tokens * 3,  # reasoning overhead
+        }
+        # gpt-5-mini doesn't support temperature (reasoning model)
+        # Only add temperature for non-reasoning models
+        if not OPENAI_MODEL.startswith(("gpt-5", "o1", "o3")):
+            body["temperature"] = temperature
+
+        payload = json.dumps(body).encode('utf-8')
 
         req = urllib.request.Request(
             "https://api.openai.com/v1/chat/completions",
@@ -224,15 +232,17 @@ def _try_openai(messages: list, max_tokens: int, temperature: float) -> dict | N
         text = data['choices'][0]['message']['content']
         usage = data.get('usage', {})
         tokens = usage.get('completion_tokens', len(text.split()))
+        details = usage.get('completion_tokens_details', {})
 
         return {
             'text': text,
             'backend': 'remote',
-            'model': OPENAI_MODEL,
+            'model': data.get('model', OPENAI_MODEL),
             'tokens': tokens,
+            'reasoning_tokens': details.get('reasoning_tokens', 0),
             'elapsed_ms': elapsed,
-            'cost_usd': (usage.get('prompt_tokens', 0) * 0.00000015 +
-                         usage.get('completion_tokens', 0) * 0.0000006),
+            'cost_usd': (usage.get('prompt_tokens', 0) * 0.00000025 +
+                         usage.get('completion_tokens', 0) * 0.000002),
         }
     except Exception as e:
         return None
