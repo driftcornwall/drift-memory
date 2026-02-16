@@ -47,11 +47,19 @@ def consolidate_memories(id1: str, id2: str, merged_content: Optional[str] = Non
     meta1, content1 = db_to_file_metadata(row1)
     meta2, content2 = db_to_file_metadata(row2)
 
-    # Merge content
+    # Merge content — R12: try LLM-mediated consolidation first
     if merged_content:
         final_content = merged_content
     else:
-        final_content = f"{content1}\n\n---\n[Consolidated from {id2}]\n\n{content2}"
+        try:
+            from llm_client import consolidate_memories_llm
+            llm_result = consolidate_memories_llm(content1, content2, id1, id2, meta1, meta2)
+            final_content = llm_result['merged_content']
+            if llm_result.get('used_llm'):
+                print(f"  LLM consolidation: {llm_result['backend']}/{llm_result['model']} "
+                      f"({llm_result['elapsed_ms']}ms)")
+        except Exception:
+            final_content = f"{content1}\n\n---\n[Consolidated from {id2}]\n\n{content2}"
 
     # Take higher emotional weight
     final_weight = max(

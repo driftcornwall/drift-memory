@@ -170,6 +170,20 @@ EVENT_DELTAS = {
         'arousal': +0.08,        # Processing intensity rises
         'satisfaction': -0.05,   # Dissatisfaction drives resolution
     },
+    'prediction_confirmed': {
+        'curiosity': -0.05,      # Expectation met, less to explore
+        'confidence': +0.10,     # World model validated
+        'focus': +0.05,          # Attentional stability
+        'arousal': -0.02,        # Calm predictability
+        'satisfaction': +0.08,   # Reward from accurate prediction
+    },
+    'prediction_violated': {
+        'curiosity': +0.12,      # Surprise drives exploration
+        'confidence': -0.10,     # World model needs updating
+        'focus': -0.08,          # Attention disrupted
+        'arousal': +0.10,        # Heightened processing
+        'satisfaction': -0.03,   # Mild dissatisfaction from error
+    },
 }
 
 

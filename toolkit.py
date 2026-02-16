@@ -91,6 +91,9 @@ def build_registry():
         Command("my-posts", "social", "List my recent posts", "social.social_memory", "my-posts", "[--days 7]"),
         Command("index", "social", "Rebuild social index", "social.social_memory", "index"),
         Command("feed", "social", "MoltX feed quality filter", "feed_quality", "main", "[--raw] [--min-score N]"),
+        Command("contact-score", "social", "Score a contact (Bayesian model)", "contact_models", "score", "<name>"),
+        Command("contact-predict", "social", "Predict engagement with contact", "contact_models", "predict", "<name> <topic>"),
+        Command("contact-summary", "social", "All contacts ranked by engagement", "contact_models", "summary"),
     ]
     if cfg.get("has_reciprocity"):
         cmds += [
@@ -164,6 +167,13 @@ def build_registry():
         Command("llm-test", "memory", "Test LLM generation", "llm_client", "test"),
         Command("export", "memory", "Secure memory export", "memory_interop", "export"),
         Command("import", "memory", "Import with quarantine", "memory_interop", "import"),
+        Command("follows", "memory", "What memories follow this one? (R10)", "semantic_search", "temporal-successors", "<id>"),
+        Command("predict", "memory", "Generate session predictions (R11)", "prediction_module", "generate"),
+        Command("predict-score", "memory", "Score predictions against actuals", "prediction_module", "score"),
+        Command("predict-history", "memory", "Show prediction history", "prediction_module", "history"),
+        Command("predict-calibration", "memory", "Prediction calibration stats", "prediction_module", "calibration"),
+        Command("self", "memory", "Self-narrative model", "self_narrative", "narrative"),
+        Command("self-query", "memory", "Query self-state", "self_narrative", "query", "<question>"),
     ]
 
     # === COMMS ===
@@ -606,6 +616,9 @@ def cmd_health():
         ("contradiction_detector", "NLI contradiction detection"),
         ("memory_validation", "Evidence classification & source reliability"),
         ("q_value_engine", "Q-value learning (MemRL)"),
+        ("self_narrative", "Self-narrative synthesis"),
+        ("contact_models", "Per-contact Bayesian scoring"),
+        ("prediction_module", "Forward model predictions"),
     ]
 
     # Social subpackage

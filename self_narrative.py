@@ -159,6 +159,82 @@ def _get_reconsolidation_summary() -> dict:
     return _safe_call(_inner, {'candidates_ready': 0, 'total_revised': 0})
 
 
+def _get_contacts_summary() -> dict:
+    """R14: Pull contact model stats."""
+    def _inner():
+        db = _get_db()
+        raw = db.kv_get('.contact_models') or {}
+        # update_all() stores {models: {...}, updated: ..., count: N}
+        models = raw.get('models', raw) if isinstance(raw, dict) else {}
+        if not models or 'updated' in models and 'models' not in models:
+            # Bare wrapper with no actual models
+            return {'total': 0, 'top': [], 'avg_reliability': 0.0}
+        # Sort by engagement score
+        sorted_contacts = sorted(models.items(),
+                                 key=lambda x: x[1].get('engagement', 0) if isinstance(x[1], dict) else 0,
+                                 reverse=True)
+        top3 = [name for name, _ in sorted_contacts[:3]]
+        reliabilities = [m.get('reliability', 0.5) for m in models.values() if isinstance(m, dict)]
+        avg_rel = sum(reliabilities) / len(reliabilities) if reliabilities else 0.5
+        return {
+            'total': len(models),
+            'top': top3,
+            'avg_reliability': round(avg_rel, 2),
+        }
+    return _safe_call(_inner, {'total': 0, 'top': [], 'avg_reliability': 0.0})
+
+
+def _get_attention_summary() -> dict:
+    """B2: Pull attention schema stats."""
+    def _inner():
+        db = _get_db()
+        schema = db.kv_get('.attention_schema') or []
+        if not schema:
+            return {'searches': 0, 'avg_ms': 0, 'heaviest': 'none'}
+        avg_ms = sum(s.get('total_ms', 0) for s in schema) / len(schema)
+        # Find heaviest stage across all searches
+        stage_totals = {}
+        for entry in schema:
+            for stage in entry.get('stages', []):
+                name = stage.get('stage', '?')
+                stage_totals[name] = stage_totals.get(name, 0) + stage.get('time_ms', 0)
+        heaviest = max(stage_totals, key=stage_totals.get) if stage_totals else 'none'
+        return {
+            'searches': len(schema),
+            'avg_ms': round(avg_ms, 1),
+            'heaviest': heaviest,
+        }
+    return _safe_call(_inner, {'searches': 0, 'avg_ms': 0, 'heaviest': 'none'})
+
+
+def _get_predictions_summary() -> dict:
+    """R11: Pull prediction history stats."""
+    def _inner():
+        db = _get_db()
+        history = db.kv_get('.prediction_history') or []
+        if not history:
+            return {'sessions': 0, 'accuracy': 0.0, 'trend': 'none'}
+        accuracies = [h.get('accuracy', 0) for h in history if 'accuracy' in h]
+        avg_acc = sum(accuracies) / len(accuracies) if accuracies else 0.0
+        # Simple trend: compare last 5 to first 5
+        trend = 'none'
+        if len(accuracies) >= 6:
+            early = sum(accuracies[:3]) / 3
+            late = sum(accuracies[-3:]) / 3
+            if late > early + 0.05:
+                trend = 'improving'
+            elif late < early - 0.05:
+                trend = 'declining'
+            else:
+                trend = 'stable'
+        return {
+            'sessions': len(history),
+            'accuracy': round(avg_acc, 2),
+            'trend': trend,
+        }
+    return _safe_call(_inner, {'sessions': 0, 'accuracy': 0.0, 'trend': 'none'})
+
+
 # ============================================================
 # Narrative Synthesis
 # ============================================================
@@ -172,6 +248,9 @@ def generate() -> dict:
         'adaptations': _get_adaptation_summary(),
         'strategies': _get_strategy_summary(),
         'reconsolidation': _get_reconsolidation_summary(),
+        'contacts': _get_contacts_summary(),
+        'attention': _get_attention_summary(),
+        'predictions': _get_predictions_summary(),
         'generated_at': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
     }
     model['narrative'] = _synthesize_narrative(model)
@@ -248,6 +327,27 @@ def _synthesize_narrative(model: dict) -> str:
         top_cat = taste.get('top_reason', 'unknown')
         parts.append(f"Taste: {total_rejections} rejections, top category: {top_cat}.")
 
+    # Contacts (R14)
+    contacts = model.get('contacts', {})
+    if contacts.get('total', 0):
+        top_names = ', '.join(contacts.get('top', []))
+        parts.append(f"Social: {contacts['total']} contacts modeled, "
+                     f"top: {top_names}. Avg reliability: {contacts.get('avg_reliability', 0):.0%}.")
+
+    # Attention (B2)
+    attention = model.get('attention', {})
+    if attention.get('searches', 0):
+        parts.append(f"Attention: {attention['searches']} searches tracked, "
+                     f"avg {attention['avg_ms']:.0f}ms, heaviest stage: {attention['heaviest']}.")
+
+    # Predictions (R11)
+    predictions = model.get('predictions', {})
+    if predictions.get('sessions', 0):
+        trend = predictions.get('trend', 'none')
+        trend_str = f" ({trend})" if trend != 'none' else ''
+        parts.append(f"Predictions: {predictions['sessions']} sessions tracked, "
+                     f"{predictions['accuracy']:.0%} accuracy{trend_str}.")
+
     return ' '.join(parts)
 
 
@@ -313,6 +413,25 @@ def query(question: str) -> str:
         recon = model.get('reconsolidation', {})
         return (f"Reconsolidation: {recon.get('candidates_ready', 0)} candidates ready, "
                 f"{recon.get('queue_length', 0)} queued, {recon.get('total_revised', 0)} total revised")
+
+    elif any(w in question_lower for w in ('contact', 'social', 'relationship', 'friend')):
+        contacts = model.get('contacts', {})
+        top = ', '.join(contacts.get('top', [])) or 'none'
+        return (f"Contact models: {contacts.get('total', 0)} modeled\n"
+                f"Top by engagement: {top}\n"
+                f"Avg reliability: {contacts.get('avg_reliability', 0):.0%}")
+
+    elif any(w in question_lower for w in ('attention', 'time', 'slow', 'performance', 'pipeline')):
+        attention = model.get('attention', {})
+        return (f"Attention schema: {attention.get('searches', 0)} searches tracked\n"
+                f"Avg time: {attention.get('avg_ms', 0):.0f}ms\n"
+                f"Heaviest stage: {attention.get('heaviest', 'none')}")
+
+    elif any(w in question_lower for w in ('predict', 'expect', 'forecast', 'surprise')):
+        predictions = model.get('predictions', {})
+        return (f"Predictions: {predictions.get('sessions', 0)} sessions tracked\n"
+                f"Accuracy: {predictions.get('accuracy', 0):.0%}\n"
+                f"Trend: {predictions.get('trend', 'none')}")
 
     else:
         # Default: return full narrative

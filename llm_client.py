@@ -252,6 +252,63 @@ def _try_openai(messages: list, max_tokens: int, temperature: float) -> dict | N
 # Specialized Prompts for Memory Operations
 # ============================================================
 
+CONSOLIDATION_SYSTEM = """You are a memory consolidation system for an AI agent.
+Given two related memories, produce a single merged version.
+Rules:
+- The merged version MUST be shorter than both inputs combined
+- Preserve all facts, dates, names, and specific details
+- Remove redundant information that appears in both
+- If the memories contradict each other, note the contradiction briefly
+- Add a [consolidated] tag at the end
+- Maximum 400 words
+- Do NOT add information that isn't in the inputs"""
+
+
+def consolidate_memories_llm(content1: str, content2: str, id1: str, id2: str,
+                             meta1: dict = None, meta2: dict = None) -> dict:
+    """
+    R12: Use LLM to intelligently merge two memories.
+    Falls back to string concatenation if LLM fails or output is too short.
+
+    Returns dict with 'merged_content', 'backend', 'used_llm', etc.
+    """
+    tags1 = ', '.join(meta1.get('tags', [])) if meta1 else ''
+    tags2 = ', '.join(meta2.get('tags', [])) if meta2 else ''
+
+    prompt = f"## Memory A ({id1})\n"
+    if tags1:
+        prompt += f"Tags: {tags1}\n"
+    prompt += f"{content1[:600]}\n\n"
+    prompt += f"## Memory B ({id2})\n"
+    if tags2:
+        prompt += f"Tags: {tags2}\n"
+    prompt += f"{content2[:600]}\n\n"
+    prompt += "## Task\nMerge these into a single concise memory."
+
+    result = generate(prompt, system=CONSOLIDATION_SYSTEM, max_tokens=500, temperature=0.2)
+    text = result.get('text', '')
+
+    # Validate: LLM output must be meaningful
+    if text and len(text) > 20 and result.get('backend') != 'none':
+        return {
+            'merged_content': text,
+            'backend': result.get('backend', 'none'),
+            'model': result.get('model', 'none'),
+            'used_llm': True,
+            'elapsed_ms': result.get('elapsed_ms', 0),
+        }
+
+    # Fallback: simple concatenation
+    fallback = f"{content1}\n\n---\n[Consolidated from {id2}]\n\n{content2}"
+    return {
+        'merged_content': fallback,
+        'backend': 'fallback',
+        'model': 'string_concat',
+        'used_llm': False,
+        'elapsed_ms': 0,
+    }
+
+
 RECONSOLIDATION_SYSTEM = """You are a memory revision system for an AI agent.
 Given a memory, its recall contexts, and any contradiction signals, produce an updated version.
 Rules:

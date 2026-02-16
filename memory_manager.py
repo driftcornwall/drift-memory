@@ -329,15 +329,23 @@ def get_priming_candidates(
 
     # === COGNITIVE STATE: Adjust priming strategy ===
     _cog_extra_curiosity = 0
+    _cog_max_mult = 1.0
     try:
         from cognitive_state import get_priming_modifier
         cog_mod = get_priming_modifier()
         _cog_extra_curiosity = cog_mod.get('curiosity_targets', 0)
+        _cog_max_mult = cog_mod.get('max_candidates', 1.0)
         cooccur_per_memory = max(1, int(cooccur_per_memory * cog_mod.get('cooccurrence_expand', 1.0)))
+        # Selective broadcasting: modulate activation_count by cognitive state
+        activation_count = max(3, int(activation_count * _cog_max_mult))
+        # Confidence gate: reduce curiosity in exploit mode (low uncertainty)
+        if cog_mod.get('uncertainty_mode') == 'exploit':
+            _cog_extra_curiosity = max(0, _cog_extra_curiosity - 1)
         if _expl:
             _expl.add_step('cognitive_priming_mod', cog_mod, weight=0.2,
                            context=f'Priming adjusted: +{_cog_extra_curiosity} curiosity, '
-                                   f'cooccur={cooccur_per_memory}')
+                                   f'cooccur={cooccur_per_memory}, activation={activation_count} '
+                                   f'(×{_cog_max_mult:.2f})')
     except Exception:
         pass
 

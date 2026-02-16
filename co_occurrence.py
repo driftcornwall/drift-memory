@@ -58,6 +58,48 @@ INACTIVE_CONTEXT_FACTOR = 0.1  # Non-overlapping edges decay at 0.03 instead of 
 
 # v3.0: Edge Provenance
 OBSERVATION_MAX_AGE_DAYS = 30
+
+
+def _get_recall_timestamps() -> dict[str, datetime]:
+    """
+    Query session_recalls for the current session to get per-recall timestamps.
+    Returns {memory_id: recalled_at} for computing temporal direction.
+    """
+    try:
+        db = get_db()
+        session_id = session_state.get_db_session_id()
+        if not session_id:
+            return {}
+        import psycopg2.extras
+        with db._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(f"""
+                    SELECT memory_id, recalled_at
+                    FROM {db._table('session_recalls')}
+                    WHERE session_id = %s
+                    ORDER BY recalled_at ASC
+                """, (session_id,))
+                return {row['memory_id']: row['recalled_at'] for row in cur.fetchall()}
+    except Exception:
+        return {}
+
+
+def _compute_direction_weight(id1: str, id2: str, recall_times: dict) -> float:
+    """
+    Compute direction_weight for a pair based on recall order.
+    +1.0 = id1 recalled before id2 (id1 -> id2 temporal flow)
+    -1.0 = id2 recalled before id1
+     0.0 = simultaneous or unknown
+    """
+    t1 = recall_times.get(id1)
+    t2 = recall_times.get(id2)
+    if t1 is None or t2 is None:
+        return 0.0
+    if t1 < t2:
+        return 1.0
+    elif t2 < t1:
+        return -1.0
+    return 0.0
 TRUST_TIERS = {
     'self': 1.0,
     'verified_agent': 0.8,
@@ -155,6 +197,9 @@ def log_co_occurrences_v3() -> tuple[int, str]:
     session_id = datetime.now(timezone.utc).isoformat()
     pairs_updated = 0
 
+    # R10: Get recall timestamps for temporal direction
+    recall_times = _get_recall_timestamps()
+
     for i, id1 in enumerate(retrieved):
         for id2 in retrieved[i + 1:]:
             pair = tuple(sorted([id1, id2]))
@@ -181,6 +226,10 @@ def log_co_occurrences_v3() -> tuple[int, str]:
                 activity_context=activity_context,
                 topic_context=existing_edge.get('topic_context', {}) if existing_edge else {},
             )
+
+            # R10: Compute direction_weight from recall order
+            dw = _compute_direction_weight(id1, id2, recall_times)
+
             db.add_observation(
                 pair[0], pair[1],
                 source_type='session_recall',
@@ -188,6 +237,7 @@ def log_co_occurrences_v3() -> tuple[int, str]:
                 agent=get_agent_name(),
                 platform=','.join(session_platforms) if session_platforms else None,
                 activity=session_activity,
+                direction_weight=dw,
             )
 
             pairs_updated += 1
@@ -211,11 +261,17 @@ def save_pending_cooccurrence() -> int:
         print("No memories to save to pending.")
         return 0
 
+    # R10: Capture recall timestamps for deferred direction_weight computation
+    recall_times_raw = _get_recall_timestamps()
+    recall_times_iso = {mid: t.isoformat() if hasattr(t, 'isoformat') else str(t)
+                        for mid, t in recall_times_raw.items()}
+
     new_entry = {
         'retrieved': retrieved,
         'session_id': datetime.now(timezone.utc).isoformat(),
         'agent': get_agent_name(),
-        'saved_at': datetime.now(timezone.utc).isoformat()
+        'saved_at': datetime.now(timezone.utc).isoformat(),
+        'recall_times': recall_times_iso,
     }
 
     # Read existing pending data from DB KV and append
@@ -274,6 +330,15 @@ def process_pending_cooccurrence() -> int:
         agent = session_data.get('agent', get_agent_name())
         print(f"Processing {len(retrieved)} pending memories from session {session_id[:19]}...")
 
+        # R10: Reconstruct recall_times dict from saved ISO strings
+        recall_times_iso = session_data.get('recall_times', {})
+        recall_times = {}
+        for mid, ts in recall_times_iso.items():
+            try:
+                recall_times[mid] = datetime.fromisoformat(ts)
+            except (ValueError, TypeError):
+                pass
+
         pairs_updated = 0
         for i, id1 in enumerate(retrieved):
             for id2 in retrieved[i + 1:]:
@@ -286,11 +351,14 @@ def process_pending_cooccurrence() -> int:
                     activity_context=existing.get('activity_context', {}) if existing else {},
                     topic_context=existing.get('topic_context', {}) if existing else {},
                 )
+                # R10: Compute direction_weight from saved timestamps
+                dw = _compute_direction_weight(id1, id2, recall_times)
                 db.add_observation(
                     id1, id2,
                     source_type='deferred_recall',
                     session_id=session_id,
                     agent=agent,
+                    direction_weight=dw,
                 )
                 pairs_updated += 1
 

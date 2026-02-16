@@ -247,15 +247,24 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     Returns:
         List of matching memories with scores.
     """
+    # === ATTENTION SCHEMA TIMING ===
+    import time as _time
+    _attention_stages = []
+    _t0 = _time.monotonic()
+
     # Bidirectional vocabulary bridge
+    _ts = _time.monotonic()
     try:
         from vocabulary_bridge import bridge_query
         bridged_query = bridge_query(query)
     except ImportError:
         bridged_query = query
+    _attention_stages.append({'stage': 'vocab_bridge', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
     # Get query embedding
+    _ts = _time.monotonic()
     query_embedding = get_embedding(bridged_query)
+    _attention_stages.append({'stage': 'query_embedding', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
     if not query_embedding:
         print("Failed to get query embedding", file=sys.stderr)
         return []
@@ -289,6 +298,7 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
         _expl = None
 
     # pgvector search — DB-only, no file fallback
+    _ts = _time.monotonic()
     from db_adapter import get_db
     db = get_db()
     rows = db.search_embeddings(query_embedding, limit=limit * 3)
@@ -301,6 +311,7 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                 "preview": (row.get('preview') or row.get('content', ''))[:150],
                 "path": f"db://{row.get('type', 'active')}/{row['id']}.md"
             })
+    _attention_stages.append({'stage': 'pgvector_search', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
     if _expl:
         _expl.add_step('pgvector_candidates', len(results), weight=1.0,
@@ -309,6 +320,7 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     # === ENTITY INDEX INJECTION (Fix for WHO dimension) ===
     # When query mentions a known contact, inject their memories into candidates
     # This bridges the gap between contact names and memory embeddings
+    _ts = _time.monotonic()
     try:
         from entity_index import get_memories_for_query, detect_contacts
         entity_mem_ids = get_memories_for_query(query)
@@ -356,6 +368,7 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
         pass
     except Exception:
         pass
+    _attention_stages.append({'stage': 'entity_injection', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
     if _expl:
         injected_count = sum(1 for r in results if r.get('entity_injected'))
@@ -367,6 +380,7 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     # Penalize memories where query key terms don't appear in the preview
     # This catches hub memories that match everything via embedding similarity
     # but don't actually contain the relevant information
+    _ts = _time.monotonic()
     query_terms = set(query.lower().split())
     # Filter out stopwords
     stopwords = {'what', 'is', 'my', 'the', 'a', 'an', 'do', 'i', 'know', 'about',
@@ -384,6 +398,8 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                 result["score"] *= 0.5
                 result["dampened"] = True
 
+    _attention_stages.append({'stage': 'gravity_dampening', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
+
     if _expl:
         dampened_count = sum(1 for r in results if r.get('dampened'))
         if dampened_count:
@@ -394,6 +410,7 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     # Structural penalty for high-degree co-occurrence hubs (P90+)
     # Complements keyword dampening: catches hubs whose preview naturally
     # contains common terms but are still too general
+    _ts = _time.monotonic()
     try:
         from curiosity_engine import _build_degree_map
         _hub_degree_map = _build_degree_map()
@@ -419,9 +436,11 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                                context=f'{hub_dampened} high-degree hubs dampened (P90={p90_threshold})')
     except Exception:
         pass
+    _attention_stages.append({'stage': 'hub_dampening', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
     # === Q-VALUE RE-RANKING (Phase 5: MemRL) ===
     # Blend similarity score with learned Q-value utility
+    _ts = _time.monotonic()
     try:
         from q_value_engine import get_q_values, get_lambda, Q_RERANKING_ENABLED
         if Q_RERANKING_ENABLED:
@@ -442,8 +461,10 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                                context=f'{q_reranked} results reranked (lambda={lam:.3f})')
     except Exception:
         pass
+    _attention_stages.append({'stage': 'q_rerank', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
     # === STRATEGY-GUIDED ADJUSTMENT (explanation mining feedback) ===
+    _ts = _time.monotonic()
     try:
         from explanation_miner import get_strategies
         strategies = get_strategies()
@@ -471,8 +492,10 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                                context=f'{strategy_adjusted} results adjusted by {len(strategies)} learned strategies')
     except Exception:
         pass
+    _attention_stages.append({'stage': 'strategy_resolution', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
     # === RESOLUTION BOOSTING ===
+    _ts = _time.monotonic()
     for result in results:
         tags = load_memory_tags(result["id"])
         if tags and RESOLUTION_TAGS.intersection(set(t.lower() for t in tags)):
@@ -536,6 +559,8 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     except Exception:
         pass  # Don't break search if activation scoring fails
 
+    _attention_stages.append({'stage': 'resolution_evidence_importance', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
+
     if _expl and any(r.get('activation') for r in results):
         _expl.add_step('importance_freshness', imp_context, weight=0.3,
                        context=f'context={imp_context}, blended 70% cosine + 30% activation')
@@ -543,6 +568,7 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     # === CURIOSITY BOOST (Phase 2: sparse-region exploration) ===
     # Memories with few co-occurrence edges get a small boost to encourage
     # the system to build connections in sparse graph regions
+    _ts = _time.monotonic()
     try:
         from curiosity_engine import _build_degree_map, LOW_DEGREE_THRESHOLD
         _degree_map = _build_degree_map()
@@ -562,8 +588,10 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                                context=f'{curiosity_boosted} results boosted for sparse-graph exploration')
     except Exception:
         pass  # Don't break search if curiosity engine unavailable
+    _attention_stages.append({'stage': 'curiosity_boost', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
     # === AUTO-DETECT DIMENSION from session context ===
+    _ts = _time.monotonic()
     if not dimension and results:
         try:
             from context_manager import get_session_dimensions
@@ -592,6 +620,8 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                 result['dim_boosted'] = True
                 result['dim_degree'] = degree
 
+    _attention_stages.append({'stage': 'dimensional_boost', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
+
     if _expl and dimension:
         dim_boosted = sum(1 for r in results if r.get('dim_boosted'))
         if dim_boosted:
@@ -603,6 +633,7 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     #   - 'contradicts' edges REDUCE score (conflicting memories less reliable)
     #   - 'supports' edges BOOST score (corroborated memories more reliable)
     #   - 'supersedes' edges PENALIZE the superseded memory
+    _ts = _time.monotonic()
     try:
         from knowledge_graph import get_edges_from, get_edges_to
         kg_annotated = 0
@@ -651,6 +682,7 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                            context=f'{kg_annotated} annotated, {kg_inferred} scored by edge type')
     except Exception:
         pass  # Don't break search if knowledge graph unavailable
+    _attention_stages.append({'stage': 'kg_expansion', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
     # Sort by (boosted) score descending
     results.sort(key=lambda x: x["score"], reverse=True)
@@ -661,6 +693,7 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     # by the results but don't match the query embedding directly.
     # Spread candidates are APPENDED to results (not competing for slots) because
     # their value is discovering non-obvious connections, not matching embeddings.
+    _ts = _time.monotonic()
     try:
         from knowledge_graph import traverse as kg_traverse
         from q_value_engine import get_q_values as _sa_get_q_values
@@ -746,6 +779,7 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
         pass  # KG or Q-value modules not available
     except Exception:
         pass  # Don't break search if spreading activation fails
+    _attention_stages.append({'stage': 'spreading_activation', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
     # Register recalls with the memory system (+ reconsolidation context)
     if register_recall and top_results:
@@ -780,6 +814,29 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
             'total_candidates': len(results),
         })
         _expl.save()
+
+    # Attention schema: store timing for self-narrative
+    _total_ms = round((_time.monotonic() - _t0) * 1000, 1)
+    try:
+        from datetime import datetime, timezone
+        from db_adapter import get_db as _attn_db
+        _adb = _attn_db()
+        # Calculate percentages
+        for s in _attention_stages:
+            s['pct'] = round(s['time_ms'] / max(_total_ms, 0.1) * 100, 1)
+        schema_entry = {
+            'query': query[:100],
+            'stages': _attention_stages,
+            'total_ms': _total_ms,
+            'result_count': len(top_results),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        }
+        # Rolling buffer of last 20
+        existing = _adb.kv_get('.attention_schema') or []
+        existing.append(schema_entry)
+        _adb.kv_set('.attention_schema', existing[-20:])
+    except Exception:
+        pass
 
     return top_results
 
@@ -911,11 +968,66 @@ def remove_from_index(memory_id: str) -> bool:
             return cur.rowcount > 0
 
 
+def get_temporal_successors(memory_id: str, limit: int = 5) -> list[dict]:
+    """
+    R10: Get memories that typically follow the given one in recall sequences.
+    Aggregates direction_weight from edge_observations to find temporal flow.
+    Positive aggregate = this memory tends to be recalled AFTER memory_id.
+
+    Returns list of {id, content_preview, aggregate_direction, observation_count}
+    """
+    from db_adapter import get_db
+    db = get_db()
+    import psycopg2.extras
+    results = []
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Find all edges involving this memory, aggregate direction_weight
+            # For edges where memory_id is id1: positive dw means id2 comes after
+            # For edges where memory_id is id2: negative dw means id1 comes after
+            cur.execute(f"""
+                WITH successors AS (
+                    SELECT edge_id2 AS other_id,
+                           SUM(direction_weight) AS agg_dir,
+                           COUNT(*) AS obs_count
+                    FROM {db._table('edge_observations')}
+                    WHERE edge_id1 = %s AND direction_weight != 0
+                    GROUP BY edge_id2
+                    UNION ALL
+                    SELECT edge_id1 AS other_id,
+                           SUM(-direction_weight) AS agg_dir,
+                           COUNT(*) AS obs_count
+                    FROM {db._table('edge_observations')}
+                    WHERE edge_id2 = %s AND direction_weight != 0
+                    GROUP BY edge_id1
+                )
+                SELECT other_id, SUM(agg_dir) AS aggregate_direction,
+                       SUM(obs_count) AS observation_count
+                FROM successors
+                GROUP BY other_id
+                HAVING SUM(agg_dir) > 0
+                ORDER BY SUM(agg_dir) DESC
+                LIMIT %s
+            """, (memory_id, memory_id, limit))
+            rows = cur.fetchall()
+
+    for row in rows:
+        other = db.get_memory(row['other_id'])
+        preview = (other.get('content', '') or '')[:100] if other else ''
+        results.append({
+            'id': row['other_id'],
+            'content_preview': preview,
+            'aggregate_direction': float(row['aggregate_direction']),
+            'observation_count': int(row['observation_count']),
+        })
+    return results
+
+
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Semantic search for Drift's memories")
-    parser.add_argument("command", choices=["index", "search", "status"],
+    parser.add_argument("command", choices=["index", "search", "status", "temporal-successors"],
                        help="Command to run")
     parser.add_argument("query", nargs="?", help="Search query (for search command)")
     parser.add_argument("--limit", type=int, default=5, help="Max results")
@@ -967,4 +1079,19 @@ if __name__ == "__main__":
                 flag_str = f" [{', '.join(flags)}]" if flags else ""
                 print(f"[{r['score']:.3f}] {r['id']}{flag_str}")
                 print(f"  {r['preview']}...")
+                print()
+
+    elif args.command == "temporal-successors":
+        if not args.query:
+            print("Error: temporal-successors requires a memory ID")
+            sys.exit(1)
+        results = get_temporal_successors(args.query, limit=args.limit)
+        if not results:
+            print(f"No temporal successors found for {args.query}")
+            print("(Direction data accumulates over sessions)")
+        else:
+            print(f"Memories that tend to follow {args.query}:\n")
+            for r in results:
+                print(f"  {r['id']} (dir={r['aggregate_direction']:.1f}, obs={r['observation_count']})")
+                print(f"    {r['content_preview'][:80]}...")
                 print()
