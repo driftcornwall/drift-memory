@@ -177,7 +177,7 @@ def mine_strategies(limit: int = 200) -> list[dict]:
 
         # Strategy 2: High vs low factor values
         high_qs = [q for q, v in stats['high_value'] if v > 3]
-        low_qs = [q for q, v in stats['high_value'] if v <= 3]
+        low_qs = [q for q, v in stats['low_value'] if v <= 3]
 
         if len(high_qs) >= 5 and len(low_qs) >= 5:
             avg_high = sum(high_qs) / len(high_qs)

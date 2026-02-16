@@ -172,7 +172,16 @@ def dream(dry_run: bool = False) -> dict:
     db = _get_db()
 
     # Check if session was substantive enough to dream
-    # (In production, this would check session recall count)
+    try:
+        from session_state import get_retrieved_list
+        recalls = get_retrieved_list()
+        if len(recalls) < MIN_SESSION_RECALLS:
+            return {
+                'status': 'skip',
+                'reason': f'Session not substantive enough ({len(recalls)} recalls < {MIN_SESSION_RECALLS})',
+            }
+    except Exception:
+        pass  # If session_state unavailable, proceed anyway
 
     # Sample memories
     memories = sample_diverse_memories(SAMPLE_COUNT)
