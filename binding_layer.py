@@ -596,6 +596,81 @@ def bind_results(results: list[dict], full_count: int = None) -> list[BoundMemor
 
 # === PRESENTATION ===
 
+def render_directives(bound: BoundMemory) -> list[str]:
+    """
+    N7: Transform binding annotations into active reasoning directives.
+
+    Instead of passive metadata ("2 contradictions"), generate explicit
+    processing instructions ("This memory has been contradicted. Seek
+    corroboration before relying on it.")
+
+    Only fires when there's something meaningful — high signal-to-noise.
+    Returns list of directive strings (empty if nothing actionable).
+    """
+    directives = []
+
+    # ── Epistemic warnings ────────────────────────────────────────────────
+    if bound.epistemic.superseded:
+        directives.append("SUPERSEDED: Newer information exists. Do not rely on this as current truth.")
+
+    if bound.epistemic.contradiction_count >= 2:
+        directives.append(
+            f"CONTRADICTED ({bound.epistemic.contradiction_count}x): "
+            "This memory has conflicting evidence. Cross-check before using."
+        )
+    elif bound.epistemic.contradiction_count == 1:
+        directives.append("CONTESTED: One contradicting memory exists. Verify which is current.")
+
+    if bound.epistemic.evidence_type == 'claim' and bound.epistemic.confidence < 0.25:
+        # Only fire when confidence is actively LOW (contradictions dragged it below default 0.3)
+        # Not every unexamined claim — that would be too noisy (50% of memories)
+        directives.append("LOW CONFIDENCE: Unverified claim. Seek corroboration before relying on it.")
+    elif bound.epistemic.evidence_type == 'inference':
+        directives.append("INFERRED: Derived from reasoning, not direct observation. Treat as hypothesis.")
+
+    if bound.epistemic.supporting_count >= 3:
+        directives.append(
+            f"WELL-SUPPORTED: {bound.epistemic.supporting_count} corroborating memories. "
+            "High reliability for decisions."
+        )
+
+    # ── Affect bias alerts ────────────────────────────────────────────────
+    if bound.affect.mood_congruence > 0.15:
+        directives.append(
+            "MOOD-ALIGNED: This memory resonates with your current emotional state. "
+            "Be aware of confirmation bias — you may be weighting it higher than warranted."
+        )
+
+    if bound.affect.valence < -0.4:
+        directives.append(
+            "NEGATIVE VALENCE: Strong negative association. "
+            "Check if avoidance tendency is distorting your evaluation."
+        )
+
+    # ── Goal relevance ────────────────────────────────────────────────────
+    if bound.pipeline_flags.get('goal_boosted'):
+        directives.append(
+            "GOAL-RELEVANT: This memory relates to your active focus goal. "
+            "Use it to advance your current objective."
+        )
+
+    # ── Social trust signals ──────────────────────────────────────────────
+    if bound.social.primary_contact and bound.social.contact_reliability < 0.35:
+        directives.append(
+            f"LOW-TRUST SOURCE: {bound.social.primary_contact} has low reliability "
+            f"({bound.social.contact_reliability:.0%}). Independently verify claims."
+        )
+
+    # ── Q-value signals ───────────────────────────────────────────────────
+    if bound.q_value < 0.3:
+        directives.append(
+            "LOW UTILITY: This memory has historically been unhelpful when recalled. "
+            "Consider whether it's relevant here."
+        )
+
+    return directives
+
+
 def render_narrative(bound: BoundMemory) -> str:
     """
     Rich annotation for LLM context window.
@@ -670,6 +745,12 @@ def render_narrative(bound: BoundMemory) -> str:
     if bound.retrieval_reasons:
         lines.append(f"  Why: {' + '.join(bound.retrieval_reasons[:4])}")
 
+    # N7: Reasoning directives — active processing instructions
+    dirs = render_directives(bound)
+    if dirs:
+        for d in dirs[:3]:  # Max 3 directives per memory
+            lines.append(f"  >> {d}")
+
     return '\n'.join(lines)
 
 
@@ -703,6 +784,14 @@ def render_compact(bound: BoundMemory) -> str:
     # Superseded flag
     if bound.epistemic.superseded:
         parts.append('SUPERSEDED')
+
+    # N7: Compact directive tags (high-signal only)
+    if bound.epistemic.contradiction_count >= 2:
+        parts.append('VERIFY')
+    if bound.affect.mood_congruence > 0.15:
+        parts.append('BIAS-CHECK')
+    if bound.q_value < 0.3:
+        parts.append('LOW-UTIL')
 
     meta = f' ({", ".join(parts)})' if parts else ''
     preview = bound.content[:150].replace('\n', ' ').rstrip()

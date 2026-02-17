@@ -108,9 +108,9 @@ def _load_l0() -> dict:
 
 
 def _build_metadata_cache() -> dict:
-    """Build memory_id -> metadata lookup from DB."""
-    from db_adapter import get_db as _get_adapter_db, db_to_file_metadata
-    db = _get_adapter_db()
+    """Build memory_id -> metadata lookup from DB (schema-aware)."""
+    from db_adapter import db_to_file_metadata
+    db = _get_db()  # Use schema-aware _get_db(), not db_adapter's hardcoded version
     import psycopg2.extras
     cache = {}
     with db._conn() as conn:

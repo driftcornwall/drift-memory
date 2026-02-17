@@ -194,8 +194,10 @@ def search_memories(query: str, memory_dir: Path, limit: int = 2) -> list[dict]:
             return []
 
         # Direct subprocess to semantic_search.py (pgvector-backed)
+        # --skip-monologue: System 1 fast path. Async monologue fires separately.
         result = subprocess.run(
-            ["python", str(memory_dir / "semantic_search.py"), "search", query, "--limit", str(limit)],
+            ["python", str(memory_dir / "semantic_search.py"), "search", query,
+             "--limit", str(limit), "--skip-monologue"],
             capture_output=True,
             text=True,
             timeout=8,
@@ -309,6 +311,22 @@ def prime_from_thought(transcript_path: str, memory_dir: Path = None) -> str:
         )
     except Exception:
         pass  # Never block conversation for recall registration
+
+    # === N6: Async inner monologue (System 2 delayed evaluation) ===
+    # Fire-and-forget: Gemma evaluates these memories in the background.
+    # Result stored in DB, picked up by NEXT post_tool_use call.
+    # This is the slow deliberate System 2 catching up with fast System 1.
+    try:
+        mem_json = json.dumps(new_memories)
+        subprocess.Popen(
+            ["python", str(memory_dir / "inner_monologue.py"), "evaluate-async",
+             query[-300:], "--memories", mem_json],
+            cwd=str(memory_dir),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass  # Never block for async monologue
 
     # Format output (N5: rich binding when available)
     lines = ["", "=== THOUGHT-TRIGGERED MEMORY ==="]

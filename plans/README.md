@@ -12,6 +12,7 @@ Session 14-15 (2026-02-12)
 | 2 | Curiosity Engine | SHIPPED | curiosity_engine.py (NEW), memory_manager.py, semantic_search.py |
 | 3 | Cognitive State Tracker | SHIPPED | cognitive_state.py (NEW), semantic_search.py, memory_manager.py, system_vitals.py, toolkit.py, hooks/session_start.py, hooks/stop.py |
 | 4 | Typed Relationships / Knowledge Graph | SHIPPED | knowledge_graph.py (NEW), schema.sql, memory_store.py, semantic_search.py, memory_manager.py, system_vitals.py, toolkit.py |
+| 5 | MemRL Q-Value Learning + Hub Dampening | SHIPPED | q_value_engine.py (NEW), semantic_search.py, system_vitals.py, toolkit.py |
 
 ## ALL PHASES COMPLETE (sessions 14-15, 2026-02-12)
 

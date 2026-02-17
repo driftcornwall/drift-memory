@@ -310,6 +310,20 @@ def build_registry():
         Command("goal-health", "memory", "Goal module health check", "goal_generator", "health"),
     ]
 
+    # === MONOLOGUE (N6) ===
+    cmds += [
+        Command("monologue-status", "memory", "Inner monologue status + stats", "inner_monologue", "status"),
+        Command("monologue-health", "memory", "Inner monologue health check", "inner_monologue", "health"),
+    ]
+
+    # === CAUSAL MODEL (N6) ===
+    cmds += [
+        Command("causal-status", "memory", "Causal hypothesis engine status", "causal_model", "status"),
+        Command("causal-list", "memory", "List all causal hypotheses with confidence", "causal_model", "list"),
+        Command("causal-health", "memory", "Causal model health check", "causal_model", "health"),
+        Command("causal-seed", "memory", "Bootstrap initial hypotheses from experience", "causal_model", "seed"),
+    ]
+
     # === LESSONS ===
     cmds += [
         Command("lessons", "lessons", "List all lessons", "lesson_extractor", "list"),
@@ -642,6 +656,8 @@ def cmd_health():
         ("contact_models", "Per-contact Bayesian scoring"),
         ("prediction_module", "Forward model predictions"),
         ("goal_generator", "Volitional goal generation (N4)"),
+        ("inner_monologue", "Inner monologue engine (N6)"),
+        ("causal_model", "Causal hypothesis engine (N6)"),
     ]
 
     # Social subpackage

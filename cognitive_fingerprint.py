@@ -689,8 +689,11 @@ def compute_drift_score(current_fingerprint: dict) -> Optional[dict]:
     if not previous:
         return None
 
-    prev_hubs = {h['id'] for h in previous.get('hubs', [])}
-    curr_hubs = {h['id'] for h in current_fingerprint.get('hubs', [])}
+    # Handle both 'hubs' (full analysis) and 'top_hubs' (consolidation daemon) formats
+    prev_hub_list = previous.get('hubs', previous.get('top_hubs', []))
+    curr_hub_list = current_fingerprint.get('hubs', current_fingerprint.get('top_hubs', []))
+    prev_hubs = {h['id'] for h in prev_hub_list}
+    curr_hubs = {h['id'] for h in curr_hub_list}
 
     # Hub overlap (Jaccard similarity)
     if prev_hubs or curr_hubs:

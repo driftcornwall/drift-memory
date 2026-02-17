@@ -358,6 +358,21 @@ def collect_vitals():
         m["cognitive_events"] = 0
         m["cognitive_volatility"] = 0.0
 
+    # --- N6: INNER MONOLOGUE METRICS ---
+    try:
+        from inner_monologue import get_monologue_status
+        mono = get_monologue_status()
+        m["monologue_enabled"] = mono.get('enabled', False)
+        m["monologue_llm_available"] = mono.get('llm_available', False)
+        stats = mono.get('stats', {})
+        m["monologue_invocations"] = stats.get('total_invocations', 0)
+        m["monologue_avg_latency_ms"] = round(stats.get('avg_latency_ms', 0), 0)
+        m["monologue_avg_confidence"] = round(stats.get('avg_confidence', 0), 2)
+        m["monologue_adversarial_count"] = stats.get('adversarial_count', 0)
+    except Exception:
+        m["monologue_enabled"] = False
+        m["monologue_invocations"] = 0
+
     # --- Q-VALUE METRICS (Phase 5: MemRL) ---
     try:
         from q_value_engine import q_stats, get_lambda

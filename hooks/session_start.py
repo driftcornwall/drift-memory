@@ -1381,6 +1381,25 @@ def load_drift_memory_context(debug: bool = False) -> str:
                 _cand('research', [research_text], {
                     'research_count': research_text.count('  -'),
                 })
+            # N6: Inner monologue evaluation of primed memories
+            try:
+                from inner_monologue import evaluate_primed_memories, MONOLOGUE_ENABLED
+                if MONOLOGUE_ENABLED and _all_for_binding:
+                    _sid = ''
+                    try:
+                        _sid = session_state.get_session_id() if hasattr(session_state, 'get_session_id') else ''
+                    except Exception:
+                        pass
+                    _monologue_text = evaluate_primed_memories(_all_for_binding[:8], _sid)
+                    if _monologue_text:
+                        _cand('monologue', [_monologue_text], {
+                            'has_warnings': 'Warning' in _monologue_text,
+                            'adversarial': 'ADVERSARIAL' in _monologue_text,
+                            'confidence': 0.6,
+                        })
+            except Exception:
+                pass  # Never break session start for monologue failure
+
             # N3: Counterfactual insights from previous sessions
             _cand('counterfactual', counterfactual_parts, {
                 'validated': any('validated' in str(p).lower() for p in counterfactual_parts),

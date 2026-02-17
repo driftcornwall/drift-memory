@@ -717,6 +717,23 @@ def _generate_thought_context(transcript_path: str, memory_dir: Path) -> str:
         return ""
 
 
+def _check_pending_monologue() -> str:
+    """
+    N6 System 2: Check for pending async monologue result.
+
+    The inner monologue runs asynchronously after thought priming (System 1).
+    If it finished before this hook call, inject the result into context.
+    This is the slow deliberate evaluation catching up with fast recall.
+    """
+    try:
+        mono = _get_mod("inner_monologue")
+        if mono and hasattr(mono, "consume_pending_monologue"):
+            return mono.consume_pending_monologue()
+        return ""
+    except Exception:
+        return ""
+
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -757,9 +774,14 @@ def main():
         # === ADDITIONAL CONTEXT (parallel: lesson injection + thought priming) ===
         lesson_context = ""
         thought_context = ""
+        pending_monologue = ""
 
         memory_dir = get_memory_dir()
         transcript_path = input_data.get("transcript_path", "")
+
+        # N6 System 2: Check for async monologue result from previous thought priming
+        if memory_dir and memory_dir.exists():
+            pending_monologue = _check_pending_monologue()
 
         if memory_dir and memory_dir.exists() and tool_result:
             # Run both context generators in parallel
@@ -784,7 +806,7 @@ def main():
                     pass
 
         # Output JSON with additionalContext if we have memory triggers
-        combined_context = "\n\n".join(filter(None, [lesson_context, thought_context]))
+        combined_context = "\n\n".join(filter(None, [pending_monologue, lesson_context, thought_context]))
         if combined_context:
             hook_response = {
                 "hookSpecificOutput": {

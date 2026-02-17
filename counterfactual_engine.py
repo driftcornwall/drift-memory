@@ -41,8 +41,12 @@ KV_CF_SESSION = '.counterfactual_session'
 KV_CF_HISTORY = '.counterfactual_history'
 KV_DECISION_TRACE = '.decision_trace'
 
+# Feature flag — set to False to disable all CF generation
+CF_ENABLED = True
+
 # Budget constraints (anti-rumination)
 MAX_CF_PER_SESSION = 3
+MAX_CFS_PER_SESSION = MAX_CF_PER_SESSION  # Alias for stop.py compatibility
 MAX_LLM_CALLS = 2
 
 # Near-miss zone (Kahneman & Tversky simulation heuristic)
@@ -87,6 +91,11 @@ class Counterfactual:
     confidence: float       # 0-1 (domain understanding)
     generation_method: str  # 'heuristic' or 'llm'
     created_at: str         # ISO timestamp
+    session_id: int = 0     # Session number (set by stop hook)
+
+    def to_dict(self) -> dict:
+        """Convert to dict (used by stop.py for history logging)."""
+        return asdict(self)
 
 
 def _get_db():
@@ -523,10 +532,48 @@ def generate_prospective(predictions: list[dict]) -> list[Counterfactual]:
 # Self-Directed Counterfactuals (Phase 2 — LLM or Heuristic)
 # ============================================================
 
-def generate_self_directed(adaptations: dict, evaluation: dict) -> Optional[Counterfactual]:
+def generate_self_directed(adaptations_or_eval: dict, evaluation: dict = None) -> list[Counterfactual]:
     """
-    Generate counterfactual about adaptive parameter changes.
-    Triggered when adaptive_behavior evaluates effectiveness.
+    Generate counterfactual(s) about adaptive parameter changes.
+
+    Supports two calling conventions:
+      1. generate_self_directed(eval_result)        — from stop.py (single dict, returns list)
+      2. generate_self_directed(adaptations, eval)   — direct call (two dicts, returns list)
+
+    When called with a single dict (eval_result from evaluate_adaptations()),
+    extracts adaptations from the evaluations and iterates over each.
+    """
+    # Detect calling convention
+    if evaluation is None:
+        # Single-arg call from stop.py: eval_result contains everything
+        eval_result = adaptations_or_eval
+        results = []
+        evaluations = eval_result.get('evaluations', [])
+        for ev in evaluations:
+            adaptations = {
+                'adaptations': {ev['param']: ev.get('adapted_value', ev.get('value'))},
+                'reasons': {ev['param']: ev.get('reason', '')},
+            }
+            fake_eval = {
+                'evaluated': True,
+                'effectiveness': ev.get('effectiveness', 0),
+                'resolved': ev.get('resolved', 0),
+                'persisting': ev.get('persisting', 0),
+            }
+            cf = _generate_self_directed_single(adaptations, fake_eval)
+            if cf:
+                results.append(cf)
+        return results
+
+    # Two-arg call: original behavior, wrap in list
+    adaptations = adaptations_or_eval
+    cf = _generate_self_directed_single(adaptations, evaluation)
+    return [cf] if cf else []
+
+
+def _generate_self_directed_single(adaptations: dict, evaluation: dict) -> Optional[Counterfactual]:
+    """
+    Generate a single counterfactual about adaptive parameter changes.
 
     Args:
         adaptations: Result from adapt() — has 'adaptations', 'reasons' dicts
@@ -662,10 +709,35 @@ def generate_self_directed(adaptations: dict, evaluation: dict) -> Optional[Coun
 # Reconsolidation Counterfactuals (Phase 2 — LLM or Heuristic)
 # ============================================================
 
-def generate_reconsolidation(revision: dict, memory_id: str) -> Optional[Counterfactual]:
+def generate_reconsolidation(revision_or_list, memory_id: str = None) -> list[Counterfactual]:
     """
-    Generate counterfactual about memory revision.
-    Triggered by reconsolidation.py when a memory is revised.
+    Generate counterfactual(s) about memory revision(s).
+
+    Supports two calling conventions:
+      1. generate_reconsolidation(revision_results)          — from stop.py (list, returns list)
+      2. generate_reconsolidation(revision, memory_id)        — direct call (dict + str, returns list)
+
+    When called with a list (from stop.py), iterates over each revision result.
+    """
+    if isinstance(revision_or_list, list):
+        # List call from stop.py
+        results = []
+        for rev in revision_or_list:
+            mid = rev.get('memory_id', rev.get('id', ''))
+            if mid:
+                cf = _generate_reconsolidation_single(rev, mid)
+                if cf:
+                    results.append(cf)
+        return results
+
+    # Two-arg call: original behavior, wrap in list
+    cf = _generate_reconsolidation_single(revision_or_list, memory_id or '')
+    return [cf] if cf else []
+
+
+def _generate_reconsolidation_single(revision: dict, memory_id: str) -> Optional[Counterfactual]:
+    """
+    Generate a single counterfactual about a memory revision.
 
     Args:
         revision: dict with 'previous_content', 'revised_content', 'reason'
@@ -867,10 +939,13 @@ def _get_cf_budget() -> int:
 # Session-End Review (Orchestrator)
 # ============================================================
 
-def session_end_review() -> dict:
+def session_end_review(**kwargs) -> dict:
     """
     Orchestrator: select candidates, generate, gate, store, route.
     Called from stop.py Phase 2. Max 3 counterfactuals.
+
+    Accepts optional prediction_results and session_id kwargs from stop hook
+    (data is also available in DB, kwargs are for forward compatibility).
 
     Returns summary dict with counts and generated CFs.
     """
@@ -1086,6 +1161,27 @@ def _route_to_cognitive_state(cf: Counterfactual):
             process_affect_event('counterfactual_upward', {'cf_type': cf.cf_type})
         else:
             process_affect_event('counterfactual_downward', {'cf_type': cf.cf_type})
+    except Exception:
+        pass
+
+
+def route_to_affect(cf: Counterfactual):
+    """Public wrapper for affect routing (called by stop.py Phase 2)."""
+    _route_to_cognitive_state(cf)
+
+
+def _update_stats(stored: list, elapsed_ms: float):
+    """Update session CF stats in DB (called by stop.py Phase 2)."""
+    try:
+        db = _get_db()
+        session_data = db.kv_get(KV_CF_SESSION) or {}
+        existing_cfs = session_data.get('counterfactuals', [])
+        existing_cfs.extend(stored)
+        session_data['counterfactuals'] = existing_cfs
+        session_data['phase2_count'] = len(stored)
+        session_data['phase2_elapsed_ms'] = round(elapsed_ms, 1)
+        session_data['generated'] = session_data.get('generated', 0) + len(stored)
+        db.kv_set(KV_CF_SESSION, session_data)
     except Exception:
         pass
 

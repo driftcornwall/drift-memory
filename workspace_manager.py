@@ -79,6 +79,7 @@ MODULE_CATEGORIES = {
     'encounters': 'embodiment',
     'counterfactual': 'imagination',
     'goals': 'action',  # N4: Volitional goals compete in action category
+    'monologue': 'meta',  # N6: Inner monologue competes in meta category
 }
 
 
@@ -304,6 +305,18 @@ def _salience_goals(content: str, meta: dict) -> float:
     return min(1.0, base)
 
 
+def _salience_monologue(content: str, meta: dict) -> float:
+    """N6: Inner monologue — higher salience when warnings or adversarial."""
+    base = 0.35
+    if meta.get('has_warnings'):
+        base += 0.25
+    if meta.get('adversarial'):
+        base += 0.15
+    confidence = meta.get('confidence', 0.5)
+    base += 0.10 * confidence  # Higher monologue confidence = more salient
+    return min(1.0, base)
+
+
 def _salience_default(content: str, meta: dict) -> float:
     """Fallback heuristic for unknown modules."""
     urgency = 0.25 if any(w in content for w in ['WARN', 'ERR', 'ACTION', 'ALERT']) else 0.0
@@ -332,6 +345,7 @@ _SALIENCE_SCORERS = {
     'encounters': _salience_encounters,
     'counterfactual': _salience_counterfactual,
     'goals': _salience_goals,
+    'monologue': _salience_monologue,
 }
 
 

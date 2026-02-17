@@ -255,7 +255,8 @@ DIMENSION_BOOST_SCALE = 0.1  # Dimensional connectivity boost: score *= (1 + 0.1
 
 def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                     register_recall: bool = True,
-                    dimension: str = None, sub_view: str = None) -> list[dict]:
+                    dimension: str = None, sub_view: str = None,
+                    skip_monologue: bool = False) -> list[dict]:
     """
     Search memories by semantic similarity with resolution + dimensional boosting.
 
@@ -1048,29 +1049,6 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
         })
         _expl.save()
 
-    # Attention schema: store timing for self-narrative
-    _total_ms = round((_time.monotonic() - _t0) * 1000, 1)
-    try:
-        from datetime import datetime, timezone
-        from db_adapter import get_db as _attn_db
-        _adb = _attn_db()
-        # Calculate percentages
-        for s in _attention_stages:
-            s['pct'] = round(s['time_ms'] / max(_total_ms, 0.1) * 100, 1)
-        schema_entry = {
-            'query': query[:100],
-            'stages': _attention_stages,
-            'total_ms': _total_ms,
-            'result_count': len(top_results),
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-        }
-        # Rolling buffer of last 20
-        existing = _adb.kv_get('.attention_schema') or []
-        existing.append(schema_entry)
-        _adb.kv_set('.attention_schema', existing[-20:])
-    except Exception:
-        pass
-
     # === N5: INTEGRATIVE BINDING (BUG-18 fix: wire into production pipeline) ===
     # Apply binding to search results so downstream consumers (memory_manager,
     # thought_priming, session hooks) get bound representations, not raw dicts.
@@ -1099,6 +1077,51 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     except Exception:
         pass
     _attention_stages.append({'stage': 'integrative_binding', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
+
+    # === N6: INNER MONOLOGUE (Stage 16 — verbal evaluation of surfaced memories) ===
+    # Gemma 3 4B evaluates memories against query BEFORE they reach Claude's context.
+    # Adds monologue_relevance, monologue_reaction, monologue_skip annotations.
+    # Does NOT re-rank — only annotates. Fail-safe: if monologue fails, results pass through.
+    # skip_monologue=True for thought priming (System 1 fast path — async monologue fires separately).
+    _ts = _time.monotonic()
+    _monologue_count = 0
+    try:
+        from inner_monologue import annotate_search_results, MONOLOGUE_ENABLED
+        if MONOLOGUE_ENABLED and top_results and not skip_monologue:
+            _session_id = ''
+            try:
+                import session_state as _ss_mono
+                _session_id = _ss_mono.get_session_id() if hasattr(_ss_mono, 'get_session_id') else ''
+            except Exception:
+                pass
+            top_results = annotate_search_results(query, top_results, _session_id)
+            _monologue_count = sum(1 for r in top_results if r.get('monologue_relevance') is not None)
+    except ImportError:
+        pass  # Inner monologue not available
+    except Exception:
+        pass  # Never break search for monologue failure
+    _attention_stages.append({'stage': 'inner_monologue', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
+
+    # Attention schema: store timing for self-narrative (AFTER all stages complete)
+    _total_ms = round((_time.monotonic() - _t0) * 1000, 1)
+    try:
+        from datetime import datetime, timezone
+        from db_adapter import get_db as _attn_db
+        _adb = _attn_db()
+        for s in _attention_stages:
+            s['pct'] = round(s['time_ms'] / max(_total_ms, 0.1) * 100, 1)
+        schema_entry = {
+            'query': query[:100],
+            'stages': _attention_stages,
+            'total_ms': _total_ms,
+            'result_count': len(top_results),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        }
+        existing = _adb.kv_get('.attention_schema') or []
+        existing.append(schema_entry)
+        _adb.kv_set('.attention_schema', existing[-20:])
+    except Exception:
+        pass
 
     return top_results
 
@@ -1299,6 +1322,8 @@ if __name__ == "__main__":
                        help="W-dimension to boost by (who/what/why/where)")
     parser.add_argument("--sub-view", type=str, default=None,
                        help="Sub-view within dimension")
+    parser.add_argument("--skip-monologue", action="store_true",
+                       help="Skip N6 inner monologue stage (for fast System 1 paths)")
 
     args = parser.parse_args()
 
@@ -1325,6 +1350,7 @@ if __name__ == "__main__":
         results = search_memories(
             args.query, limit=args.limit, threshold=args.threshold,
             dimension=args.dimension, sub_view=getattr(args, 'sub_view', None),
+            skip_monologue=getattr(args, 'skip_monologue', False),
         )
 
         if not results:

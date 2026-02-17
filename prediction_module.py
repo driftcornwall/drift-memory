@@ -66,6 +66,15 @@ def generate_predictions() -> list[dict]:
     # Source 4: Vitals-based outcome predictions
     predictions.extend(_predict_from_vitals())
 
+    # Source 5: Causal hypothesis engine (N6 — learned action→outcome beliefs)
+    try:
+        from causal_model import generate_predictions as _causal_predictions
+        predictions.extend(_causal_predictions())
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
     # Limit to 5 most confident
     predictions.sort(key=lambda p: p.get('confidence', 0), reverse=True)
     predictions = predictions[:5]
@@ -345,6 +354,24 @@ def _score_single(prediction: dict, actuals: dict) -> float:
     elif pred_type == 'intention':
         # Intentions are hard to auto-score — conservative 0.5
         return 0.5
+
+    elif pred_type == 'causal':
+        # Causal hypothesis predictions: check if the predicted platform/contact/outcome appeared
+        ref = (prediction.get('reference') or '').lower()
+        desc = (prediction.get('description') or '').lower()
+        # Check against all actuals for any match
+        all_actuals = (
+            [p.lower() for p in actuals.get('platforms', [])] +
+            actuals.get('contacts', []) +
+            [str(actuals.get('recall_count', 0))]
+        )
+        for actual in all_actuals:
+            if actual and actual in desc:
+                return 0.8  # Partial confirmation
+        # Check keywords
+        if any(k in desc for k in ['engagement', 'like', 'reply'] if actuals.get('contacts')):
+            return 0.7
+        return 0.4  # Weak — couldn't confirm or deny
 
     return 0.5  # Unknown type
 

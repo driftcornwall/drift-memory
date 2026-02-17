@@ -1056,6 +1056,25 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
         except Exception as e:
             _debug(f"N3 Phase 2 CF error: {e}")
 
+        # N6: Causal Model Update (extract + Bayesian update from predictions)
+        try:
+            from causal_model import session_end_update as _causal_update
+            # Fetch scored predictions from Phase 1
+            try:
+                from memory_common import get_db as _cm_get_db
+            except ImportError:
+                from db_adapter import get_db as _cm_get_db
+            _cm_db = _cm_get_db()
+            _cm_pred_data = _cm_db.kv_get('.session_predictions') if _cm_db else None
+            _cm_pred_results = _cm_pred_data.get('details', []) if _cm_pred_data else []
+            causal_result = _causal_update(prediction_results=_cm_pred_results)
+            _debug(f"N6 Causal: {causal_result.get('hypotheses_created', 0)} created, "
+                   f"{causal_result.get('hypotheses_updated', 0)} updated, "
+                   f"{causal_result.get('total_hypotheses', 0)} total "
+                   f"({causal_result.get('elapsed_ms', 0):.0f}ms)")
+        except Exception as e:
+            _debug(f"N6 Causal model error: {e}")
+
         # N4: Volitional Goal Evaluation (ST1/ST2)
         # Evaluate active goal vitality, abandon stale goals (Wrosch)
         try:
@@ -1069,6 +1088,42 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
                    f"avg_vitality={goal_eval.get('avg_vitality', 0):.3f}")
         except Exception as e:
             _debug(f"N4 Goal evaluation error: {e}")
+
+        # N6: Inner monologue session reflection (expanded mode)
+        # Runs AFTER all other N-modules so it has full session context
+        try:
+            if str(memory_dir) not in sys.path:
+                sys.path.insert(0, str(memory_dir))
+            from inner_monologue import session_reflect, MONOLOGUE_ENABLED
+            if MONOLOGUE_ENABLED:
+                # Build summary from what we've collected this session
+                _reflect_parts = []
+                try:
+                    _ss_ref = session_state if 'session_state' in dir() else None
+                    if _ss_ref and hasattr(_ss_ref, 'get_session_id'):
+                        _reflect_parts.append(f"Session: {_ss_ref.get_session_id()}")
+                except Exception:
+                    pass
+                if 'cog_summary' in dir() and cog_summary:
+                    _reflect_parts.append(f"Cognitive: {cog_summary.get('event_count', 0)} events, dominant={cog_summary.get('dominant', '?')}")
+                if 'affect_summary' in dir() and affect_summary:
+                    _m = affect_summary.get('mood', affect_summary.get('final_mood', {}))
+                    _reflect_parts.append(f"Affect: v={_m.get('valence', 0):+.2f}, a={_m.get('arousal', 0):.2f}")
+                if 'goal_eval' in dir() and goal_eval:
+                    _reflect_parts.append(f"Goals: {goal_eval.get('evaluated', 0)} evaluated, avg_vitality={goal_eval.get('avg_vitality', 0):.2f}")
+                _summary = ". ".join(_reflect_parts) if _reflect_parts else "Session completed"
+                _sid = ''
+                try:
+                    _sid = session_state.get_session_id() if hasattr(session_state, 'get_session_id') else ''
+                except Exception:
+                    pass
+                reflection = session_reflect(_summary, _sid)
+                if reflection:
+                    _debug(f"N6 Monologue reflection: confidence={reflection.get('confidence', 0):.2f}, "
+                           f"{len(reflection.get('lessons', []))} lessons, "
+                           f"{reflection.get('latency_ms', 0)}ms")
+        except Exception as e:
+            _debug(f"N6 Monologue reflection error: {e}")
 
         try:
             if str(memory_dir) not in sys.path:

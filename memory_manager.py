@@ -214,15 +214,12 @@ def get_comprehensive_stats() -> dict:
     db = get_db()
     db_stats = db.comprehensive_stats()
 
-    # Co-occurrence stats from co_occurrences table
+    # Co-occurrence stats from edges_v3 table
     with db._conn() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
-                SELECT COUNT(*), COALESCE(SUM(max_count), 0) FROM (
-                    SELECT MAX(count) as max_count
-                    FROM {db._table('co_occurrences')}
-                    GROUP BY LEAST(memory_id, other_id), GREATEST(memory_id, other_id)
-                ) sub
+                SELECT COUNT(*), COALESCE(SUM(belief), 0)
+                FROM {db._table('edges_v3')}
             """)
             row = cur.fetchone()
             unique_pairs = row[0]
