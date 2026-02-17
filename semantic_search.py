@@ -269,15 +269,28 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
         print("Failed to get query embedding", file=sys.stderr)
         return []
 
-    # === COGNITIVE STATE THRESHOLD ADJUSTMENT ===
-    # High curiosity lowers threshold (explore more), high confidence raises it
+    # === DYNAMIC THRESHOLD ADJUSTMENT (N1 v1.2: 3-source stacking) ===
+    # Sources: cognitive_state + affect_system + adaptive_behavior
     _cog_modifier = 0.0
+    _affect_modifier = 0.0
+    _adapt_modifier = 0.0
     try:
         from cognitive_state import get_search_threshold_modifier, process_event
         _cog_modifier = get_search_threshold_modifier()
-        threshold = max(0.1, min(0.5, threshold + _cog_modifier))
     except Exception:
         pass
+    try:
+        from affect_system import get_search_threshold_modifier as _affect_thresh
+        _affect_modifier = _affect_thresh()
+    except Exception:
+        pass
+    try:
+        from adaptive_behavior import get_adaptation
+        _adapt_modifier = get_adaptation('curiosity_threshold_offset', 0.0)
+    except Exception:
+        pass
+    _total_modifier = _cog_modifier + _affect_modifier + _adapt_modifier
+    threshold = max(0.1, min(0.6, threshold + _total_modifier))
 
     results = []
 
@@ -293,6 +306,9 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
             'dimension': dimension,
             'sub_view': sub_view,
             'cognitive_threshold_modifier': _cog_modifier,
+            'affect_threshold_modifier': _affect_modifier,
+            'adaptive_threshold_modifier': _adapt_modifier,
+            'total_threshold_modifier': _total_modifier,
         })
     except Exception:
         _expl = None
@@ -375,6 +391,59 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
         if injected_count:
             _expl.add_step('entity_injection', injected_count, weight=0.5,
                            context=f'{injected_count} memories injected from entity index')
+
+    # === MOOD-CONGRUENT SCORING (N1: Affect System) ===
+    # Memories whose valence matches current mood get a retrieval boost.
+    # Faul & LaBar (2023): ~15% mood-congruent retrieval bias.
+    # Forgas (1995): stronger for exploratory (generative) searches.
+    _ts = _time.monotonic()
+    try:
+        from affect_system import get_mood
+        mood = get_mood()
+        if abs(mood.valence) > 0.05:  # Only apply when mood is non-neutral
+            mood_boosted = 0
+            for result in results:
+                mem_row = db.get_memory(result['id'])
+                if mem_row:
+                    mem_valence = mem_row.get('valence', 0.0) or 0.0
+                    boost = mood.get_retrieval_boost(mem_valence)
+                    if boost != 0.0:
+                        result['score'] += boost
+                        result['mood_boost'] = round(boost, 4)
+                        mood_boosted += 1
+            if _expl and mood_boosted:
+                _expl.add_step('mood_congruent', mood_boosted, weight=0.15,
+                               context=f'mood v={mood.valence:+.2f} a={mood.arousal:.2f}, '
+                                       f'{mood_boosted} memories boosted')
+    except Exception:
+        pass
+    _attention_stages.append({'stage': 'mood_congruent', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
+
+    # === ACT-R RETRIEVAL NOISE (N1 v1.1: arousal-modulated perturbation) ===
+    # Anderson (2007): retrieval noise s=0.25, scaled by arousal.
+    # High arousal = noisier = more creative/serendipitous retrieval.
+    # Low arousal = precise = predictable retrieval.
+    _ts = _time.monotonic()
+    try:
+        from affect_system import get_retrieval_noise, get_mood as _actr_get_mood
+        _actr_mood = _actr_get_mood()
+        noise_sd = get_retrieval_noise(_actr_mood.arousal)
+        if noise_sd > 0.01:  # Only apply meaningful noise
+            import random as _rand
+            noise_applied = 0
+            for result in results:
+                perturbation = _rand.gauss(0, noise_sd)
+                result['score'] = max(0.0, result['score'] + perturbation)
+                if abs(perturbation) > 0.01:
+                    noise_applied += 1
+            if _expl and noise_applied:
+                _expl.add_step('actr_retrieval_noise', noise_applied, weight=0.05,
+                               context=f'arousal={_actr_mood.arousal:.2f}, '
+                                       f'noise_sd={noise_sd:.3f}, '
+                                       f'{noise_applied} scores perturbed')
+    except Exception:
+        pass
+    _attention_stages.append({'stage': 'actr_noise', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
     # === GRAVITY WELL DAMPENING ===
     # Penalize memories where query key terms don't appear in the preview
@@ -590,6 +659,51 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
         pass  # Don't break search if curiosity engine unavailable
     _attention_stages.append({'stage': 'curiosity_boost', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
+    # === GOAL-RELEVANCE BOOST (SR1/SR2: N4 goal-directed retrieval bias) ===
+    _ts = _time.monotonic()
+    try:
+        from goal_generator import get_active_goals, get_focus_goal
+        _active_goals = get_active_goals()
+        if _active_goals and results:
+            # SR2: Extract keywords from all active goals
+            _goal_stopwords = {'the', 'a', 'an', 'to', 'for', 'of', 'and', 'or', 'in', 'on',
+                               'with', 'is', 'at', 'by', 'from', 'that', 'this', 'my', 'i'}
+            _goal_keywords = set()
+            _focus_keywords = set()
+            for g in _active_goals:
+                words = set(g.get('action', '').lower().split()) - _goal_stopwords
+                _goal_keywords.update(words)
+                if g.get('is_focus'):
+                    _focus_keywords.update(words)
+
+            if _goal_keywords:
+                goal_boosted = 0
+                for result in results:
+                    preview_lower = result.get('preview', '').lower()
+                    # Focus goal keywords: 0.15 max boost (D7 convergence)
+                    focus_overlap = sum(1 for t in _focus_keywords if t in preview_lower) if _focus_keywords else 0
+                    # Other goal keywords: 0.05 boost (D6 convergence)
+                    other_overlap = sum(1 for t in (_goal_keywords - _focus_keywords) if t in preview_lower)
+
+                    if focus_overlap > 0:
+                        boost = min(0.15, 0.05 * focus_overlap)
+                        result['score'] *= (1.0 + boost)
+                        result['goal_boosted'] = True
+                        goal_boosted += 1
+                    elif other_overlap > 0:
+                        boost = min(0.05, 0.02 * other_overlap)
+                        result['score'] *= (1.0 + boost)
+                        result['goal_boosted'] = True
+                        goal_boosted += 1
+
+                if _expl and goal_boosted:
+                    _expl.add_step('goal_relevance_boost', goal_boosted, weight=0.15,
+                                   context=f'{goal_boosted} results boosted for goal alignment '
+                                   f'({len(_focus_keywords)} focus kw, {len(_goal_keywords)} total)')
+    except Exception:
+        pass
+    _attention_stages.append({'stage': 'goal_relevance', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
+
     # === AUTO-DETECT DIMENSION from session context ===
     _ts = _time.monotonic()
     if not dimension and results:
@@ -792,13 +906,21 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
         except Exception:
             pass
 
-    # === COGNITIVE STATE: Fire search event ===
+    # === COGNITIVE STATE + AFFECT: Fire search event (dual-track) ===
     try:
         from cognitive_state import process_event
         if top_results:
             process_event('search_success')
         else:
             process_event('search_failure')
+    except Exception:
+        pass
+
+    try:
+        from affect_system import process_affect_event
+        event = 'search_success' if top_results else 'search_failure'
+        memory_ids = [r['id'] for r in top_results[:5]] if top_results else None
+        process_affect_event(event, memory_ids=memory_ids)
     except Exception:
         pass
 
@@ -1070,16 +1192,28 @@ if __name__ == "__main__":
         else:
             dim_label = f" (dimension: {args.dimension}" + (f"/{args.sub_view}" if getattr(args, 'sub_view', None) else "") + ")" if args.dimension else ""
             print(f"Found {len(results)} matching memories{dim_label}:\n")
-            for r in results:
-                flags = []
-                if r.get('boosted'):
-                    flags.append('resolution')
-                if r.get('dim_boosted'):
-                    flags.append(f'dim:{r.get("dim_degree", 0)}')
-                flag_str = f" [{', '.join(flags)}]" if flags else ""
-                print(f"[{r['score']:.3f}] {r['id']}{flag_str}")
-                print(f"  {r['preview']}...")
-                print()
+            # N5: Rich binding when available
+            try:
+                from binding_layer import bind_results, render_narrative, BINDING_ENABLED
+                if BINDING_ENABLED:
+                    bound = bind_results(results)
+                    for b in bound:
+                        print(render_narrative(b))
+                        print()
+                else:
+                    raise ImportError("disabled")
+            except Exception:
+                # Fallback to original format
+                for r in results:
+                    flags = []
+                    if r.get('boosted'):
+                        flags.append('resolution')
+                    if r.get('dim_boosted'):
+                        flags.append(f'dim:{r.get("dim_degree", 0)}')
+                    flag_str = f" [{', '.join(flags)}]" if flags else ""
+                    print(f"[{r['score']:.3f}] {r['id']}{flag_str}")
+                    print(f"  {r['preview']}...")
+                    print()
 
     elif args.command == "temporal-successors":
         if not args.query:

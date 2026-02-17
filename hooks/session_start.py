@@ -392,19 +392,98 @@ def _task_priming(memory_dir, debug):
         candidates = json.loads(output)
         parts.append("\n=== RECENT MEMORIES (continuity priming) ===")
 
+        # N5 v1.1: Enrichment — valence + evidence_type + contacts + contradictions
+        _enrichments = {}
+        try:
+            db = _get_db_for_hook(memory_dir)
+            if db:
+                import psycopg2.extras
+                all_ids = []
+                for cat in ('activated', 'cooccurring', 'domain_primed', 'curiosity'):
+                    for m in candidates.get(cat, []):
+                        all_ids.append(m['id'])
+
+                if all_ids:
+                    # Batch fetch all memory rows
+                    mem_rows = {}
+                    with db._conn() as conn:
+                        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                            cur.execute(
+                                f"SELECT * FROM {db._table('memories')} WHERE id = ANY(%s)",
+                                (all_ids,)
+                            )
+                            for row in cur.fetchall():
+                                mem_rows[row['id']] = dict(row)
+
+                    # Batch fetch typed edges (contradictions/supports)
+                    edge_counts = {}  # {id: {contradicts: N, supports: N, superseded: bool}}
+                    try:
+                        with db._conn() as conn:
+                            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                                cur.execute(f"""
+                                    SELECT target_id, relationship, COUNT(*) as cnt
+                                    FROM {db._table('typed_edges')}
+                                    WHERE target_id = ANY(%s)
+                                    AND relationship IN ('contradicts', 'supports', 'supersedes')
+                                    GROUP BY target_id, relationship
+                                """, (all_ids,))
+                                for row in cur.fetchall():
+                                    ec = edge_counts.setdefault(row['target_id'], {})
+                                    if row['relationship'] == 'supersedes':
+                                        ec['superseded'] = True
+                                    else:
+                                        ec[row['relationship']] = row['cnt']
+                    except Exception:
+                        pass
+
+                    for mid in all_ids:
+                        row = mem_rows.get(mid)
+                        if not row:
+                            continue
+                        extra = row.get('extra_metadata') or {}
+                        v = float(row.get('valence') or 0.0)
+                        ev = extra.get('evidence_type', '')
+                        entities = row.get('entities') or {}
+                        agents = entities.get('agents', [])
+                        ec = edge_counts.get(mid, {})
+
+                        annot_parts = []
+                        if ec.get('superseded'):
+                            annot_parts.append('SUPERSEDED')
+                        if ev and ev != 'claim':
+                            annot_parts.append(ev)
+                        if abs(v) > 0.05:
+                            annot_parts.append(f'v:{v:+.2f}')
+                        if agents:
+                            annot_parts.append(f'@{agents[0]}')
+                        contra = ec.get('contradicts', 0)
+                        if contra > 0:
+                            annot_parts.append(f'{contra} contradicts')
+                        support = ec.get('supports', 0)
+                        if support > 0:
+                            annot_parts.append(f'{support} supports')
+
+                        if annot_parts:
+                            _enrichments[mid] = f" ({', '.join(annot_parts)})"
+        except Exception:
+            pass
+
         for mem in candidates.get('activated', [])[:4]:
-            parts.append(f"\n[{mem['id']}]")
+            annot = _enrichments.get(mem['id'], '')
+            parts.append(f"\n[{mem['id']}]{annot}")
             parts.append(mem.get('preview', '')[:400])
             recall_ids.append(mem['id'])
 
         for mem in candidates.get('cooccurring', [])[:3]:
-            parts.append(f"\n[{mem['id']}]")
+            annot = _enrichments.get(mem['id'], '')
+            parts.append(f"\n[{mem['id']}]{annot}")
             parts.append(mem.get('preview', '')[:300])
             recall_ids.append(mem['id'])
 
         for mem in candidates.get('domain_primed', []):
             domain = mem.get('domain', '?')
-            parts.append(f"\n[{mem['id']}] (domain-primed: {domain}, read-only)")
+            annot = _enrichments.get(mem['id'], '')
+            parts.append(f"\n[{mem['id']}] (domain-primed: {domain}, read-only){annot}")
             parts.append(mem.get('preview', '')[:300])
             recall_ids.append(mem['id'])
 
@@ -414,7 +493,8 @@ def _task_priming(memory_dir, debug):
         for mem in candidates.get('curiosity', []):
             reason = mem.get('reason', 'isolated')
             score = mem.get('curiosity_score', 0)
-            parts.append(f"\n[{mem['id']}] (curiosity: {reason}, score={score:.2f})")
+            annot = _enrichments.get(mem['id'], '')
+            parts.append(f"\n[{mem['id']}] (curiosity: {reason}, score={score:.2f}){annot}")
             parts.append(mem.get('preview', '')[:300])
             curiosity_ids.append(mem['id'])
     except Exception:
@@ -685,6 +765,62 @@ def _task_predictions(memory_dir):
         predictions = generate_predictions()
         if predictions:
             parts.append(format_predictions_context(predictions))
+
+            # N3/SS1: Generate prospective counterfactuals (shadow alternatives)
+            try:
+                from counterfactual_engine import generate_prospective, format_counterfactual_context
+                cfs = generate_prospective(predictions)
+                if cfs:
+                    # Store for session-end scoring
+                    from db_adapter import get_db
+                    from dataclasses import asdict
+                    db = get_db()
+                    db.kv_set('.counterfactual_prospective', [asdict(cf) for cf in cfs])
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return parts
+
+
+def _task_counterfactuals(memory_dir):
+    """N3: Load previous session's counterfactual insights for context."""
+    parts = []
+    try:
+        sys.path.insert(0, str(memory_dir))
+        from counterfactual_engine import get_session_counterfactuals, format_counterfactual_context
+        cfs = get_session_counterfactuals()
+        if cfs:
+            formatted = format_counterfactual_context(cfs)
+            if formatted:
+                parts.append(formatted)
+    except Exception:
+        pass
+    return parts
+
+
+def _task_active_goals(memory_dir):
+    """N4/SS1+SS3: Generate new goals if under capacity, then format for priming."""
+    parts = []
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from goal_generator import get_active_goals, generate_goals, format_goal_context
+
+        # SS1: Generate new goals if under capacity
+        goals = get_active_goals()
+        if len(goals) < 5:
+            try:
+                generate_goals()
+                goals = get_active_goals()  # Refresh after generation
+            except Exception:
+                pass
+
+        # SS3: Format active goals for priming
+        if goals:
+            formatted = format_goal_context(goals)
+            if formatted:
+                parts.append(formatted)
     except Exception:
         pass
     return parts
@@ -833,11 +969,26 @@ def load_drift_memory_context(debug: bool = False) -> str:
             if debug:
                 context_parts.append(f"[session] Cognitive state init failed: {e}")
 
+        # N1: Initialize affect system (mood decay, marker load)
+        # Drift uses affect_system.start_session(), Spin uses affect_engine.session_start_affect()
+        try:
+            try:
+                from affect_system import start_session as affect_start_session
+                affect_start_session()
+            except ImportError:
+                from affect_engine import session_start_affect
+                affect_start_session = session_start_affect
+                affect_start_session()
+            if debug:
+                context_parts.append("[session] Affect system initialized")
+        except Exception as e:
+            if debug:
+                context_parts.append(f"[session] Affect system init failed: {e}")
+
         # === QUICK FILE READS (instant, no threading needed) ===
         fp_parts = _read_fingerprint(memory_dir)
         taste_parts = _read_taste(memory_dir)
-        identity_parts = _read_identity(memory_dir)
-        capabilities_parts = _read_capabilities(memory_dir)
+        # N2: identity_parts and capabilities_parts REMOVED — already in CLAUDE.md
         entity_parts = _read_entities(memory_dir)
         encounter_parts = _read_encounters(memory_dir)
 
@@ -864,6 +1015,8 @@ def load_drift_memory_context(debug: bool = False) -> str:
             f_intentions = pool.submit(_task_intentions, memory_dir)
             f_adaptive = pool.submit(_task_adaptive_behavior, memory_dir)
             f_predictions = pool.submit(_task_predictions, memory_dir)
+            f_counterfactuals = pool.submit(_task_counterfactuals, memory_dir)
+            f_active_goals = pool.submit(_task_active_goals, memory_dir)
 
         # === COLLECT RESULTS (with error handling) ===
         def safe_get(future, default=None):
@@ -891,6 +1044,8 @@ def load_drift_memory_context(debug: bool = False) -> str:
         intentions_parts = safe_get(f_intentions, [])
         adaptive_parts = safe_get(f_adaptive, [])
         predictions_parts = safe_get(f_predictions, [])
+        counterfactual_parts = safe_get(f_counterfactuals, [])
+        active_goal_parts = safe_get(f_active_goals, [])
 
         # Unpack tuple results
         excavation_parts, excavation_ids = excavation_result if isinstance(excavation_result, tuple) else (excavation_result, [])
@@ -924,92 +1079,238 @@ def load_drift_memory_context(debug: bool = False) -> str:
             except Exception:
                 pass
 
-        # === ASSEMBLE CONTEXT IN ORDER ===
-        # (Same order as the original sequential version)
+        # === N2: COMPETITIVE GLOBAL WORKSPACE ===
+        # Dehaene GNW: modules compete for limited broadcast capacity.
+        # Reserved modules always inject. Competitive modules fight for budget.
 
-        # Research pending (at the very top)
-        if research_text:
-            context_parts.append(research_text)
-
-        # Integrity verification
-        context_parts.extend(merkle_parts)
-
-        # Fingerprints (from file reads)
-        context_parts.extend(fp_parts)
-        context_parts.extend(taste_parts)
-
-        # Nostr attestation
-        context_parts.extend(nostr_parts)
-
-        # Co-occurrence processing log
-        context_parts.extend(pending_parts)
-
-        # v4.4 note
-        # session_maintenance() runs ONLY in stop.py (session end)
-
-        # 5W rebuild
-        context_parts.extend(w5_parts)
-
-        # Embodiment
-        context_parts.extend(entity_parts)
-        context_parts.extend(encounter_parts)
-        context_parts.extend(phone_parts)
-
-        # Consolidation candidates
-        context_parts.extend(consolidation_parts)
-
-        # Identity and capabilities
-        context_parts.extend(identity_parts)
-        context_parts.extend(capabilities_parts)
-
-        # Stats
-        context_parts.extend(stats_parts)
-
-        # Platform context
-        context_parts.extend(platform_parts)
-
-        # Short-term buffer
-        context_parts.extend(buffer_parts)
-
-        # Social context
-        context_parts.extend(social_parts)
-
-        # Prospective memory (temporal intentions)
-        context_parts.extend(intentions_parts)
-
-        # Session continuity (episodic)
-        context_parts.extend(episodic_parts)
-
-        # Excavation
-        context_parts.extend(excavation_parts)
-
-        # Lessons
-        context_parts.extend(lessons_parts)
-
-        # Vitals alerts
-        context_parts.extend(vitals_parts)
-
-        # Adaptive behavior (responds to vitals alerts)
-        context_parts.extend(adaptive_parts)
-
-        # Session predictions (R11 forward model)
-        context_parts.extend(predictions_parts)
-
-        # NLI / Contradiction detection status
-        context_parts.extend(nli_parts)
-
-        # Self-narrative (R9: Higher-Order Thought)
+        # Generate self-narrative (needed for both paths)
+        self_narrative_parts = []
         try:
             from self_narrative import generate as _gen_self, format_for_context as _fmt_self
             self_model = _gen_self()
             self_ctx = _fmt_self(self_model)
             if self_ctx:
-                context_parts.append(self_ctx)
+                self_narrative_parts.append(self_ctx)
         except Exception:
             pass
 
-        # Priming candidates
-        context_parts.extend(priming_parts)
+        # Generate affect state (RESERVED — always injected)
+        affect_parts = []
+        _arousal_for_budget = 0.3  # Default if affect unavailable
+        try:
+            try:
+                from affect_system import get_affect_summary, get_mood
+                affect_ctx = get_affect_summary()
+                if affect_ctx:
+                    affect_parts.append("=== AFFECT STATE (N1) ===")
+                    affect_parts.append(affect_ctx)
+                try:
+                    mood = get_mood()
+                    _arousal_for_budget = mood.arousal if hasattr(mood, 'arousal') else 0.3
+                except Exception:
+                    pass
+            except ImportError:
+                from affect_engine import get_affect_state
+                aff = get_affect_state()
+                _arousal_for_budget = aff.mood_arousal if hasattr(aff, 'mood_arousal') else 0.3
+                affect_lines = [
+                    "=== AFFECT STATE (N1) ===",
+                    f"Mood: valence={aff.mood_valence:+.3f}, arousal={aff.mood_arousal:.3f} ({aff.mood_quadrant})",
+                    f"Action tendency: {aff.action_tendency}",
+                    f"Somatic markers: {aff.somatic_marker_count}",
+                ]
+                if aff.active_emotion:
+                    affect_lines.append(f"Active emotion: {aff.active_emotion}")
+                if aff.parameter_adjustments:
+                    adj_str = ', '.join(f'{k}={v}' for k, v in aff.parameter_adjustments.items())
+                    affect_lines.append(f"Behavioral adjustments: {adj_str}")
+                affect_parts.append('\n'.join(affect_lines))
+        except Exception:
+            pass
+
+        # Also try cognitive_state arousal (may be more current)
+        try:
+            from cognitive_state import get_state as _cog_get
+            _cog = _cog_get()
+            if hasattr(_cog, 'arousal') and _cog.arousal > 0:
+                _arousal_for_budget = _cog.arousal
+        except Exception:
+            pass
+
+        # --- Attempt competitive workspace ---
+        _workspace_active = False
+        try:
+            sys.path.insert(0, str(memory_dir))
+            from workspace_manager import (
+                WorkspaceCandidate, compete, compute_budget,
+                compute_salience, log_broadcast, WORKSPACE_ENABLED,
+                MODULE_CATEGORIES
+            )
+            if WORKSPACE_ENABLED:
+                _workspace_active = True
+        except Exception:
+            pass
+
+        if _workspace_active:
+            # === RESERVED (always injected) ===
+            context_parts.extend(merkle_parts)
+            context_parts.extend(fp_parts)
+            context_parts.extend(taste_parts)
+            context_parts.extend(nostr_parts)
+            if nli_parts:
+                context_parts.extend(nli_parts)
+            if vitals_parts:
+                context_parts.extend(vitals_parts)
+            context_parts.extend(affect_parts)
+
+            # === COMPETITIVE (budget-constrained) ===
+            budget = compute_budget(_arousal_for_budget)
+            candidates = []
+
+            # Helper: create candidate from parts list
+            def _cand(module, parts, meta=None):
+                if not parts:
+                    return
+                content = '\n'.join(str(p) for p in parts).strip()
+                if not content:
+                    return
+                meta = meta or {}
+                salience = compute_salience(module, content, meta)
+                category = MODULE_CATEGORIES.get(module, 'meta')
+                candidates.append(WorkspaceCandidate(
+                    module=module, content=content,
+                    token_estimate=max(1, len(content) // 4),
+                    salience=salience, category=category,
+                ))
+
+            # Build candidates with module-specific metadata
+            _cand('priming', priming_parts, {
+                'activated_count': len(priming_ids) if priming_ids else 0,
+                'has_curiosity_targets': bool(curiosity_ids),
+                'has_domain_primed': any('domain-primed' in str(p) for p in priming_parts),
+            })
+            _cand('social', social_parts, {
+                'new_posts_detected': bool(social_parts),
+                'days_since_interaction': 0 if social_parts else 7,
+                'top_contact_reliability': 0.6,
+            })
+            _cand('episodic', episodic_parts, {
+                'is_today': bool(episodic_parts),
+                'milestone_count': sum(1 for p in episodic_parts if '**[' in str(p)),
+            })
+            _cand('predictions', predictions_parts, {
+                'prediction_count': sum(1 for p in predictions_parts if '%]' in str(p)),
+                'has_violations': any('violated' in str(p).lower() for p in predictions_parts),
+            })
+            _cand('lessons', lessons_parts, {
+                'lesson_count': sum(1 for p in lessons_parts if str(p).strip().startswith('[')),
+            })
+            _cand('buffer', buffer_parts, {
+                'item_count': sum(1 for p in buffer_parts if str(p).strip().startswith('- [')),
+                'max_item_salience': 0.3,
+            })
+            _cand('platform', platform_parts, {
+                'significant_change': False,
+            })
+            _cand('excavation', excavation_parts, {
+                'excavated_count': len(excavation_ids) if excavation_ids else 0,
+                'avg_q_value': 0.5,
+            })
+            _cand('consolidation', consolidation_parts, {
+                'candidate_count': sum(1 for p in consolidation_parts if 'Similarity:' in str(p)),
+                'max_similarity': 0.9,
+            })
+            _cand('intentions', intentions_parts, {
+                'triggered_count': sum(1 for p in intentions_parts if str(p).strip().startswith('[')),
+            })
+            _cand('stats', stats_parts, {})
+            _cand('adaptive', adaptive_parts, {
+                'adjustment_count': sum(1 for p in adaptive_parts if ':' in str(p) and 'because' in str(p).lower()),
+            })
+            _cand('self_narrative', self_narrative_parts, {
+                'state_unusual': any(w in '\n'.join(str(p) for p in self_narrative_parts).lower()
+                                     for w in ['high uncertainty', 'depressed', 'alert']),
+            })
+            _cand('phone', phone_parts, {
+                'has_sensor_data': bool(phone_parts),
+            })
+            _cand('entities', entity_parts, {
+                'new_entities': False,
+            })
+            _cand('encounters', encounter_parts, {
+                'encounter_count': sum(1 for p in encounter_parts if str(p).strip().startswith('  20')),
+            })
+            # Research is a string, not list
+            if research_text:
+                _cand('research', [research_text], {
+                    'research_count': research_text.count('  -'),
+                })
+            # N3: Counterfactual insights from previous sessions
+            _cand('counterfactual', counterfactual_parts, {
+                'validated': any('validated' in str(p).lower() for p in counterfactual_parts),
+                'sessions_ago': 1,  # Always recent (loaded from last session)
+                'confidence': 0.6,
+            })
+            # N4: Active goals for focus and tracking
+            _cand('goals', active_goal_parts, {
+                'has_focus': any('FOCUS' in str(p) for p in active_goal_parts),
+                'goal_count': len(active_goal_parts),
+                'confidence': 0.8,  # Goals are high-salience (Miller & Cohen PFC bias)
+            })
+
+            # Run competition
+            result = compete(candidates, budget)
+
+            # Inject winners in salience order
+            for winner in result.winners:
+                context_parts.append(winner.content)
+
+            # Log broadcast result
+            try:
+                _sid = ''
+                if hasattr(session_state, 'get_session_id'):
+                    _sid = session_state.get_session_id() or ''
+                result.arousal = _arousal_for_budget
+                log_broadcast(result, _arousal_for_budget, _sid)
+            except Exception:
+                pass
+
+            context_parts.append(
+                f"\n[N2] Workspace: {len(result.winners)}W/{len(result.suppressed)}S, "
+                f"{result.budget_used}/{result.budget_total} tok, arousal={_arousal_for_budget:.2f}"
+            )
+
+        else:
+            # === FALLBACK: Assembly-line injection (pre-N2 behavior) ===
+            if research_text:
+                context_parts.append(research_text)
+            context_parts.extend(merkle_parts)
+            context_parts.extend(fp_parts)
+            context_parts.extend(taste_parts)
+            context_parts.extend(nostr_parts)
+            context_parts.extend(pending_parts)
+            context_parts.extend(entity_parts)
+            context_parts.extend(encounter_parts)
+            context_parts.extend(phone_parts)
+            context_parts.extend(consolidation_parts)
+            # N2: identity/capabilities removed (already in CLAUDE.md)
+            context_parts.extend(stats_parts)
+            context_parts.extend(platform_parts)
+            context_parts.extend(buffer_parts)
+            context_parts.extend(social_parts)
+            context_parts.extend(intentions_parts)
+            context_parts.extend(episodic_parts)
+            context_parts.extend(excavation_parts)
+            context_parts.extend(lessons_parts)
+            context_parts.extend(vitals_parts)
+            context_parts.extend(adaptive_parts)
+            context_parts.extend(predictions_parts)
+            context_parts.extend(counterfactual_parts)
+            context_parts.extend(active_goal_parts)
+            context_parts.extend(nli_parts)
+            context_parts.extend(self_narrative_parts)
+            context_parts.extend(affect_parts)
+            context_parts.extend(priming_parts)
 
         # Wrap with header/footer
         if context_parts:

@@ -43,12 +43,17 @@ Q_UPDATES_ENABLED = True
 # Reward signals
 REWARD_RE_RECALL = 1.0        # Recalled by 2+ different sources
 REWARD_DOWNSTREAM = 0.8       # Led to new memory creation
+REWARD_HIGH_BINDING = 0.6     # N5 v1.2: high binding_strength (well-integrated)
 REWARD_DEAD_END = -0.3        # Recalled but unused
 
 # Reward weights for composite
-WEIGHT_RE_RECALL = 0.4
-WEIGHT_DOWNSTREAM = 0.4
-WEIGHT_EXPLICIT = 0.2
+WEIGHT_RE_RECALL = 0.35
+WEIGHT_DOWNSTREAM = 0.35
+WEIGHT_BINDING = 0.15         # N5 v1.2: binding_strength as reward signal
+WEIGHT_EXPLICIT = 0.15
+
+# N5 v1.2: Binding strength threshold for positive reward
+BINDING_REWARD_THRESHOLD = 0.4  # Only memories above this Phi get the reward
 
 
 # ---------------------------------------------------------------------------
@@ -119,9 +124,16 @@ def get_q_values(memory_ids: list) -> dict:
 
 
 def compute_reward(memory_id: str, session_recalls: dict,
-                   created_this_session: set) -> tuple:
+                   created_this_session: set,
+                   binding_strengths: dict = None) -> tuple:
     """
     Compute composite reward from session evidence.
+
+    Args:
+        memory_id: Memory to compute reward for
+        session_recalls: Dict of {source: [memory_ids]} from session
+        created_this_session: Set of memory IDs created this session
+        binding_strengths: N5 v1.2 — dict of {memory_id: binding_strength}
 
     Returns:
         (reward, source_label) tuple
@@ -154,6 +166,14 @@ def compute_reward(memory_id: str, session_recalls: dict,
                         if memory_id in caused_by:
                             signals.append((REWARD_DOWNSTREAM, WEIGHT_DOWNSTREAM, "downstream"))
                             break
+
+    # Signal 3: N5 v1.2 — High binding_strength (well-integrated memory)
+    if binding_strengths and memory_id in binding_strengths:
+        phi = binding_strengths[memory_id]
+        if phi >= BINDING_REWARD_THRESHOLD:
+            # Scale reward by how far above threshold (0.4->0.6 = 0.0->1.0)
+            scale = min(1.0, (phi - BINDING_REWARD_THRESHOLD) / (1.0 - BINDING_REWARD_THRESHOLD))
+            signals.append((REWARD_HIGH_BINDING * scale, WEIGHT_BINDING, "high_binding"))
 
     # Compute weighted reward
     if signals:
@@ -209,12 +229,27 @@ def session_end_q_update(session_id: int = None) -> dict:
     # Batch-fetch current Q-values
     q_vals = get_q_values(retrieved)
 
+    # N5 v1.2: Compute binding_strengths for all retrieved memories
+    binding_strengths = {}
+    try:
+        from binding_layer import bind_results, BINDING_ENABLED
+        if BINDING_ENABLED:
+            # Build minimal result dicts for binding
+            fake_results = [{'id': mid, 'score': 0.5} for mid in retrieved]
+            bound = bind_results(fake_results, full_count=min(len(fake_results), 10))
+            for b in bound:
+                if b.binding_strength > 0:
+                    binding_strengths[b.id] = b.binding_strength
+    except Exception:
+        pass  # Binding unavailable — proceed without
+
     results = {
         "updated": 0,
         "total_reward": 0.0,
         "avg_reward": 0.0,
         "by_source": {},
         "updates": [],
+        "binding_rewards": 0,
     }
 
     import psycopg2.extras
@@ -223,7 +258,8 @@ def session_end_q_update(session_id: int = None) -> dict:
             for mem_id in retrieved:
                 old_q = q_vals.get(mem_id, DEFAULT_Q)
                 reward, source = compute_reward(
-                    mem_id, recalls_by_source, created_this_session
+                    mem_id, recalls_by_source, created_this_session,
+                    binding_strengths=binding_strengths,
                 )
                 new_q = update_q(old_q, reward)
 
@@ -243,6 +279,8 @@ def session_end_q_update(session_id: int = None) -> dict:
                 results["updated"] += 1
                 results["total_reward"] += reward
                 results["by_source"][source] = results["by_source"].get(source, 0) + 1
+                if 'high_binding' in source:
+                    results["binding_rewards"] += 1
                 results["updates"].append({
                     "id": mem_id,
                     "old_q": round(old_q, 4),

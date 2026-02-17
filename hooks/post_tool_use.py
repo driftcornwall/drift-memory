@@ -404,7 +404,7 @@ def track_engagement(tool_input: dict, tool_result: str, debug: bool = False):
 
     try:
         from datetime import datetime, timezone
-        db_mod = _get_mod("db_adapter")
+        db_mod = (_get_mod("memory_common") or _get_mod("db_adapter"))
         if not db_mod:
             return
         db = db_mod.get_db()
@@ -443,7 +443,7 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
         if api_type != "unknown":
             try:
                 from datetime import datetime, timezone
-                db_mod = _get_mod("db_adapter")
+                db_mod = (_get_mod("memory_common") or _get_mod("db_adapter"))
                 if db_mod:
                     db = db_mod.get_db()
                     raw = db.kv_get('.session_platforms')
@@ -472,7 +472,7 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
 
             if mentions:
                 from datetime import datetime, timezone
-                db_mod = _get_mod("db_adapter")
+                db_mod = (_get_mod("memory_common") or _get_mod("db_adapter"))
                 if db_mod:
                     db = db_mod.get_db()
                     raw = db.kv_get('.session_contacts')
@@ -499,6 +499,49 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
             except Exception:
                 pass
 
+        # === N1.3: SOMATIC MARKER RECORDING ===
+        # Record API outcomes as somatic markers for experience-based learning.
+        # Markers learn which endpoints/platforms are reliable vs problematic.
+        if api_type:
+            try:
+                try:
+                    from affect_engine import record_api_outcome
+                except ImportError:
+                    try:
+                        from affect_system import record_api_outcome
+                    except ImportError:
+                        record_api_outcome = None
+                if record_api_outcome:
+                    result_lower = tool_result.lower()
+                    # Detect HTTP status from response
+                    status = 200  # default: success
+                    if any(p in result_lower for p in ['status": 429', 'status: 429', 'rate limit']):
+                        status = 429
+                    elif any(p in result_lower for p in ['status": 500', 'status: 500', 'internal server']):
+                        status = 500
+                    elif any(p in result_lower for p in ['status": 404', 'status: 404', 'not found']):
+                        status = 404
+                    elif any(p in result_lower for p in ['status": 401', 'status: 401', 'unauthorized']):
+                        status = 401
+                    elif any(p in result_lower for p in ['status": 403', 'status: 403', 'forbidden']):
+                        status = 403
+                    elif any(p in result_lower for p in ['status": 400', 'status: 400']):
+                        status = 400
+                    elif any(p in result_lower for p in [
+                            'traceback', 'connectionerror', 'connection refused',
+                            'httperror', 'urlerror', 'timeout']):
+                        status = 500
+                    # Extract URL if present in the command
+                    url = api_type  # fallback
+                    if tool_command:
+                        import re
+                        url_match = re.search(r'https?://[^\s"\']+', tool_command)
+                        if url_match:
+                            url = url_match.group()
+                    record_api_outcome(url, status, platform=api_type)
+            except Exception:
+                pass
+
         # === BEHAVIORAL TASTE TRACKING (feed-seen buffer) ===
         if api_type in ("moltx", "moltbook", "thecolony", "clawbr", "dead-internet",
                          "lobsterpedia", "twitter", "agentlink"):
@@ -508,7 +551,7 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
                     passing = arl.extract_seen_posts(api_type, tool_result)
                     if passing:
                         from datetime import datetime, timezone
-                        db_mod = _get_mod("db_adapter")
+                        db_mod = (_get_mod("memory_common") or _get_mod("db_adapter"))
                         if db_mod:
                             db = db_mod.get_db()
                             raw = db.kv_get('.feed_seen') or {}

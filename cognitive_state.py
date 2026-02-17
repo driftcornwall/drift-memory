@@ -184,6 +184,57 @@ EVENT_DELTAS = {
         'arousal': +0.10,        # Heightened processing
         'satisfaction': -0.03,   # Mild dissatisfaction from error
     },
+    # N3: Counterfactual reasoning events
+    'counterfactual_generated': {
+        'curiosity': +0.08,      # Generating alternatives drives exploration
+        'confidence': -0.03,     # Acknowledging uncertainty
+        'focus': +0.05,          # Deep reasoning requires focus
+        'arousal': +0.05,        # Active reasoning
+        'satisfaction': +0.03,   # Productive reflection
+    },
+    'counterfactual_validated': {
+        'curiosity': -0.08,      # Alternative was validated — less to wonder
+        'confidence': +0.12,     # Strong world model — predicted the counterfactual correctly
+        'focus': +0.03,          # Validation sharpens focus
+        'arousal': -0.02,        # Calm confirmation
+        'satisfaction': +0.10,   # Deep understanding confirmed
+    },
+    'counterfactual_invalidated': {
+        'curiosity': +0.15,      # The counterfactual was wrong — unexpected
+        'confidence': -0.12,     # World model is shakier than thought
+        'focus': -0.05,          # Surprise disrupts
+        'arousal': +0.12,        # High surprise
+        'satisfaction': -0.05,   # Need to revise understanding
+    },
+    # N4: Volitional goal events
+    'goal_committed': {
+        'curiosity': -0.05,      # Focus narrows after commitment
+        'confidence': +0.08,     # Rubicon crossed — decisional confidence
+        'focus': +0.12,          # Goal sharpens attention
+        'arousal': +0.05,        # Activation from new purpose
+        'satisfaction': +0.05,   # Commitment feels good
+    },
+    'goal_completed': {
+        'curiosity': +0.05,      # Completion frees exploration
+        'confidence': +0.15,     # Major validation of capability
+        'focus': -0.05,          # Can relax focus
+        'arousal': -0.03,        # Calm after achievement
+        'satisfaction': +0.15,   # Deep satisfaction from completion
+    },
+    'goal_abandoned': {
+        'curiosity': +0.10,      # What else could I try?
+        'confidence': -0.08,     # Failed to follow through
+        'focus': -0.10,          # Lost target
+        'arousal': +0.05,        # Mild distress
+        'satisfaction': -0.08,   # Disengagement costs
+    },
+    'goal_progress': {
+        'curiosity': -0.02,      # On track, less need to search
+        'confidence': +0.05,     # Progress validates approach
+        'focus': +0.08,          # Momentum sharpens focus
+        'arousal': +0.02,        # Mild activation
+        'satisfaction': +0.08,   # Progress feels good
+    },
 }
 
 
@@ -523,6 +574,13 @@ def process_event(event_type: str, metadata: dict = None) -> CognitiveState:
 
     # Persist
     save_state()
+
+    # N1: Dual-track affect processing — every cognitive event also updates mood
+    try:
+        from affect_system import process_affect_event
+        process_affect_event(event_type, metadata)
+    except Exception:
+        pass  # Affect system optional — never break cognitive processing
 
     return state
 

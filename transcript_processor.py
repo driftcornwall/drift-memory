@@ -368,38 +368,32 @@ def extract_from_transcript(transcript_path: Path) -> list[dict]:
 def get_existing_thought_hashes() -> set:
     """
     Get hashes of already-stored thought memories to prevent duplicates.
-    Reads from DB (primary) with file fallback for legacy compatibility.
+
+    The thought-HASH prefix is stored in the CONTENT field (not the ID),
+    because memory_manager.py store joins all positional args into content.
+    So we search content that starts with 'thought-'.
     """
     existing = set()
 
-    # DB-first: query all thought memory IDs and extract hashes
     try:
         sys.path.insert(0, str(MEMORY_DIR))
         from db_adapter import get_db
         db = get_db()
         with db._conn() as conn:
-            import psycopg2.extras
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            with conn.cursor() as cur:
+                # Content starts with "thought-HASH ..." — extract the hash
                 cur.execute(
-                    f"SELECT id FROM {db._table('memories')} "
-                    f"WHERE id LIKE 'thought-%%' AND type IN ('core', 'active')"
+                    f"SELECT SUBSTRING(content FROM 'thought-([a-f0-9]{{8}})') as hash "
+                    f"FROM {db._table('memories')} "
+                    f"WHERE content LIKE 'thought-%%' AND type IN ('core', 'active')"
                 )
                 for row in cur.fetchall():
-                    # Extract hash from ID: thought-HASH-rest-of-name-SHORTID
-                    parts = row['id'].split("-")
-                    if len(parts) >= 2:
-                        existing.add(parts[1])
+                    if row[0]:
+                        existing.add(row[0])
         return existing
     except Exception:
         pass
 
-    # File fallback (legacy)
-    active_dir = MEMORY_DIR / "active"
-    if active_dir.exists():
-        for f in active_dir.glob("thought-*.md"):
-            parts = f.stem.split("-")
-            if len(parts) >= 2:
-                existing.add(parts[1])
     return existing
 
 

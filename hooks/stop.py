@@ -387,6 +387,47 @@ def _task_contact_models(memory_dir):
 
 # --- Phase 2 tasks (after phase 1) ---
 
+def _task_counterfactual_review(memory_dir):
+    """N3: Generate counterfactual analyses for violated predictions."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+
+        # Fetch scored predictions from DB (stored by score_predictions in Phase 1)
+        try:
+            from memory_common import get_db
+        except ImportError:
+            from db_adapter import get_db
+        db = get_db()
+        pred_data = db.kv_get('.session_predictions') if db else None
+        prediction_results = pred_data.get('details', []) if pred_data else []
+
+        # Get session ID
+        session_id = 0
+        try:
+            from session_state import get_session_id
+            session_id = get_session_id() or 0
+        except Exception:
+            pass
+
+        from counterfactual_engine import session_end_review, CF_ENABLED
+        if not CF_ENABLED:
+            return (0, "N3: disabled", "")
+
+        result = session_end_review(
+            prediction_results=prediction_results,
+            session_id=session_id,
+        )
+        count = result.get('count', 0)
+        elapsed = result.get('elapsed_ms', 0)
+        if count > 0:
+            avg_conf = result.get('avg_confidence', 0)
+            return (0, f"N3: {count} counterfactual(s) (conf={avg_conf:.2f}, {elapsed:.0f}ms)", "")
+        return (0, "N3: no violated predictions", "")
+    except Exception as e:
+        return (-3, "", f"Counterfactual error: {e}")
+
+
 def _task_store_summary(memory_dir, transcript_path):
     """Extract and store session summaries."""
     if not transcript_path:
@@ -444,6 +485,21 @@ def _task_reconsolidation(memory_dir):
         if candidates:
             results = process_revisions(dry_run=False, max_revisions=2)
             revised = sum(1 for r in results if r.get('action') == 'revised')
+            # N3 Phase 2: Store revision results for counterfactual analysis
+            try:
+                try:
+                    from memory_common import get_db
+                except ImportError:
+                    from db_adapter import get_db
+                db = get_db()
+                if db and results:
+                    db.kv_set('.n3_reconsolidation_results', {
+                        'results': results,
+                        'count': len(results),
+                        'revised': revised,
+                    })
+            except Exception:
+                pass
             return (0, f"Reconsolidation: {len(candidates)} candidates, {revised} revised", "")
         return (0, "Reconsolidation: no candidates", "")
     except Exception as e:
@@ -600,6 +656,117 @@ def _task_taste(memory_dir):
 
 
 # --- Phase 4 (sequential, after attestations) ---
+
+def _task_counterfactual_phase2(memory_dir, eval_result):
+    """N3 Phase 2: Self-directed + reconsolidation counterfactuals.
+
+    Runs AFTER evaluate_adaptations() and reconsolidation (both need results).
+    Generates CFs for parameter changes and memory revisions.
+    """
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+
+        try:
+            from memory_common import get_db
+        except ImportError:
+            from db_adapter import get_db
+        db = get_db()
+
+        # Get reconsolidation results from Phase 2 KV store
+        revision_results = []
+        if db:
+            recon_data = db.kv_get('.n3_reconsolidation_results')
+            if recon_data:
+                revision_results = recon_data.get('results', [])
+                # Clean up the transient KV key
+                try:
+                    db.kv_set('.n3_reconsolidation_results', None)
+                except Exception:
+                    pass
+
+        # Skip if nothing to analyze
+        if not eval_result.get('evaluations') and not revision_results:
+            return (0, "N3p2: no adaptations or revisions", "")
+
+        # Get session ID
+        session_id = 0
+        try:
+            from session_state import get_session_id
+            session_id = get_session_id() or 0
+        except Exception:
+            pass
+
+        from counterfactual_engine import (
+            generate_self_directed, generate_reconsolidation,
+            store_counterfactual, route_to_affect, quality_gate,
+            CF_ENABLED, MAX_CFS_PER_SESSION, _get_db, _update_stats,
+            KV_CF_HISTORY,
+        )
+        import time as _time
+
+        if not CF_ENABLED:
+            return (0, "N3p2: disabled", "")
+
+        start_ms = _time.time() * 1000
+        stored = []
+
+        # Check how many CFs already generated this session (Phase 2 retrospectives)
+        cf_db = _get_db()
+        history = cf_db.kv_get(KV_CF_HISTORY) if cf_db else None
+        existing_count = 0
+        if history and session_id:
+            existing_count = sum(
+                1 for e in history.get('entries', [])[-10:]
+                if e.get('session_id') == session_id
+            )
+        budget = MAX_CFS_PER_SESSION - existing_count
+
+        if budget <= 0:
+            return (0, f"N3p2: budget exhausted ({existing_count} CFs already)", "")
+
+        # Self-directed CFs from adaptation evaluation
+        if eval_result.get('evaluations') and budget > 0:
+            self_cfs = generate_self_directed(eval_result)
+            for cf in self_cfs[:budget]:
+                cf.session_id = session_id
+                cf_id = store_counterfactual(cf)
+                if cf_id:
+                    route_to_affect(cf)
+                    stored.append(cf.to_dict())
+                    budget -= 1
+
+        # Reconsolidation CFs from memory revisions
+        if revision_results and budget > 0:
+            recon_cfs = generate_reconsolidation(revision_results)
+            for cf in recon_cfs[:budget]:
+                cf.session_id = session_id
+                cf_id = store_counterfactual(cf)
+                if cf_id:
+                    route_to_affect(cf)
+                    stored.append(cf.to_dict())
+                    budget -= 1
+
+        elapsed = _time.time() * 1000 - start_ms
+        _update_stats(stored, elapsed)
+
+        # Append to history
+        if cf_db and stored:
+            hist = cf_db.kv_get(KV_CF_HISTORY) or {'entries': []}
+            for cf_dict in stored:
+                hist['entries'].append(cf_dict)
+            hist['entries'] = hist['entries'][-100:]
+            cf_db.kv_set(KV_CF_HISTORY, hist)
+
+        count = len(stored)
+        types = [s['cf_type'] for s in stored]
+        if count > 0:
+            return (0, f"N3p2: {count} CF(s) ({', '.join(types)}, {elapsed:.0f}ms)", "")
+        return (0, "N3p2: no CFs generated", "")
+
+    except Exception as e:
+        return (-3, "", f"N3 Phase 2 CF error: {e}")
+
 
 def _task_vitals(memory_dir):
     """Record system vitals (needs attestation results)."""
@@ -808,6 +975,9 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
             futures["Contact-models"] = pool.submit(
                 _task_contact_models, memory_dir
             )
+            futures["Counterfactuals"] = pool.submit(
+                _task_counterfactual_review, memory_dir
+            )
 
         for name, fut in futures.items():
             try:
@@ -849,7 +1019,26 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
         except Exception as e:
             _debug(f"Cognitive state end error: {e}")
 
+        # N1: Finalize affect system (prune markers, save mood)
+        # Drift uses affect_system.end_session(), Spin uses affect_engine.session_end_affect()
+        try:
+            try:
+                from affect_system import end_session as affect_end_session
+                affect_summary = affect_end_session()
+            except ImportError:
+                from affect_engine import session_end_affect
+                affect_summary = session_end_affect()
+            mood_data = affect_summary.get('mood', affect_summary.get('final_mood', {}))
+            _debug(f"Affect: {affect_summary.get('session_events', affect_summary.get('events_processed', 0))} events, "
+                   f"mood v={mood_data.get('valence', 0):+.3f} "
+                   f"a={mood_data.get('arousal', 0):.3f}, "
+                   f"tendency={affect_summary.get('tendency', affect_summary.get('mood_quadrant', '?'))}, "
+                   f"markers={affect_summary.get('markers_count', affect_summary.get('somatic_markers', 0))}")
+        except Exception as e:
+            _debug(f"Affect end error: {e}")
+
         # R7: Evaluate whether adaptations from this session helped
+        eval_result = {}
         try:
             from adaptive_behavior import evaluate_adaptations
             eval_result = evaluate_adaptations()
@@ -858,6 +1047,28 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
                        f"resolved ({eval_result.get('unresolved_count', 0)} unresolved)")
         except Exception as e:
             _debug(f"Adaptation eval error: {e}")
+
+        # N3 Phase 2: Self-directed + reconsolidation counterfactuals
+        # (runs after evaluate_adaptations and reconsolidation have completed)
+        try:
+            cf2_result = _task_counterfactual_phase2(memory_dir, eval_result)
+            _log_result("N3-Phase2", cf2_result)
+        except Exception as e:
+            _debug(f"N3 Phase 2 CF error: {e}")
+
+        # N4: Volitional Goal Evaluation (ST1/ST2)
+        # Evaluate active goal vitality, abandon stale goals (Wrosch)
+        try:
+            if str(memory_dir) not in sys.path:
+                sys.path.insert(0, str(memory_dir))
+            from goal_generator import evaluate_goals
+            goal_eval = evaluate_goals()
+            _debug(f"N4 Goals: {goal_eval.get('evaluated', 0)} evaluated, "
+                   f"{goal_eval.get('abandoned', 0)} abandoned, "
+                   f"{goal_eval.get('watching', 0)} watching, "
+                   f"avg_vitality={goal_eval.get('avg_vitality', 0):.3f}")
+        except Exception as e:
+            _debug(f"N4 Goal evaluation error: {e}")
 
         try:
             if str(memory_dir) not in sys.path:
@@ -1148,6 +1359,20 @@ def _collect_session_stats(project_cwd, debug=False):
         except Exception:
             pass
 
+        # N4: Goal stats
+        try:
+            goal_data = db.kv_get('.active_goals') or []
+            active_goals = [g for g in goal_data if g.get('status') in ('active', 'watching')]
+            stats['goals_active'] = len(active_goals)
+            focus = next((g for g in active_goals if g.get('is_focus')), None)
+            if focus:
+                stats['goal_focus'] = focus.get('action', '')[:40]
+            goal_history = db.kv_get('.goal_history') or {}
+            stats['goals_completed'] = len(goal_history.get('completed', []))
+            stats['goals_abandoned'] = len(goal_history.get('abandoned', []))
+        except Exception:
+            pass
+
         # Vitals alerts (system_vitals.py is fully DB-backed)
         try:
             result = subprocess.run(
@@ -1239,6 +1464,19 @@ def _format_stats_block(stats):
         row3.append(f"Supports:{stats['supports']}")
     if row3:
         lines.append(' | '.join(row3))
+
+    # N4: Goals
+    goal_parts = []
+    if stats.get('goals_active', 0) > 0:
+        goal_parts.append(f"Goals:{stats['goals_active']}active")
+        if stats.get('goal_focus'):
+            goal_parts.append(f"Focus:{stats['goal_focus']}")
+    if stats.get('goals_completed', 0) > 0:
+        goal_parts.append(f"Done:{stats['goals_completed']}")
+    if stats.get('goals_abandoned', 0) > 0:
+        goal_parts.append(f"Dropped:{stats['goals_abandoned']}")
+    if goal_parts:
+        lines.append(' | '.join(goal_parts))
 
     # Alerts (ERR first, then WARN — compact)
     alerts = stats.get('alerts', [])

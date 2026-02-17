@@ -235,6 +235,49 @@ def _get_predictions_summary() -> dict:
     return _safe_call(_inner, {'sessions': 0, 'accuracy': 0.0, 'trend': 'none'})
 
 
+def _get_counterfactual_summary() -> dict:
+    """N3/SS3: Pull counterfactual reasoning history."""
+    def _inner():
+        db = _get_db()
+        history = db.kv_get('.counterfactual_history') or []
+        if not history:
+            return {'sessions': 0, 'total_generated': 0, 'avg_per_session': 0.0, 'llm_ratio': 0.0}
+        total_gen = sum(h.get('generated', 0) for h in history)
+        total_llm = sum(h.get('llm_calls', 0) for h in history)
+        avg_gen = total_gen / len(history) if history else 0
+        llm_ratio = total_llm / max(1, total_gen)
+        return {
+            'sessions': len(history),
+            'total_generated': total_gen,
+            'avg_per_session': round(avg_gen, 1),
+            'llm_ratio': round(llm_ratio, 2),
+        }
+    return _safe_call(_inner, {'sessions': 0, 'total_generated': 0, 'avg_per_session': 0.0, 'llm_ratio': 0.0})
+
+
+def _get_goals_summary() -> dict:
+    """SN1: Pull volitional goal state and progress."""
+    def _inner():
+        db = _get_db()
+        goals = db.kv_get('.active_goals') or []
+        active = [g for g in goals if g.get('status') in ('active', 'watching')]
+        history = db.kv_get('.goal_history') or {}
+        completed = len(history.get('completed', []))
+        abandoned = len(history.get('abandoned', []))
+        focus = next((g for g in active if g.get('is_focus')), None)
+        avg_vitality = (sum(g.get('vitality', 0) for g in active) / len(active)) if active else 0
+        return {
+            'active': len(active),
+            'completed': completed,
+            'abandoned': abandoned,
+            'focus': focus.get('action', '')[:60] if focus else 'none',
+            'avg_vitality': round(avg_vitality, 2),
+            'total_committed': history.get('stats', {}).get('total_committed', 0),
+        }
+    return _safe_call(_inner, {'active': 0, 'completed': 0, 'abandoned': 0,
+                                'focus': 'none', 'avg_vitality': 0, 'total_committed': 0})
+
+
 # ============================================================
 # Narrative Synthesis
 # ============================================================
@@ -251,6 +294,8 @@ def generate() -> dict:
         'contacts': _get_contacts_summary(),
         'attention': _get_attention_summary(),
         'predictions': _get_predictions_summary(),
+        'counterfactuals': _get_counterfactual_summary(),
+        'goals': _get_goals_summary(),
         'generated_at': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
     }
     model['narrative'] = _synthesize_narrative(model)
@@ -348,6 +393,20 @@ def _synthesize_narrative(model: dict) -> str:
         parts.append(f"Predictions: {predictions['sessions']} sessions tracked, "
                      f"{predictions['accuracy']:.0%} accuracy{trend_str}.")
 
+    # Counterfactuals (N3)
+    cfs = model.get('counterfactuals', {})
+    if cfs.get('total_generated', 0):
+        parts.append(f"Counterfactuals: {cfs['total_generated']} generated across "
+                     f"{cfs['sessions']} sessions, avg {cfs['avg_per_session']}/session, "
+                     f"LLM ratio: {cfs['llm_ratio']:.0%}.")
+
+    # Goals (N4/SN2)
+    goals = model.get('goals', {})
+    if goals.get('active', 0):
+        parts.append(f"Goals: {goals['active']} active (focus: {goals['focus']}), "
+                     f"{goals['completed']} completed, {goals['abandoned']} abandoned, "
+                     f"avg vitality: {goals['avg_vitality']:.2f}.")
+
     return ' '.join(parts)
 
 
@@ -432,6 +491,24 @@ def query(question: str) -> str:
         return (f"Predictions: {predictions.get('sessions', 0)} sessions tracked\n"
                 f"Accuracy: {predictions.get('accuracy', 0):.0%}\n"
                 f"Trend: {predictions.get('trend', 'none')}")
+
+    elif any(w in question_lower for w in ('goal', 'objective', 'focus', 'vitality', 'progress')):
+        goals = model.get('goals', {})
+        return (f"Goals: {goals.get('active', 0)} active, "
+                f"{goals.get('completed', 0)} completed, "
+                f"{goals.get('abandoned', 0)} abandoned\n"
+                f"Focus: {goals.get('focus', 'none')}\n"
+                f"Avg vitality: {goals.get('avg_vitality', 0):.2f}\n"
+                f"Total committed: {goals.get('total_committed', 0)}")
+
+    elif any(w in question_lower for w in ('counterfactual', 'what if', 'alternative', 'imagin')):
+        cfs = model.get('counterfactuals', {})
+        if cfs.get('total_generated', 0):
+            return (f"Counterfactual reasoning: {cfs['total_generated']} CFs across "
+                    f"{cfs['sessions']} sessions\n"
+                    f"Avg per session: {cfs['avg_per_session']}\n"
+                    f"LLM ratio: {cfs['llm_ratio']:.0%}")
+        return "No counterfactuals generated yet."
 
     else:
         # Default: return full narrative

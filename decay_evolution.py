@@ -185,8 +185,17 @@ def session_maintenance():
         emotional_weight = meta.get('emotional_weight') or 0.5
         recall_count = meta.get('recall_count', 0)
 
+        # N1 v1.2: Use composite memory weight (affect + repetition) for decay resistance
+        # Strong emotions (positive OR negative) resist decay; frequently recalled memories persist
+        try:
+            from affect_system import compute_memory_weight
+            valence = row.get('valence', 0.0) or 0.0
+            composite_weight = compute_memory_weight(valence, recall_count, emotional_weight)
+        except Exception:
+            composite_weight = emotional_weight
+
         should_resist_decay = (
-            emotional_weight >= EMOTIONAL_WEIGHT_THRESHOLD or
+            composite_weight >= EMOTIONAL_WEIGHT_THRESHOLD or
             recall_count >= RECALL_COUNT_THRESHOLD
         )
         in_grace_period = sessions < GRACE_PERIOD_SESSIONS

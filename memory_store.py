@@ -207,6 +207,16 @@ def store_memory(
         created=now,
     )
 
+    # N1 v1.2: Stamp mood valence on new memories at creation
+    # Memories born during positive mood get positive valence -> mood-congruent retrieval
+    try:
+        from affect_system import get_mood as _store_get_mood
+        mood_valence = _store_get_mood().valence
+        if abs(mood_valence) > 0.01:
+            db.update_memory(memory_id, valence=round(mood_valence, 4))
+    except Exception:
+        pass
+
     # Update leads_to links on cause memories
     for cause_id in all_causal:
         _add_leads_to_link(cause_id, memory_id)

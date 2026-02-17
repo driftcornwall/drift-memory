@@ -310,10 +310,21 @@ def prime_from_thought(transcript_path: str, memory_dir: Path = None) -> str:
     except Exception:
         pass  # Never block conversation for recall registration
 
-    # Format output
+    # Format output (N5: rich binding when available)
     lines = ["", "=== THOUGHT-TRIGGERED MEMORY ==="]
-    for mem in new_memories:
-        lines.append(f"[{mem['score']:.2f}] {mem['id']}: {mem['preview']}...")
+    try:
+        from binding_layer import bind_results, render_compact, BINDING_ENABLED
+        if BINDING_ENABLED:
+            bound = bind_results(new_memories, full_count=2)
+            for b in bound:
+                lines.append(render_compact(b))
+        else:
+            for mem in new_memories:
+                lines.append(f"[{mem['score']:.2f}] {mem['id']}: {mem['preview']}...")
+    except Exception:
+        # Fallback to original format if binding fails
+        for mem in new_memories:
+            lines.append(f"[{mem['score']:.2f}] {mem['id']}: {mem['preview']}...")
     lines.append("================================")
 
     return "\n".join(lines)

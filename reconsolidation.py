@@ -321,6 +321,31 @@ def process_revisions(dry_run: bool = True, max_revisions: int = MAX_REVISIONS_P
         result['action'] = 'revised'
         result['backend'] = backend
         result['revised_preview'] = revised[:120]
+
+        # N3/R1+R2: Generate reconsolidation counterfactual
+        try:
+            from counterfactual_engine import (
+                generate_reconsolidation, validate_with_nli, quality_gate,
+                store_counterfactual, _route_to_cognitive_state,
+            )
+            cf = generate_reconsolidation(
+                revision={
+                    'previous_content': original_content[:500],
+                    'revised_content': revised[:500],
+                    'reason': item['reason'],
+                },
+                memory_id=memory_id,
+            )
+            if cf:
+                if cf.generation_method == 'llm':
+                    cf = validate_with_nli(cf)
+                if quality_gate(cf):
+                    store_counterfactual(cf)
+                    _route_to_cognitive_state(cf)
+                    result['counterfactual'] = cf.lesson[:100]
+        except Exception:
+            pass  # N3 is supplementary
+
         results.append(result)
 
     if not dry_run and results:

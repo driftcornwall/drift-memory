@@ -365,7 +365,7 @@ def get_priming_candidates(
     except Exception:
         pass
 
-    # Phase 1: Top activated memories (with hub dampening)
+    # Phase 1: Top activated memories (with hub dampening + N5 v1.2 binding boost)
     activated = get_most_activated_memories(limit=activation_count * 2)  # Fetch extra for dampening
     dampened = []
     for mem_id, activation, metadata, preview in activated:
@@ -377,6 +377,28 @@ def get_priming_candidates(
             dampened_score = activation
         dampened.append((mem_id, dampened_score, activation, metadata, preview))
     dampened.sort(key=lambda x: x[1], reverse=True)
+
+    # N5 v1.2: Binding-strength boost for priming selection
+    # High-Phi memories carry more integrated context per priming slot
+    _binding_boost = {}
+    try:
+        from binding_layer import bind_results, BINDING_ENABLED
+        if BINDING_ENABLED and dampened:
+            # Bind top candidates to check their integration level
+            top_ids = [d[0] for d in dampened[:activation_count * 2]]
+            fake_results = [{'id': mid, 'score': 0.5} for mid in top_ids]
+            bound = bind_results(fake_results, full_count=min(len(fake_results), 8))
+            for b in bound:
+                if b.binding_strength > 0.3:
+                    # Up to 20% boost for well-integrated memories
+                    _binding_boost[b.id] = 1.0 + 0.2 * b.binding_strength
+    except Exception:
+        pass
+
+    if _binding_boost:
+        dampened = [(mid, score * _binding_boost.get(mid, 1.0), act, meta, prev)
+                    for mid, score, act, meta, prev in dampened]
+        dampened.sort(key=lambda x: x[1], reverse=True)
 
     for mem_id, dampened_score, activation, metadata, preview in dampened[:activation_count]:
         result['activated'].append({
@@ -939,14 +961,29 @@ if __name__ == "__main__":
                         pass
 
                 print(f"Memories matching '{query}':\n")
+                # Track retrievals for co-occurrence
                 for r in results:
-                    marker = " [exploratory]" if r.get('exploratory') else ""
-                    # Track retrieval for co-occurrence (skip exploratory — read-only exposure)
                     if not r.get('exploratory'):
                         session_state.add_retrieved(r['id'])
-                    print(f"[{r['score']:.3f}] {r['id']}{marker}")
-                    print(f"  {r['preview'][:100]}...")
-                    print()
+
+                # N5: Rich binding when available
+                try:
+                    from binding_layer import bind_results, render_narrative, BINDING_ENABLED
+                    if BINDING_ENABLED:
+                        bound = bind_results(results)
+                        for b in bound:
+                            marker = " [exploratory]" if any(r.get('exploratory') and r.get('id') == b.id for r in results) else ""
+                            print(f"{render_narrative(b)}{marker}")
+                            print()
+                    else:
+                        raise ImportError("disabled")
+                except Exception:
+                    for r in results:
+                        marker = " [exploratory]" if r.get('exploratory') else ""
+                        print(f"[{r['score']:.3f}] {r['id']}{marker}")
+                        print(f"  {r['preview'][:100]}...")
+                        print()
+
                 # Save session state so co-occurrences persist
                 session_state.save()
         except ImportError:

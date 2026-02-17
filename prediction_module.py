@@ -255,6 +255,19 @@ def score_predictions() -> dict:
     # Fire cognitive state events
     _fire_cognitive_events(scored)
 
+    # N3: Generate prospective counterfactual context for violated predictions
+    # (Actual counterfactual generation happens in stop.py Phase 2 via session_end_review)
+    violated = [s for s in scored if not s.get('correct')]
+    if violated:
+        try:
+            result['violated_count'] = len(violated)
+            result['near_miss_count'] = sum(
+                1 for s in violated
+                if 0.3 <= s.get('confidence', 0) <= 0.7
+            )
+        except Exception:
+            pass
+
     # Mark as scored
     pred_data['scored'] = True
     pred_data['result'] = result

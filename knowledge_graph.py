@@ -43,6 +43,7 @@ RELATIONSHIP_TYPES = {
     'references':      {'symbol': '->', 'description': 'A mentions/cites B'},
     'resolves':        {'symbol': 'ok', 'description': 'A fixes the problem in B'},
     'supports':        {'symbol': '++', 'description': 'A provides evidence for B'},
+    'counterfactual_of': {'symbol': '?!', 'description': 'A is a counterfactual analysis of B'},
 }
 
 
@@ -128,6 +129,49 @@ def get_all_edges(memory_id: str) -> list[dict]:
                 ORDER BY relationship, confidence DESC
             """, (memory_id, memory_id))
             return [dict(r) for r in cur.fetchall()]
+
+
+def batch_get_edges(memory_ids: list[str], relationships: list[str] = None) -> dict[str, list[dict]]:
+    """
+    Batch-fetch typed edges for multiple memories in a single query.
+
+    Returns dict mapping memory_id -> list of edges (both directions).
+    Much faster than N individual get_edges_from/get_edges_to calls.
+    """
+    if not memory_ids:
+        return {}
+
+    db = get_db()
+    result = {mid: [] for mid in memory_ids}
+
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            rel_filter = ""
+            params = [tuple(memory_ids)]
+            if relationships:
+                rel_filter = "AND relationship = ANY(%s)"
+                params.append(relationships)
+
+            cur.execute(f"""
+                SELECT *, 'outgoing' as direction FROM {db._table('typed_edges')}
+                WHERE source_id = ANY(%s) {rel_filter}
+                UNION ALL
+                SELECT *, 'incoming' as direction FROM {db._table('typed_edges')}
+                WHERE target_id = ANY(%s) {rel_filter}
+                ORDER BY confidence DESC
+            """, params + params)  # params duplicated for both halves of UNION
+
+            for row in cur.fetchall():
+                row = dict(row)
+                # Assign to the memory that owns this edge
+                sid = row.get('source_id', '')
+                tid = row.get('target_id', '')
+                if sid in result:
+                    result[sid].append(row)
+                if tid in result and tid != sid:
+                    result[tid].append(row)
+
+    return result
 
 
 def delete_edge(source_id: str, target_id: str, relationship: str) -> bool:

@@ -258,6 +258,16 @@ def build_registry():
         Command("self-query", "identity", "Query self-state", "self_narrative", "query", "<question>"),
     ]
 
+    # === COUNTERFACTUAL REASONING (N3) ===
+    cmds += [
+        Command("cf-generate", "dashboard", "Run session-end counterfactual review", "counterfactual_engine", "generate"),
+        Command("cf-history", "dashboard", "Counterfactual generation history", "counterfactual_engine", "history", "[N]"),
+        Command("cf-stats", "dashboard", "Counterfactual summary statistics", "counterfactual_engine", "stats"),
+        Command("cf-quality", "dashboard", "Quality analysis for this session", "counterfactual_engine", "quality"),
+        Command("cf-trace", "dashboard", "Decision trace (recall-to-action)", "counterfactual_engine", "trace"),
+        Command("cf-health", "dashboard", "Counterfactual engine health", "counterfactual_engine", "health"),
+    ]
+
     # === Q-VALUE LEARNING (MemRL) ===
     cmds += [
         Command("q-stats", "dashboard", "Q-value distribution", "q_value_engine", "stats"),
@@ -286,6 +296,18 @@ def build_registry():
         Command("exp-compare", "experiment", "Compare fingerprints side-by-side", "experiment_compare", "main"),
         Command("exp-snapshot", "experiment", "Take experiment snapshot", "experiment_delta", "snapshot", "--tag <label>"),
         Command("exp-delta", "experiment", "Compare experiment snapshots", "experiment_delta", "compare", "<file1> <file2>"),
+    ]
+
+    # === VOLITIONAL GOALS (N4) ===
+    cmds += [
+        Command("goal-generate", "memory", "Synthesize + score + commit new goals", "goal_generator", "generate"),
+        Command("goal-active", "memory", "List active goals with vitality", "goal_generator", "active"),
+        Command("goal-focus", "memory", "Show current focus goal", "goal_generator", "focus"),
+        Command("goal-eval", "memory", "Evaluate progress (session end)", "goal_generator", "evaluate"),
+        Command("goal-abandon", "memory", "Manually abandon a goal", "goal_generator", "abandon", "<id>"),
+        Command("goal-history", "memory", "Completed/abandoned goals", "goal_generator", "history"),
+        Command("goal-stats", "memory", "Goal generation statistics", "goal_generator", "stats"),
+        Command("goal-health", "memory", "Goal module health check", "goal_generator", "health"),
     ]
 
     # === LESSONS ===
@@ -619,6 +641,7 @@ def cmd_health():
         ("self_narrative", "Self-narrative synthesis"),
         ("contact_models", "Per-contact Bayesian scoring"),
         ("prediction_module", "Forward model predictions"),
+        ("goal_generator", "Volitional goal generation (N4)"),
     ]
 
     # Social subpackage

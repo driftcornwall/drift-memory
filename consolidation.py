@@ -134,6 +134,10 @@ def find_consolidation_candidates(threshold: float = 0.85, limit: int = 10) -> l
     """
     Find pairs of memories that are candidates for consolidation.
 
+    N5 v1.2: High-binding-strength memories resist consolidation.
+    A memory with Phi > 0.5 is well-integrated (many connections, verified,
+    socially relevant) — consolidating it would destroy those connections.
+
     Args:
         threshold: Minimum similarity (0.85 = very similar)
         limit: Max candidates to return
@@ -143,7 +147,47 @@ def find_consolidation_candidates(threshold: float = 0.85, limit: int = 10) -> l
     """
     try:
         from semantic_search import find_similar_pairs
-        return find_similar_pairs(threshold=threshold, limit=limit)
+        candidates = find_similar_pairs(threshold=threshold, limit=limit * 2)
     except ImportError:
         print("Semantic search not available")
         return []
+
+    if not candidates:
+        return []
+
+    # N5 v1.2: Filter out pairs where either memory has high binding_strength
+    PHI_RESISTANCE_THRESHOLD = 0.5  # Memories above this resist consolidation
+    try:
+        from binding_layer import bind_results, BINDING_ENABLED
+        if BINDING_ENABLED:
+            # Collect all unique memory IDs from candidate pairs
+            all_ids = set()
+            for pair in candidates:
+                all_ids.add(pair.get('id1', ''))
+                all_ids.add(pair.get('id2', ''))
+            all_ids.discard('')
+
+            if all_ids:
+                # Bind all candidate memories
+                fake_results = [{'id': mid, 'score': 0.5} for mid in all_ids]
+                bound = bind_results(fake_results, full_count=min(len(fake_results), 15))
+                phi_map = {b.id: b.binding_strength for b in bound}
+
+                # Filter: skip pairs where either memory has high Phi
+                filtered = []
+                for pair in candidates:
+                    phi1 = phi_map.get(pair.get('id1', ''), 0)
+                    phi2 = phi_map.get(pair.get('id2', ''), 0)
+                    if phi1 < PHI_RESISTANCE_THRESHOLD and phi2 < PHI_RESISTANCE_THRESHOLD:
+                        filtered.append(pair)
+                    else:
+                        # Keep the pair but mark it as binding-resistant
+                        pair['binding_resistant'] = True
+                        pair['phi1'] = round(phi1, 3)
+                        pair['phi2'] = round(phi2, 3)
+
+                candidates = [p for p in candidates if not p.get('binding_resistant')]
+    except Exception:
+        pass  # Binding unavailable — proceed without filtering
+
+    return candidates[:limit]

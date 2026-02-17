@@ -162,6 +162,52 @@ def adapt(alerts: list[dict] = None) -> dict:
                 merged[param] = value
                 reasons[param] = alert.get('message', alert.get('metric', '?'))[:80]
 
+    # N1: Merge affect-driven action tendency adjustments
+    # These are additive on top of vitals-based adaptations
+    try:
+        from affect_system import get_mood, tendency_to_params
+        mood = get_mood()
+        tendency = mood.get_tendency()
+        tendency_params = tendency_to_params(tendency)
+
+        TENDENCY_PARAM_MAP = {
+            'curiosity_target_count_adj': 'curiosity_target_count',
+            'search_threshold_adj': 'curiosity_threshold_offset',
+        }
+
+        for tend_key, adapt_key in TENDENCY_PARAM_MAP.items():
+            adj = tendency_params.get(tend_key, 0)
+            if adj != 0:
+                current = merged.get(adapt_key, DEFAULTS.get(adapt_key, 0))
+                new_val = current + adj
+                # Clamp to reasonable ranges
+                if adapt_key == 'curiosity_target_count':
+                    new_val = max(1, min(8, int(new_val)))
+                elif adapt_key == 'curiosity_threshold_offset':
+                    new_val = max(-0.10, min(0.10, new_val))
+                merged[adapt_key] = new_val
+                reasons[adapt_key] = reasons.get(adapt_key, '') + f' +affect:{tendency.value}'
+    except Exception:
+        pass  # Affect system optional
+
+    # N4/AB1: Goal count modulates exploration
+    # More active goals = less curiosity (exploit mode)
+    # Fewer active goals = more curiosity (explore mode)
+    try:
+        from goal_generator import get_active_goals
+        active_goals = get_active_goals()
+        goal_count = len(active_goals)
+        if goal_count >= 4:
+            # Near capacity: reduce exploration, focus on execution
+            merged['curiosity_target_count'] = max(1, merged.get('curiosity_target_count', DEFAULTS['curiosity_target_count']) - 1)
+            reasons['curiosity_target_count'] = reasons.get('curiosity_target_count', '') + f' +goals:{goal_count}(exploit)'
+        elif goal_count == 0:
+            # No goals: increase exploration to find purpose
+            merged['curiosity_target_count'] = min(6, merged.get('curiosity_target_count', DEFAULTS['curiosity_target_count']) + 1)
+            reasons['curiosity_target_count'] = reasons.get('curiosity_target_count', '') + ' +goals:0(explore)'
+    except Exception:
+        pass  # Goal system optional
+
     # Only store non-default values
     adaptations = {}
     for param, value in merged.items():
@@ -253,6 +299,22 @@ def evaluate_adaptations() -> dict:
     if history['entries']:
         history['entries'][-1]['evaluation'] = result
         db.kv_set(KV_HISTORY, history)
+
+    # N3/A1: Generate self-directed counterfactual about these adaptations
+    try:
+        from counterfactual_engine import (
+            generate_self_directed, validate_with_nli, quality_gate,
+            store_counterfactual, _route_to_cognitive_state,
+        )
+        cf = generate_self_directed(current, result)
+        if cf:
+            if cf.generation_method == 'llm':
+                cf = validate_with_nli(cf)
+            if quality_gate(cf):
+                store_counterfactual(cf)
+                _route_to_cognitive_state(cf)
+    except Exception:
+        pass  # N3 is supplementary
 
     return result
 
