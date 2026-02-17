@@ -39,6 +39,7 @@ DEFAULTS = {
     'excavation_count': 3,
     'cooccurrence_decay_rate': 0.5,
     'reconsolidation_frequency': 1.0,
+    'consolidation_aggressiveness': 0.0,
 }
 
 
@@ -173,6 +174,7 @@ def adapt(alerts: list[dict] = None) -> dict:
         TENDENCY_PARAM_MAP = {
             'curiosity_target_count_adj': 'curiosity_target_count',
             'search_threshold_adj': 'curiosity_threshold_offset',
+            'consolidation_adj': 'consolidation_aggressiveness',
         }
 
         for tend_key, adapt_key in TENDENCY_PARAM_MAP.items():
@@ -185,6 +187,8 @@ def adapt(alerts: list[dict] = None) -> dict:
                     new_val = max(1, min(8, int(new_val)))
                 elif adapt_key == 'curiosity_threshold_offset':
                     new_val = max(-0.10, min(0.10, new_val))
+                elif adapt_key == 'consolidation_aggressiveness':
+                    new_val = max(-0.5, min(0.5, new_val))
                 merged[adapt_key] = new_val
                 reasons[adapt_key] = reasons.get(adapt_key, '') + f' +affect:{tendency.value}'
     except Exception:

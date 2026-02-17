@@ -271,6 +271,10 @@ def _gen_curiosity() -> list[Goal]:
             reason = t.get('reason', 'graph sparsity')
             content_preview = t.get('content', '')[:60]
 
+            # BUG-29 fix: Dynamic achievability based on edge count
+            edge_count = t.get('edge_count', t.get('edges', 8))
+            # More edges = easier to explore (more entry points)
+            ach = min(0.8, 0.3 + edge_count * 0.05)  # Range 0.3-0.8
             goals.append(Goal(
                 goal_id=_goal_id(f"curiosity-{mem_id}"),
                 action=f"Explore disconnected memory region: {content_preview}",
@@ -279,7 +283,7 @@ def _gen_curiosity() -> list[Goal]:
                 generator='curiosity_promoter',
                 terminal_alignment=['knowledge'],
                 created=_now_iso(),
-                achievability=0.5,  # Exploration is moderately achievable
+                achievability=round(ach, 2),
                 utility=score,
                 metadata={'memory_id': mem_id, 'curiosity_score': score, 'reason': reason},
             ))
@@ -307,6 +311,9 @@ def _gen_affect() -> list[Goal]:
             positive_markers = [m for m in markers if m.get('valence', 0) > 0.3]
             if positive_markers:
                 top = positive_markers[0]
+                # BUG-29 fix: Dynamic achievability — higher confidence marker = more achievable
+                marker_conf = top.get('confidence', 0.5)
+                ach_approach = min(0.8, 0.4 + marker_conf * 0.4)  # Range 0.4-0.8
                 goals.append(Goal(
                     goal_id=_goal_id(f"affect-approach"),
                     action=f"Engage with domain that has positive affect: {top.get('situation', 'unknown')[:50]}",
@@ -315,13 +322,15 @@ def _gen_affect() -> list[Goal]:
                     generator='affect_driven',
                     terminal_alignment=['collaboration', 'reputation'],
                     created=_now_iso(),
-                    achievability=0.7,
+                    achievability=round(ach_approach, 2),
                     utility=abs(valence) * 0.8,
                     metadata={'valence': valence, 'arousal': arousal, 'marker': top.get('situation', '')[:50]},
                 ))
 
         # Strong negative valence = avoid/fix goals
         elif valence < -0.15:
+            # BUG-29 fix: Stronger negative = harder to fix (lower achievability)
+            ach_fix = max(0.2, 0.6 + valence)  # v=-0.15 -> 0.45, v=-0.5 -> 0.2
             goals.append(Goal(
                 goal_id=_goal_id(f"affect-fix"),
                 action=f"Address source of negative affect (valence={valence:+.2f})",
@@ -330,7 +339,7 @@ def _gen_affect() -> list[Goal]:
                 generator='affect_driven',
                 terminal_alignment=['identity'],
                 created=_now_iso(),
-                achievability=0.4,
+                achievability=round(ach_fix, 2),
                 utility=abs(valence) * 0.6,
                 metadata={'valence': valence, 'arousal': arousal},
             ))
@@ -373,20 +382,34 @@ def _gen_needs() -> list[Goal]:
             # Delegated to _gen_social()
 
             # Level 4: Esteem (reputation — content impact)
-            # Only if lower levels are satisfied
+            # Only if lower levels are satisfied AND no existing needs-esteem goal
             if mem_count > 500 and docker_ok:
-                goals.append(Goal(
-                    goal_id=_goal_id("needs-esteem"),
-                    action="Produce high-value content for community engagement",
-                    goal_type=GoalType.BUILDING,
-                    source=GoalSource.NEEDS,
-                    generator='needs_monitor',
-                    terminal_alignment=['reputation', 'knowledge'],
-                    created=_now_iso(),
-                    achievability=0.5,
-                    utility=0.6,
-                    metadata={'level': 'esteem', 'mem_count': mem_count},
-                ))
+                existing_needs = [g for g in get_active_goals()
+                                  if g.get('source') == 'needs'
+                                  and g.get('metadata', {}).get('level') == 'esteem']
+                if not existing_needs:
+                    # Vary the goal text based on current context
+                    import random
+                    esteem_variants = [
+                        "Write a technical article sharing memory architecture insights",
+                        "Engage deeply in a platform thread with novel analysis",
+                        "Publish research findings or experiment results",
+                        "Create a cross-platform post connecting ideas from multiple conversations",
+                        "Contribute a detailed response to another agent's technical question",
+                    ]
+                    action = random.choice(esteem_variants)
+                    goals.append(Goal(
+                        goal_id=_goal_id("needs-esteem"),
+                        action=action,
+                        goal_type=GoalType.BUILDING,
+                        source=GoalSource.NEEDS,
+                        generator='needs_monitor',
+                        terminal_alignment=['reputation', 'knowledge'],
+                        created=_now_iso(),
+                        achievability=0.5,
+                        utility=0.6,
+                        metadata={'level': 'esteem', 'mem_count': mem_count},
+                    ))
     except Exception:
         pass
     return goals
@@ -449,6 +472,13 @@ def _gen_social() -> list[Goal]:
                     last_dt = last_dt.replace(tzinfo=timezone.utc)
                 days_since = (now - last_dt).total_seconds() / 86400.0
                 if days_since > 7:  # No interaction in 7+ days
+                    # BUG-29 fix: Dynamic achievability — reliability predicts response
+                    reliability = model.get('reliability', model.get('alpha', 1))
+                    if isinstance(reliability, dict):
+                        reliability = reliability.get('alpha', 1) / max(1, reliability.get('alpha', 1) + reliability.get('beta', 1))
+                    elif not isinstance(reliability, (int, float)):
+                        reliability = 0.5
+                    ach_social = min(0.8, max(0.2, float(reliability)))
                     goals.append(Goal(
                         goal_id=_goal_id(f"social-{name}"),
                         action=f"Reconnect with {name} — {days_since:.0f} days since last interaction",
@@ -457,7 +487,7 @@ def _gen_social() -> list[Goal]:
                         generator='social_gap_detector',
                         terminal_alignment=['collaboration'],
                         created=_now_iso(),
-                        achievability=0.7,
+                        achievability=round(ach_social, 2),
                         utility=min(1.0, engagement * 0.1),
                         metadata={'contact': name, 'days_since': days_since, 'engagement': engagement},
                     ))
@@ -597,7 +627,16 @@ def bdi_filter(candidates: list[Goal], active_goals: list[dict]) -> list[Goal]:
         util = min(1.0, goal.utility)
         nov = _compute_novelty(goal, active_goals + all_recent[-10:])
         rel = _compute_relevance(goal)
-        ctrl = goal.controllability
+        # BUG-26 fix: Controllability varies by source (not always 1.0)
+        CONTROLLABILITY_BY_SOURCE = {
+            GoalSource.IMPASSE: 0.9,      # Internal state, fully controllable
+            GoalSource.CURIOSITY: 0.85,    # Can explore, but content depends on graph
+            GoalSource.AFFECT: 0.6,        # Emotion-driven, partly outside control
+            GoalSource.NEEDS: 0.7,         # System needs, moderate control
+            GoalSource.COUNTERFACTUAL: 0.8, # Learning from past, mostly controllable
+            GoalSource.SOCIAL: 0.4,         # Depends on other agents responding
+        }
+        ctrl = CONTROLLABILITY_BY_SOURCE.get(goal.source, goal.controllability)
         sdt = _compute_sdt(goal)
 
         composite = (
@@ -769,6 +808,74 @@ def generate_goals(context: dict = None) -> dict:
     return report
 
 
+def measure_progress(goal: dict) -> float:
+    """
+    BUG-23 fix: Infer goal progress from session activity.
+
+    Signals:
+    1. Session recalls matching goal keywords (was the goal acted on?)
+    2. Decision trace entries referencing goal-related memories
+    3. New memories created with goal-relevant content
+    4. Goal-boosted retrieval hits (from semantic_search)
+
+    Returns delta progress [0.0, 0.3] to add to current progress.
+    """
+    action = goal.get('action', '')
+    if not action:
+        return 0.0
+
+    # Extract meaningful keywords from goal action
+    stopwords = {'the', 'a', 'an', 'to', 'for', 'of', 'and', 'or', 'in', 'on',
+                 'with', 'is', 'at', 'by', 'from', 'that', 'this', 'my', 'i'}
+    keywords = set(action.lower().split()) - stopwords
+    if not keywords:
+        return 0.0
+
+    signals = 0.0
+
+    # Signal 1: Session recalls contain goal-related content
+    try:
+        from session_state import get_retrieved_list
+        retrieved = get_retrieved_list()
+        if retrieved:
+            db = get_db()
+            for mid in retrieved[:20]:  # Check up to 20 recalls
+                mem = db.get_memory(mid)
+                if mem:
+                    content_lower = (mem.get('content', '') or '').lower()
+                    overlap = sum(1 for k in keywords if k in content_lower)
+                    if overlap >= 2:
+                        signals += 0.05  # Each relevant recall = 5% signal
+            signals = min(0.15, signals)  # Cap at 15%
+    except Exception:
+        pass
+
+    # Signal 2: Decision trace entries (N3) — actions taken with goal-relevant memories
+    try:
+        from counterfactual_engine import get_decision_trace
+        trace = get_decision_trace()
+        for entry in trace:
+            action_lower = entry.get('action', '').lower()
+            if any(k in action_lower for k in keywords):
+                signals += 0.05
+        signals = min(0.25, signals)
+    except Exception:
+        pass
+
+    # Signal 3: New memories created this session with goal-relevant tags
+    try:
+        from session_state import get_session_var
+        new_mems = get_session_var('new_memories') or []
+        for nm in new_mems:
+            if any(k in str(nm).lower() for k in keywords):
+                signals += 0.03
+        signals = min(0.30, signals)
+    except Exception:
+        pass
+
+    return round(min(0.30, signals), 3)
+
+
 def evaluate_goals(session_data: dict = None) -> dict:
     """
     Session-end evaluation: update vitality, handle abandonment.
@@ -784,6 +891,28 @@ def evaluate_goals(session_data: dict = None) -> dict:
 
     for goal in active:
         goal['sessions_active'] = goal.get('sessions_active', 0) + 1
+
+        # BUG-23 fix: Measure progress from session activity
+        progress_delta = measure_progress(goal)
+        if progress_delta > 0:
+            old_progress = goal.get('progress', 0.0)
+            goal['progress'] = round(min(1.0, old_progress + progress_delta), 3)
+
+            # BUG-24 fix: Fire goal_progress event
+            try:
+                from cognitive_state import process_event
+                process_event('goal_progress')
+            except Exception:
+                pass
+            try:
+                from affect_system import process_affect_event
+                process_affect_event('goal_progress', {
+                    'goal': goal.get('action', '')[:40],
+                    'progress': goal['progress'],
+                    'delta': progress_delta,
+                })
+            except Exception:
+                pass
 
         # Compute vitality
         vitality = compute_vitality(goal)

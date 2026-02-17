@@ -65,6 +65,7 @@ class AffectiveBinding:
     somatic_signal: Optional[str] = None  # Gut feeling from SomaticMarkerCache
     felt_importance: float = 0.0      # Composite: |valence| * recall weight
     arousal_noise: Optional[float] = None  # ACT-R noise applied (Spin's addition)
+    felt_emotion: Optional[float] = None  # Sprott: mood velocity (dx/dt) at retrieval time
 
     @property
     def completeness(self) -> float:
@@ -226,6 +227,11 @@ def _build_retrieval_reasons(result: dict) -> list[str]:
     if qv > 0.7:
         reasons.append(f'high learned utility (Q={qv:.2f})')
 
+    # Goal-relevance boost (N4)
+    if result.get('goal_boosted'):
+        goal_name = result.get('goal_boost_source', 'active goal')
+        reasons.append(f'goal-relevant ({goal_name})')
+
     return reasons
 
 
@@ -272,6 +278,10 @@ def full_bind(result: dict, db=None, memory_row: dict = None,
     content = memory_row.get('content', result.get('preview', ''))
     extra = memory_row.get('extra_metadata') or {}
 
+    # === EXTRACT SOCIAL ENTITIES EARLY (needed by affective binding for somatic markers) ===
+    entities = memory_row.get('entities') or {}
+    agents = entities.get('agents', []) if isinstance(entities, dict) else []
+
     # === AFFECTIVE BINDING ===
     valence = memory_row.get('valence', 0.0) or 0.0
     mood_congruence = result.get('mood_boost', 0.0)
@@ -308,17 +318,26 @@ def full_bind(result: dict, db=None, memory_row: dict = None,
     except Exception:
         pass
 
+    # Felt emotion: mood velocity at retrieval time (Sprott insight)
+    _felt_emotion = None
+    try:
+        from affect_system import get_mood as _bind_get_mood
+        _bind_mood = _bind_get_mood()
+        if abs(_bind_mood.felt_emotion) > 0.01:
+            _felt_emotion = round(_bind_mood.felt_emotion, 4)
+    except Exception:
+        pass
+
     affect = AffectiveBinding(
         valence=valence,
         mood_congruence=mood_congruence,
         somatic_signal=somatic_signal,
         felt_importance=felt_importance,
         arousal_noise=arousal_noise,
+        felt_emotion=_felt_emotion,
     )
 
     # === SOCIAL BINDING ===
-    entities = memory_row.get('entities') or {}
-    agents = entities.get('agents', []) if isinstance(entities, dict) else []
     primary_contact = agents[0] if agents else None
     contact_reliability = 0.5
     interaction_count = 0

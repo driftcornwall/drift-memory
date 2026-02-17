@@ -198,24 +198,47 @@ def _score_heuristic_quality(antecedent: str, consequent: str, lesson: str) -> t
     """
     Score quality dimensions for heuristic-generated counterfactuals.
     Returns (plausibility, specificity, actionability).
+
+    BUG-15 fix: Added tautology detection — if consequent merely restates antecedent
+    or lesson is too similar to the inputs, quality scores are penalized.
     """
-    # Plausibility: template-generated CFs change exactly one thing (high by design)
+    ant_lower = antecedent.lower()
+    con_lower = consequent.lower()
+    les_lower = lesson.lower()
+
+    # Plausibility: template-generated CFs are plausible but check for vacuity
     plausibility = 0.7
+    # Tautology check: if consequent words heavily overlap antecedent, it's vacuous
+    ant_words = set(ant_lower.split()) - {'the', 'a', 'an', 'if', 'had', 'been', 'would', 'not', 'have', 'then'}
+    con_words = set(con_lower.split()) - {'the', 'a', 'an', 'if', 'had', 'been', 'would', 'not', 'have', 'then'}
+    if ant_words and con_words:
+        overlap = len(ant_words & con_words) / max(1, len(ant_words | con_words))
+        if overlap > 0.6:  # High overlap = tautological
+            plausibility *= (1.0 - overlap)  # e.g. 0.8 overlap -> 0.7 * 0.2 = 0.14
 
     # Specificity: check if lesson contains concrete action items
-    specificity = 0.4
+    specificity = 0.3  # Lowered base (was 0.4)
     specific_markers = ['should', 'update', 'adjust', 'check', 'verify', 'instead', 'next time']
     for marker in specific_markers:
-        if marker in lesson.lower():
+        if marker in les_lower:
             specificity += 0.1
+    # Penalize if lesson is very short (likely template fill)
+    if len(lesson) < 40:
+        specificity *= 0.7
     specificity = min(1.0, specificity)
 
     # Actionability: check if lesson refers to tunable/recurring things
-    actionability = 0.4
+    actionability = 0.3  # Lowered base (was 0.4)
     action_markers = ['parameter', 'threshold', 'model', 'prediction', 'contact', 'platform', 'recall']
     for marker in action_markers:
-        if marker in lesson.lower():
+        if marker in les_lower:
             actionability += 0.1
+    # Penalize if lesson just restates antecedent content
+    les_words = set(les_lower.split()) - {'the', 'a', 'an', 'to', 'for', 'of', 'and'}
+    if ant_words and les_words:
+        les_overlap = len(ant_words & les_words) / max(1, len(les_words))
+        if les_overlap > 0.5:
+            actionability *= 0.6  # Lesson mostly restates the problem
     actionability = min(1.0, actionability)
 
     return (round(plausibility, 2), round(specificity, 2), round(actionability, 2))
@@ -764,12 +787,12 @@ def generate_reconsolidation(revision: dict, memory_id: str) -> Optional[Counter
 def validate_with_nli(cf: Counterfactual) -> Counterfactual:
     """
     NLI cross-check: verify counterfactual consequent doesn't contradict known facts.
-    Only for LLM-generated CFs with confidence > 0.6 and plausibility > 0.5.
+    BUG-16 fix: Applies to ALL CFs (not just LLM). Heuristic CFs with high confidence
+    also get validated, removing asymmetric trust between LLM and heuristic paths.
     Returns the CF with potentially downgraded confidence.
     """
-    if cf.generation_method != 'llm':
-        return cf
-    if cf.confidence <= 0.6 or cf.plausibility <= 0.5:
+    # Minimum quality bar: skip very low confidence CFs (not worth the NLI call)
+    if cf.confidence <= 0.4 or cf.plausibility <= 0.3:
         return cf
 
     try:

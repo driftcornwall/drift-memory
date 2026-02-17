@@ -189,6 +189,17 @@ def store_memory(
     # Calculate intrinsic importance at creation
     importance = calculate_importance(content, tags, emotion, all_causal)
 
+    # N1 BUG-5 fix: Arousal-gated consolidation boost (Yerkes-Dodson)
+    # High arousal at storage time strengthens memory importance
+    try:
+        from affect_system import get_mood as _store_mood
+        _sm = _store_mood()
+        consol_boost = _sm.get_arousal_consolidation_boost()
+        if abs(consol_boost) > 0.01:
+            importance = round(min(1.0, max(0.1, importance + consol_boost * 0.3)), 3)
+    except Exception:
+        pass
+
     db = get_db()
     db.insert_memory(
         memory_id=memory_id,

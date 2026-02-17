@@ -125,6 +125,32 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 
+def _is_noise_content(content: str) -> bool:
+    """
+    Detect noise memories: raw API responses, notification dumps, session logs.
+    Used by hub dampening and spreading activation to filter low-quality candidates.
+    (Spin's spreading activation noise fix, adapted for shared use.)
+    """
+    if not content or len(content) < 80:
+        return True
+    c = content.strip()
+    # Raw JSON / API responses
+    if c.startswith('{') or c.startswith('['):
+        return True
+    # Section headers / session logs
+    if c.startswith('===') or c.startswith('---'):
+        return True
+    # Platform dumps (GitHub Notifications, Colony Feed, etc.)
+    noise_prefixes = ('GitHub Notifications', 'Colony Feed', 'Global feed status',
+                      'thought-', 'session-', 'Session ')
+    if any(c.startswith(p) for p in noise_prefixes):
+        return True
+    # Very short after stripping
+    if len(c.split()) < 10:
+        return True
+    return False
+
+
 def detect_embedding_source() -> str:
     """Detect which embedding source will be used."""
     local_endpoint = os.getenv("LOCAL_EMBEDDING_ENDPOINT", "http://localhost:8080/embed")
@@ -289,7 +315,18 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
         _adapt_modifier = get_adaptation('curiosity_threshold_offset', 0.0)
     except Exception:
         pass
-    _total_modifier = _cog_modifier + _affect_modifier + _adapt_modifier
+    # BUG-4 fix: System 2 effectiveness (Yerkes-Dodson) — extreme arousal degrades
+    # analytical precision, broadening search (lower threshold)
+    _s2_modifier = 0.0
+    try:
+        from affect_system import get_mood as _s2_mood
+        _s2 = _s2_mood()
+        s2_eff = _s2.get_system2_effectiveness()  # 0-1, peaks at arousal=0.5
+        if s2_eff < 0.8:  # Only adjust when S2 is meaningfully degraded
+            _s2_modifier = -(0.8 - s2_eff) * 0.05  # Up to -0.04 threshold reduction
+    except Exception:
+        pass
+    _total_modifier = _cog_modifier + _affect_modifier + _adapt_modifier + _s2_modifier
     threshold = max(0.1, min(0.6, threshold + _total_modifier))
 
     results = []
@@ -329,9 +366,35 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
             })
     _attention_stages.append({'stage': 'pgvector_search', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
+    # BUG-22: Store original score for cumulative bias cap
+    for r in results:
+        r['original_score'] = r['score']
+
     if _expl:
         _expl.add_step('pgvector_candidates', len(results), weight=1.0,
                         context=f'{len(rows)} raw rows, {len(results)} above threshold {threshold}')
+
+    # === SOMATIC MARKER FAST-PATH (FINDING-20: System 1 pre-analytical bias) ===
+    # Runs BEFORE analytical stages. Somatic markers provide fast gut-feeling
+    # pre-screening: strongly-marked contexts get an early score shift.
+    # This is the closest to genuine System 1 processing: a fast, pre-attentive
+    # signal that biases results before the 10+ analytical stages run.
+    _ts = _time.monotonic()
+    _somatic_applied = 0
+    try:
+        from affect_system import get_somatic_bias
+        for result in results:
+            bias = get_somatic_bias(result['id'])
+            if abs(bias) > 0.01:
+                result['score'] *= (1.0 + bias)  # Typically ±0.05 to ±0.15
+                result['somatic_bias'] = round(bias, 4)
+                _somatic_applied += 1
+    except (ImportError, Exception):
+        pass  # Somatic markers optional
+    if _expl and _somatic_applied:
+        _expl.add_step('somatic_prefilter', _somatic_applied, weight=0.1,
+                       context=f'{_somatic_applied} results with somatic marker bias (System 1)')
+    _attention_stages.append({'stage': 'somatic_prefilter', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
     # === ENTITY INDEX INJECTION (Fix for WHO dimension) ===
     # When query mentions a known contact, inject their memories into candidates
@@ -434,6 +497,7 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
             for result in results:
                 perturbation = _rand.gauss(0, noise_sd)
                 result['score'] = max(0.0, result['score'] + perturbation)
+                result['actr_noise'] = round(perturbation, 4)  # BUG-7 fix: store for binding layer
                 if abs(perturbation) > 0.01:
                     noise_applied += 1
             if _expl and noise_applied:
@@ -494,10 +558,14 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                     continue  # Entity-matched memories exempt
                 deg = _hub_degree_map.get(result['id'], 0)
                 if deg > p90_threshold and max_deg > p90_threshold:
-                    # Scale from 1.0 at P90 to 0.6 at max degree
+                    # Scale from 1.0 at P90 to 0.4 at max degree (was 0.6, Spin fix)
                     ratio = (deg - p90_threshold) / (max_deg - p90_threshold)
-                    penalty = 1.0 - 0.4 * ratio  # Floor at 0.6x
-                    result['score'] *= max(0.6, penalty)
+                    penalty = 1.0 - 0.6 * ratio  # Floor at 0.4x (was 0.6x)
+                    # Content quality: noise hubs get additional penalty
+                    content = result.get('preview', '')
+                    if _is_noise_content(content):
+                        penalty *= 0.5  # Effective floor 0.2x for noise hubs
+                    result['score'] *= max(0.2, penalty)
                     result['hub_dampened'] = True
                     hub_dampened += 1
             if _expl and hub_dampened:
@@ -660,46 +728,74 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     _attention_stages.append({'stage': 'curiosity_boost', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
     # === GOAL-RELEVANCE BOOST (SR1/SR2: N4 goal-directed retrieval bias) ===
+    # FINDING-19 fix: Improved from naive keyword to phrase-aware matching with
+    # punctuation stripping and full content search (not just 150-char preview)
     _ts = _time.monotonic()
     try:
+        import re as _re_goal
         from goal_generator import get_active_goals, get_focus_goal
         _active_goals = get_active_goals()
         if _active_goals and results:
-            # SR2: Extract keywords from all active goals
+            # SR2: Extract keywords AND meaningful phrases from goals
             _goal_stopwords = {'the', 'a', 'an', 'to', 'for', 'of', 'and', 'or', 'in', 'on',
-                               'with', 'is', 'at', 'by', 'from', 'that', 'this', 'my', 'i'}
+                               'with', 'is', 'at', 'by', 'from', 'that', 'this', 'my', 'i',
+                               'be', 'are', 'was', 'were', 'been', 'have', 'has', 'had', 'do'}
             _goal_keywords = set()
             _focus_keywords = set()
+            _focus_phrases = []  # Multi-word phrases for stronger matching
+            _goal_phrases = []
             for g in _active_goals:
-                words = set(g.get('action', '').lower().split()) - _goal_stopwords
+                action = g.get('action', '')
+                # Strip punctuation for cleaner matching
+                clean = _re_goal.sub(r'[^\w\s]', '', action.lower())
+                words = set(clean.split()) - _goal_stopwords
                 _goal_keywords.update(words)
+                # Extract 2-3 word phrases (consecutive non-stopwords)
+                action_words = clean.split()
+                for i in range(len(action_words) - 1):
+                    if action_words[i] not in _goal_stopwords and action_words[i+1] not in _goal_stopwords:
+                        phrase = f"{action_words[i]} {action_words[i+1]}"
+                        _goal_phrases.append(phrase)
                 if g.get('is_focus'):
                     _focus_keywords.update(words)
+                    for i in range(len(action_words) - 1):
+                        if action_words[i] not in _goal_stopwords and action_words[i+1] not in _goal_stopwords:
+                            _focus_phrases.append(f"{action_words[i]} {action_words[i+1]}")
 
             if _goal_keywords:
                 goal_boosted = 0
                 for result in results:
-                    preview_lower = result.get('preview', '').lower()
-                    # Focus goal keywords: 0.15 max boost (D7 convergence)
-                    focus_overlap = sum(1 for t in _focus_keywords if t in preview_lower) if _focus_keywords else 0
-                    # Other goal keywords: 0.05 boost (D6 convergence)
-                    other_overlap = sum(1 for t in (_goal_keywords - _focus_keywords) if t in preview_lower)
+                    # Use full content, not just preview (FINDING-19: was truncated to 150 chars)
+                    content_lower = result.get('content', result.get('preview', '')).lower()
+                    # Focus goal: phrase match (2x weight) + keyword match
+                    focus_phrase_hits = sum(1 for p in _focus_phrases if p in content_lower) if _focus_phrases else 0
+                    focus_kw_hits = sum(1 for t in _focus_keywords if t in content_lower) if _focus_keywords else 0
+                    # Weight: phrases worth 2x keywords
+                    focus_score = focus_phrase_hits * 2 + focus_kw_hits
 
-                    if focus_overlap > 0:
-                        boost = min(0.15, 0.05 * focus_overlap)
+                    # Other goals
+                    other_kw = _goal_keywords - _focus_keywords
+                    other_phrase_hits = sum(1 for p in _goal_phrases if p not in _focus_phrases and p in content_lower)
+                    other_kw_hits = sum(1 for t in other_kw if t in content_lower)
+                    other_score = other_phrase_hits * 2 + other_kw_hits
+
+                    if focus_score > 0:
+                        boost = min(0.15, 0.03 * focus_score)  # Finer granularity
                         result['score'] *= (1.0 + boost)
                         result['goal_boosted'] = True
+                        result['goal_boost_source'] = 'focus goal'
                         goal_boosted += 1
-                    elif other_overlap > 0:
-                        boost = min(0.05, 0.02 * other_overlap)
+                    elif other_score > 0:
+                        boost = min(0.05, 0.015 * other_score)
                         result['score'] *= (1.0 + boost)
                         result['goal_boosted'] = True
+                        result['goal_boost_source'] = 'active goal'
                         goal_boosted += 1
 
                 if _expl and goal_boosted:
                     _expl.add_step('goal_relevance_boost', goal_boosted, weight=0.15,
                                    context=f'{goal_boosted} results boosted for goal alignment '
-                                   f'({len(_focus_keywords)} focus kw, {len(_goal_keywords)} total)')
+                                   f'({len(_focus_keywords)} focus kw, {len(_focus_phrases)} focus phrases, {len(_goal_keywords)} total)')
     except Exception:
         pass
     _attention_stages.append({'stage': 'goal_relevance', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
@@ -798,6 +894,17 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
         pass  # Don't break search if knowledge graph unavailable
     _attention_stages.append({'stage': 'kg_expansion', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
+    # BUG-22 fix: Cap cumulative multiplicative bias at 3.0x original score.
+    # Pipeline stages can stack entity(2x) * resolution(1.25x) * evidence(1.2x) *
+    # goal(1.15x) * KG(1.5x) = 5.2x uncapped. Soft cap at 3.0x preserves ranking
+    # while preventing extreme outliers from dominating.
+    MAX_SCORE_MULTIPLIER = 3.0
+    for result in results:
+        original = result.get('original_score', result['score'])
+        if result['score'] > original * MAX_SCORE_MULTIPLIER:
+            result['score'] = original * MAX_SCORE_MULTIPLIER
+            result['score_capped'] = True
+
     # Sort by (boosted) score descending
     results.sort(key=lambda x: x["score"], reverse=True)
     top_results = results[:limit]
@@ -856,7 +963,7 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
             filtered = filtered[:5]
 
             if filtered:
-                # Batch-fetch content previews
+                # Batch-fetch content previews + noise filter (Spin fix)
                 fetch_ids = [c[0] for c in filtered]
                 previews = {}
                 try:
@@ -871,6 +978,10 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                                 previews[row['id']] = (row.get('content') or '')[:150]
                 except Exception:
                     pass
+
+                # Filter out noise memories from spread candidates
+                filtered = [(cid, score, prov, rel, depth) for cid, score, prov, rel, depth
+                            in filtered if not _is_noise_content(previews.get(cid, ''))]
 
                 for cid, score, prov, rel, depth in filtered:
                     top_results.append({
@@ -959,6 +1070,35 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
         _adb.kv_set('.attention_schema', existing[-20:])
     except Exception:
         pass
+
+    # === N5: INTEGRATIVE BINDING (BUG-18 fix: wire into production pipeline) ===
+    # Apply binding to search results so downstream consumers (memory_manager,
+    # thought_priming, session hooks) get bound representations, not raw dicts.
+    _ts = _time.monotonic()
+    _bind_count = 0
+    try:
+        from binding_layer import full_bind, minimal_bind, render_compact, BINDING_ENABLED
+        if BINDING_ENABLED and top_results:
+            for i, r in enumerate(top_results):
+                try:
+                    if i < 5:
+                        bound = full_bind(r)
+                    else:
+                        bound = minimal_bind(r)
+                    if bound:
+                        r['binding_strength'] = getattr(bound, 'binding_strength', 0.0)
+                        r['binding_level'] = getattr(bound, 'binding_level', 'minimal')
+                        r['retrieval_reasons'] = getattr(bound, 'retrieval_reasons', [])
+                        # Compact rendering for LLM context
+                        r['bound_context'] = render_compact(bound)
+                        _bind_count += 1
+                except Exception:
+                    pass
+    except ImportError:
+        pass  # Binding layer not available
+    except Exception:
+        pass
+    _attention_stages.append({'stage': 'integrative_binding', 'time_ms': round((_time.monotonic() - _ts) * 1000, 1)})
 
     return top_results
 

@@ -1020,6 +1020,38 @@ def save_markers():
     db.kv_set(KV_SOMATIC_MARKERS, markers.to_dict())
 
 
+def get_somatic_bias(memory_id: str) -> float:
+    """
+    FINDING-20 fix: Get somatic marker bias for a memory ID.
+    Used as System 1 pre-analytical signal in search pipeline.
+
+    Context keys: [memory_id] + entities from memory (if available).
+    Returns additive bias typically in range [-0.15, +0.15].
+    """
+    try:
+        cache = get_markers()
+        mood = get_mood()
+        # Primary: check marker for memory ID directly
+        bias = cache.get_bias([memory_id], mood.arousal)
+        if abs(bias) > 0.01:
+            # Scale to search-pipeline range (somatic bias should be gentle)
+            return max(-0.15, min(0.15, bias * 0.15))
+        # Secondary: try multi-hash (memory_id + type)
+        try:
+            db = get_db()
+            row = db.get_memory(memory_id)
+            if row:
+                mem_type = row.get('type', 'active')
+                multi_bias = cache.get_bias([memory_id, mem_type], mood.arousal)
+                if abs(multi_bias) > 0.01:
+                    return max(-0.15, min(0.15, multi_bias * 0.15))
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return 0.0
+
+
 def get_episodes() -> list[EmotionEpisode]:
     """Get active emotion episodes."""
     global _episodes
@@ -1367,6 +1399,12 @@ def get_affect_summary() -> str:
     parts = []
     parts.append(f"Mood: valence={mood.valence:+.2f}, arousal={mood.arousal:.2f}")
     parts.append(f"Tendency: {tendency.value}")
+
+    # Sprott: felt emotion is velocity of mood change, not absolute state
+    felt = mood.felt_emotion
+    if abs(felt) > 0.01:
+        direction = 'improving' if felt > 0 else 'worsening'
+        parts.append(f"Felt emotion: {direction} ({felt:+.3f}/step)")
 
     if episodes:
         labels = [e.label for e in episodes if e.is_active]

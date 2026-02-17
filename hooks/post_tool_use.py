@@ -502,16 +502,26 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
         # === N1.3: SOMATIC MARKER RECORDING ===
         # Record API outcomes as somatic markers for experience-based learning.
         # Markers learn which endpoints/platforms are reliable vs problematic.
+        # BUG-1 FIX: Was importing non-existent `learn_from_api_outcome`.
+        # affect_engine has `record_api_outcome(url, status_code, platform, response_time_ms)`.
+        # affect_system (Drift) has `learn_from_api_outcome(platform, action, success, ...)`.
         if api_type:
             try:
+                _record_api_fn = None
+                _use_record_api = False  # True = affect_engine style, False = affect_system style
                 try:
                     from affect_engine import record_api_outcome
+                    _record_api_fn = record_api_outcome
+                    _use_record_api = True
                 except ImportError:
                     try:
-                        from affect_system import record_api_outcome
+                        from affect_system import learn_from_api_outcome
+                        _record_api_fn = learn_from_api_outcome
+                        _use_record_api = False
                     except ImportError:
-                        record_api_outcome = None
-                if record_api_outcome:
+                        _record_api_fn = None
+
+                if _record_api_fn:
                     result_lower = tool_result.lower()
                     # Detect HTTP status from response
                     status = 200  # default: success
@@ -532,15 +542,63 @@ def process_for_memory(tool_name: str, tool_result: str, debug: bool = False, to
                             'httperror', 'urlerror', 'timeout']):
                         status = 500
                     # Extract URL if present in the command
-                    url = api_type  # fallback
+                    url = ''
                     if tool_command:
                         import re
                         url_match = re.search(r'https?://[^\s"\']+', tool_command)
                         if url_match:
                             url = url_match.group()
-                    record_api_outcome(url, status, platform=api_type)
+
+                    if _use_record_api:
+                        # affect_engine.record_api_outcome(url, status_code, platform, response_time_ms)
+                        _record_api_fn(
+                            url=url,
+                            status_code=status,
+                            platform=api_type,
+                        )
+                    else:
+                        # affect_system.learn_from_api_outcome(platform, action, success, ...)
+                        action = 'request'
+                        if any(w in result_lower for w in ['post ', 'create', 'submit']):
+                            action = 'write'
+                        elif any(w in result_lower for w in ['get ', 'fetch', 'list', 'read']):
+                            action = 'read'
+                        success = 200 <= status < 400
+                        _record_api_fn(
+                            platform=api_type,
+                            action=action,
+                            success=success,
+                            status_code=status,
+                            url=url,
+                        )
             except Exception:
                 pass
+
+        # === N3: DECISION TRACE (BUG-14 fix) ===
+        # Log recall-to-action associations when tool results reference recalled memories.
+        # This enables reconsolidation CFs to reason about behavioral consequences.
+        try:
+            ss = _get_mod("session_state")
+            if ss:
+                retrieved = ss.get_retrieved() if hasattr(ss, 'get_retrieved') else set()
+                if retrieved and tool_result:
+                    # Find memory IDs (8-char alnum) referenced in tool output
+                    referenced = set()
+                    for mid in retrieved:
+                        if mid in tool_result:
+                            referenced.add(mid)
+                    if referenced:
+                        cf = _get_mod("counterfactual_engine")
+                        if cf and hasattr(cf, 'log_decision_context'):
+                            action_desc = (tool_command or tool_name or 'unknown')[:200]
+                            outcome_desc = tool_result[:200] if tool_result else ''
+                            cf.log_decision_context(
+                                recall_ids=list(referenced),
+                                action=action_desc,
+                                outcome=outcome_desc,
+                            )
+        except Exception:
+            pass
 
         # === BEHAVIORAL TASTE TRACKING (feed-seen buffer) ===
         if api_type in ("moltx", "moltbook", "thecolony", "clawbr", "dead-internet",

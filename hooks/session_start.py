@@ -379,6 +379,70 @@ def _task_vitals(memory_dir, debug):
     return parts
 
 
+def _bind_all_memories(memory_dir, all_results, db=None):
+    """BUG-10 fix: Use binding layer for rich narrative rendering of primed memories.
+
+    Attempts bind_batch (Spin) or bind_results (Drift), with render_narrative for
+    full-bound memories and render_compact for minimal-bound. Falls back to empty
+    dict if binding is unavailable.
+
+    Returns: dict of {memory_id: rendered_text}
+    """
+    narratives = {}
+    if not all_results:
+        return narratives
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+
+        # Import binding layer — try both Spin and Drift API names
+        _bind = _render_full = _render_min = None
+        try:
+            from binding_layer import bind_batch, render_narrative, render_compact, BINDING_ENABLED
+            if BINDING_ENABLED:
+                _bind = bind_batch
+                _render_full = render_narrative
+                _render_min = render_compact
+        except ImportError:
+            try:
+                from binding_layer import bind_results, render_narrative, render_compact, BINDING_ENABLED
+                if BINDING_ENABLED:
+                    _bind = bind_results
+                    _render_full = render_narrative
+                    _render_min = render_compact
+            except ImportError:
+                pass
+
+        if not _bind:
+            return narratives
+
+        # Run batch binding (full for top 5, minimal for rest)
+        # Spin's bind_batch accepts db= kwarg, Drift's bind_results does not
+        try:
+            bound_list = _bind(all_results, db=db) if db else _bind(all_results)
+        except TypeError:
+            # Drift's bind_results doesn't accept db= kwarg
+            bound_list = _bind(all_results)
+
+        for bm in bound_list:
+            try:
+                # Use full narrative for fully-bound, compact for minimal
+                if hasattr(bm, 'binding_level') and bm.binding_level == 'full' and _render_full:
+                    text = _render_full(bm)
+                elif _render_min:
+                    text = _render_min(bm)
+                else:
+                    continue
+                if text:
+                    narratives[bm.id] = text
+            except Exception:
+                pass
+
+    except Exception:
+        pass
+    return narratives
+
+
 def _task_priming(memory_dir, debug):
     """Get intelligent priming candidates. Returns (context_parts, recall_ids, curiosity_ids)."""
     parts = []
@@ -392,99 +456,119 @@ def _task_priming(memory_dir, debug):
         candidates = json.loads(output)
         parts.append("\n=== RECENT MEMORIES (continuity priming) ===")
 
-        # N5 v1.1: Enrichment — valence + evidence_type + contacts + contradictions
+        db = _get_db_for_hook(memory_dir)
+
+        # BUG-10 fix: Build flat result list for binding layer (all categories)
+        _all_for_binding = []
+        for cat in ('activated', 'cooccurring', 'domain_primed', 'curiosity'):
+            for m in candidates.get(cat, []):
+                _all_for_binding.append({
+                    'id': m.get('id', ''),
+                    'score': m.get('activation_score', m.get('curiosity_score', 0.5)),
+                    'content': m.get('preview', '')[:400],
+                })
+
+        # Attempt batch binding — full for top 5, minimal for rest
+        _bound = _bind_all_memories(memory_dir, _all_for_binding, db=db)
+        _use_binding = bool(_bound)
+
+        # N5 v1.1 fallback: Enrichment — valence + evidence_type + contacts + contradictions
+        # Only compute if binding is NOT available (binding subsumes this)
         _enrichments = {}
-        try:
-            db = _get_db_for_hook(memory_dir)
-            if db:
-                import psycopg2.extras
-                all_ids = []
-                for cat in ('activated', 'cooccurring', 'domain_primed', 'curiosity'):
-                    for m in candidates.get(cat, []):
-                        all_ids.append(m['id'])
+        if not _use_binding:
+            try:
+                if db:
+                    import psycopg2.extras
+                    all_ids = [r['id'] for r in _all_for_binding]
 
-                if all_ids:
-                    # Batch fetch all memory rows
-                    mem_rows = {}
-                    with db._conn() as conn:
-                        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                            cur.execute(
-                                f"SELECT * FROM {db._table('memories')} WHERE id = ANY(%s)",
-                                (all_ids,)
-                            )
-                            for row in cur.fetchall():
-                                mem_rows[row['id']] = dict(row)
-
-                    # Batch fetch typed edges (contradictions/supports)
-                    edge_counts = {}  # {id: {contradicts: N, supports: N, superseded: bool}}
-                    try:
+                    if all_ids:
+                        # Batch fetch all memory rows
+                        mem_rows = {}
                         with db._conn() as conn:
                             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                                cur.execute(f"""
-                                    SELECT target_id, relationship, COUNT(*) as cnt
-                                    FROM {db._table('typed_edges')}
-                                    WHERE target_id = ANY(%s)
-                                    AND relationship IN ('contradicts', 'supports', 'supersedes')
-                                    GROUP BY target_id, relationship
-                                """, (all_ids,))
+                                cur.execute(
+                                    f"SELECT * FROM {db._table('memories')} WHERE id = ANY(%s)",
+                                    (all_ids,)
+                                )
                                 for row in cur.fetchall():
-                                    ec = edge_counts.setdefault(row['target_id'], {})
-                                    if row['relationship'] == 'supersedes':
-                                        ec['superseded'] = True
-                                    else:
-                                        ec[row['relationship']] = row['cnt']
-                    except Exception:
-                        pass
+                                    mem_rows[row['id']] = dict(row)
 
-                    for mid in all_ids:
-                        row = mem_rows.get(mid)
-                        if not row:
-                            continue
-                        extra = row.get('extra_metadata') or {}
-                        v = float(row.get('valence') or 0.0)
-                        ev = extra.get('evidence_type', '')
-                        entities = row.get('entities') or {}
-                        agents = entities.get('agents', [])
-                        ec = edge_counts.get(mid, {})
+                        # Batch fetch typed edges (contradictions/supports)
+                        edge_counts = {}  # {id: {contradicts: N, supports: N, superseded: bool}}
+                        try:
+                            with db._conn() as conn:
+                                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                                    cur.execute(f"""
+                                        SELECT target_id, relationship, COUNT(*) as cnt
+                                        FROM {db._table('typed_edges')}
+                                        WHERE target_id = ANY(%s)
+                                        AND relationship IN ('contradicts', 'supports', 'supersedes')
+                                        GROUP BY target_id, relationship
+                                    """, (all_ids,))
+                                    for row in cur.fetchall():
+                                        ec = edge_counts.setdefault(row['target_id'], {})
+                                        if row['relationship'] == 'supersedes':
+                                            ec['superseded'] = True
+                                        else:
+                                            ec[row['relationship']] = row['cnt']
+                        except Exception:
+                            pass
 
-                        annot_parts = []
-                        if ec.get('superseded'):
-                            annot_parts.append('SUPERSEDED')
-                        if ev and ev != 'claim':
-                            annot_parts.append(ev)
-                        if abs(v) > 0.05:
-                            annot_parts.append(f'v:{v:+.2f}')
-                        if agents:
-                            annot_parts.append(f'@{agents[0]}')
-                        contra = ec.get('contradicts', 0)
-                        if contra > 0:
-                            annot_parts.append(f'{contra} contradicts')
-                        support = ec.get('supports', 0)
-                        if support > 0:
-                            annot_parts.append(f'{support} supports')
+                        for mid in all_ids:
+                            row = mem_rows.get(mid)
+                            if not row:
+                                continue
+                            extra = row.get('extra_metadata') or {}
+                            v = float(row.get('valence') or 0.0)
+                            ev = extra.get('evidence_type', '')
+                            entities = row.get('entities') or {}
+                            agents = entities.get('agents', [])
+                            ec = edge_counts.get(mid, {})
 
-                        if annot_parts:
-                            _enrichments[mid] = f" ({', '.join(annot_parts)})"
-        except Exception:
-            pass
+                            annot_parts = []
+                            if ec.get('superseded'):
+                                annot_parts.append('SUPERSEDED')
+                            if ev and ev != 'claim':
+                                annot_parts.append(ev)
+                            if abs(v) > 0.05:
+                                annot_parts.append(f'v:{v:+.2f}')
+                            if agents:
+                                annot_parts.append(f'@{agents[0]}')
+                            contra = ec.get('contradicts', 0)
+                            if contra > 0:
+                                annot_parts.append(f'{contra} contradicts')
+                            support = ec.get('supports', 0)
+                            if support > 0:
+                                annot_parts.append(f'{support} supports')
+
+                            if annot_parts:
+                                _enrichments[mid] = f" ({', '.join(annot_parts)})"
+            except Exception:
+                pass
+
+        # Helper: render a memory using bound narrative or fallback enrichment
+        def _render(mem, category_tag=''):
+            mid = mem.get('id', '')
+            if _use_binding and mid in _bound:
+                # Binding narrative already includes ID, score, evidence, valence, etc.
+                return _bound[mid]
+            else:
+                annot = _enrichments.get(mid, '')
+                tag = f" ({category_tag})" if category_tag else ''
+                preview = mem.get('preview', '')[:400 if not category_tag else 300]
+                return f"[{mid}]{tag}{annot}\n{preview}"
 
         for mem in candidates.get('activated', [])[:4]:
-            annot = _enrichments.get(mem['id'], '')
-            parts.append(f"\n[{mem['id']}]{annot}")
-            parts.append(mem.get('preview', '')[:400])
+            parts.append(f"\n{_render(mem)}")
             recall_ids.append(mem['id'])
 
         for mem in candidates.get('cooccurring', [])[:3]:
-            annot = _enrichments.get(mem['id'], '')
-            parts.append(f"\n[{mem['id']}]{annot}")
-            parts.append(mem.get('preview', '')[:300])
+            parts.append(f"\n{_render(mem)}")
             recall_ids.append(mem['id'])
 
         for mem in candidates.get('domain_primed', []):
             domain = mem.get('domain', '?')
-            annot = _enrichments.get(mem['id'], '')
-            parts.append(f"\n[{mem['id']}] (domain-primed: {domain}, read-only){annot}")
-            parts.append(mem.get('preview', '')[:300])
+            parts.append(f"\n{_render(mem, f'domain-primed: {domain}, read-only')}")
             recall_ids.append(mem['id'])
 
         # Curiosity targets: isolated/dead memories that need edges.
@@ -493,9 +577,7 @@ def _task_priming(memory_dir, debug):
         for mem in candidates.get('curiosity', []):
             reason = mem.get('reason', 'isolated')
             score = mem.get('curiosity_score', 0)
-            annot = _enrichments.get(mem['id'], '')
-            parts.append(f"\n[{mem['id']}] (curiosity: {reason}, score={score:.2f}){annot}")
-            parts.append(mem.get('preview', '')[:300])
+            parts.append(f"\n{_render(mem, f'curiosity: {reason}, score={score:.2f}')}")
             curiosity_ids.append(mem['id'])
     except Exception:
         pass
@@ -832,8 +914,17 @@ def _task_intentions(memory_dir):
     try:
         sys.path.insert(0, str(memory_dir))
         from temporal_intentions import check_and_format
-        # Context includes current date + platform info
+        # Context includes current date + platform info + active goal types
         context = f"date={datetime.now().strftime('%Y-%m-%d')} session_start"
+        # BUG-28 fix: Include active goal types so goal-bridged intentions can trigger
+        try:
+            from goal_generator import get_active_goals as _ti_goals
+            active_goals = _ti_goals()
+            if active_goals:
+                goal_types = set(g.get('goal_type', '') for g in active_goals)
+                context += " goal " + " ".join(goal_types)
+        except Exception:
+            pass
         output = check_and_format(context)
         if output:
             parts.append(output)
@@ -1121,6 +1212,15 @@ def load_drift_memory_context(debug: bool = False) -> str:
                 ]
                 if aff.active_emotion:
                     affect_lines.append(f"Active emotion: {aff.active_emotion}")
+                # DEAD WIRE 2 fix: expose felt_emotion (Sprott dx/dt)
+                if hasattr(aff, 'felt_emotion') and aff.felt_emotion != 0.0:
+                    affect_lines.append(f"Felt emotion (dx/dt): {aff.felt_emotion:+.4f}")
+                # DEAD WIRE 4 fix: expose Yerkes-Dodson System 2 effectiveness
+                if hasattr(aff, 'system2_effectiveness'):
+                    affect_lines.append(f"System2 effectiveness: {aff.system2_effectiveness:.2f}")
+                # DEAD WIRE 5 fix: expose arousal consolidation boost
+                if hasattr(aff, 'arousal_consolidation_boost') and aff.arousal_consolidation_boost > 0.01:
+                    affect_lines.append(f"Consolidation boost: {aff.arousal_consolidation_boost:.3f}")
                 if aff.parameter_adjustments:
                     adj_str = ', '.join(f'{k}={v}' for k, v in aff.parameter_adjustments.items())
                     affect_lines.append(f"Behavioral adjustments: {adj_str}")
@@ -1189,10 +1289,19 @@ def load_drift_memory_context(debug: bool = False) -> str:
                 'has_curiosity_targets': bool(curiosity_ids),
                 'has_domain_primed': any('domain-primed' in str(p) for p in priming_parts),
             })
+            # BUG-11 fix: Query actual contact reliability from contact_models
+            _top_contact_reliability = 0.5
+            try:
+                from contact_models import get_summary as _contact_summary
+                _contacts = _contact_summary()
+                if _contacts:
+                    _top_contact_reliability = max(c.get('reliability', 0.5) for c in _contacts)
+            except Exception:
+                pass
             _cand('social', social_parts, {
                 'new_posts_detected': bool(social_parts),
                 'days_since_interaction': 0 if social_parts else 7,
-                'top_contact_reliability': 0.6,
+                'top_contact_reliability': _top_contact_reliability,
             })
             _cand('episodic', episodic_parts, {
                 'is_today': bool(episodic_parts),
@@ -1212,13 +1321,32 @@ def load_drift_memory_context(debug: bool = False) -> str:
             _cand('platform', platform_parts, {
                 'significant_change': False,
             })
+            # BUG-11 fix: Query actual Q-value stats from q_value_engine
+            _avg_q_value = 0.5
+            try:
+                from q_value_engine import q_stats as _q_stats_fn
+                _qs = _q_stats_fn()
+                if _qs and 'avg_q' in _qs:
+                    _avg_q_value = _qs['avg_q']
+            except Exception:
+                pass
             _cand('excavation', excavation_parts, {
                 'excavated_count': len(excavation_ids) if excavation_ids else 0,
-                'avg_q_value': 0.5,
+                'avg_q_value': _avg_q_value,
             })
+            # BUG-11 fix: Extract actual max similarity from consolidation output
+            _max_sim = 0.0
+            for _cp in consolidation_parts:
+                _cs = str(_cp)
+                if 'Similarity:' in _cs:
+                    try:
+                        _sim_val = float(_cs.split('Similarity:')[1].split(')')[0].strip())
+                        _max_sim = max(_max_sim, _sim_val)
+                    except (ValueError, IndexError):
+                        pass
             _cand('consolidation', consolidation_parts, {
                 'candidate_count': sum(1 for p in consolidation_parts if 'Similarity:' in str(p)),
-                'max_similarity': 0.9,
+                'max_similarity': _max_sim if _max_sim > 0 else 0.5,
             })
             _cand('intentions', intentions_parts, {
                 'triggered_count': sum(1 for p in intentions_parts if str(p).strip().startswith('[')),
@@ -1234,8 +1362,16 @@ def load_drift_memory_context(debug: bool = False) -> str:
             _cand('phone', phone_parts, {
                 'has_sensor_data': bool(phone_parts),
             })
+            # BUG-11 fix: Detect if any entities in priming are new
+            _has_new_entities = False
+            try:
+                if entity_parts:
+                    _ent_text = '\n'.join(str(p) for p in entity_parts)
+                    _has_new_entities = 'new' in _ent_text.lower() or 'first' in _ent_text.lower()
+            except Exception:
+                pass
             _cand('entities', entity_parts, {
-                'new_entities': False,
+                'new_entities': _has_new_entities,
             })
             _cand('encounters', encounter_parts, {
                 'encounter_count': sum(1 for p in encounter_parts if str(p).strip().startswith('  20')),

@@ -191,10 +191,13 @@ def prime_memories_from_prompt(prompt: str, session_id: str) -> str:
     except Exception:
         pass  # Never block prompt for recall registration
 
-    # Format for context injection
+    # Format for context injection (N5: use bound context when available)
     lines = ["", "=== MEMORY TRIGGERED ==="]
     for mem in relevant:
-        lines.append(f"[{mem['score']:.2f}] {mem['id']}: {mem['preview'][:300]}...")
+        if mem.get('bound_context'):
+            lines.append(mem['bound_context'])
+        else:
+            lines.append(f"[{mem['score']:.2f}] {mem['id']}: {mem['preview'][:300]}...")
     lines.append("========================", )
 
     return "\n".join(lines)

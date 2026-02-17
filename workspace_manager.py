@@ -43,10 +43,15 @@ AROUSAL_BUDGET_RANGE = 500   # ±500 tokens based on arousal
 CATEGORIES = frozenset({'memory', 'social', 'meta', 'prediction', 'action', 'embodiment', 'imagination'})
 DIVERSITY_PENALTY = 0.10     # Penalty for 2nd+ module from same category
 
-# Suppression fatigue
+# Suppression fatigue (losers accumulate bonus)
 FATIGUE_THRESHOLD = 3        # After N consecutive suppressions...
 FATIGUE_BONUS = 0.08         # ...add this per extra suppression
 FATIGUE_MAX = 0.24           # Cap the bonus
+
+# Winner fatigue / habituation (winners accumulate penalty)
+WINNER_FATIGUE_THRESHOLD = 2    # After N consecutive wins...
+WINNER_FATIGUE_PENALTY = 0.05   # ...subtract this per extra win
+WINNER_FATIGUE_MAX = 0.15       # Cap the penalty
 
 # DB keys
 _SUPPRESSION_KEY = '.workspace_suppression'
@@ -114,6 +119,7 @@ class WorkspaceResult:
     budget_used: int
     budget_total: int
     arousal: float
+    dropped_guaranteed: list = field(default_factory=list)  # BUG-12: categories that lost guaranteed slot to budget
 
 
 # ─── Arousal-Modulated Budget ────────────────────────────────────────────────
@@ -368,6 +374,17 @@ def _get_fatigue_bonus(module: str) -> float:
     return min(FATIGUE_MAX, extra * FATIGUE_BONUS)
 
 
+def _get_winner_fatigue_penalty(module: str) -> float:
+    """Winner habituation: modules that broadcast repeatedly get penalized."""
+    history = _load_suppression_history()
+    entry = history.get(module, {})
+    consecutive_wins = entry.get('consecutive_wins', 0)
+    if consecutive_wins <= WINNER_FATIGUE_THRESHOLD:
+        return 0.0
+    extra = consecutive_wins - WINNER_FATIGUE_THRESHOLD
+    return min(WINNER_FATIGUE_MAX, extra * WINNER_FATIGUE_PENALTY)
+
+
 def _update_suppression(winners: list, suppressed: list):
     """Update suppression history after competition."""
     history = _load_suppression_history()
@@ -377,7 +394,8 @@ def _update_suppression(winners: list, suppressed: list):
         mod = c.module if isinstance(c, WorkspaceCandidate) else c.get('module', '')
         prev = history.get(mod, {'total_suppressed': 0})
         history[mod] = {
-            'consecutive': 0,
+            'consecutive': 0,  # Reset suppression streak
+            'consecutive_wins': prev.get('consecutive_wins', 0) + 1,
             'last_broadcast': now,
             'total_suppressed': prev.get('total_suppressed', 0),
         }
@@ -387,6 +405,7 @@ def _update_suppression(winners: list, suppressed: list):
         prev = history.get(mod, {'consecutive': 0, 'total_suppressed': 0})
         history[mod] = {
             'consecutive': prev.get('consecutive', 0) + 1,
+            'consecutive_wins': 0,  # Reset win streak
             'last_broadcast': prev.get('last_broadcast', ''),
             'total_suppressed': prev.get('total_suppressed', 0) + 1,
         }
@@ -427,12 +446,16 @@ def compete(candidates: list, budget_tokens: int) -> WorkspaceResult:
             guaranteed[cat] = best
 
     # Phase 2: Start with guaranteed slots, smallest first
+    # BUG-12 fix: Track dropped guaranteed slots for transparency
     winners = []
+    dropped_guaranteed = []
     used = 0
     for cat, c in sorted(guaranteed.items(), key=lambda kv: kv[1].token_estimate):
         if used + c.token_estimate <= budget_tokens:
             winners.append(c)
             used += c.token_estimate
+        else:
+            dropped_guaranteed.append((cat, c))
 
     # Phase 3: Fill remaining budget from non-guaranteed pool
     winner_set = set(id(c) for c in winners)
@@ -444,11 +467,23 @@ def compete(candidates: list, budget_tokens: int) -> WorkspaceResult:
         if c.category in winner_cats:
             c.salience = max(0.0, c.salience - DIVERSITY_PENALTY)
 
-    # Apply fatigue bonus
+    # Apply suppression fatigue bonus (losers get boost)
     for c in pool:
         bonus = _get_fatigue_bonus(c.module)
         if bonus > 0:
             c.salience = min(1.0, c.salience + bonus)
+
+    # Apply winner fatigue penalty (dominant modules get penalized)
+    for c in pool:
+        penalty = _get_winner_fatigue_penalty(c.module)
+        if penalty > 0:
+            c.salience = max(0.0, c.salience - penalty)
+
+    # Also apply winner fatigue to guaranteed winners (reduce monopolization)
+    for c in winners:
+        penalty = _get_winner_fatigue_penalty(c.module)
+        if penalty > 0:
+            c.salience = max(0.0, c.salience - penalty)
 
     pool.sort(key=lambda x: x.salience, reverse=True)
     for c in pool:
@@ -467,6 +502,7 @@ def compete(candidates: list, budget_tokens: int) -> WorkspaceResult:
         budget_used=used,
         budget_total=budget_tokens,
         arousal=0.0,  # Filled by caller
+        dropped_guaranteed=[cat for cat, _ in dropped_guaranteed],  # BUG-12: transparency
     )
 
 
@@ -505,6 +541,10 @@ def log_broadcast(result: WorkspaceResult, arousal: float, session_id: str = '')
                 for c in result.suppressed
             ],
         }
+
+        # BUG-12: Log dropped guaranteed categories
+        if result.dropped_guaranteed:
+            entry['dropped_guaranteed'] = result.dropped_guaranteed
 
         # Check fatigue applied
         fatigue = {}

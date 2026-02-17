@@ -44,7 +44,7 @@ if __name__ == '__main__':
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 MEMORY_ROOT = Path(__file__).parent
-SESSION_HOURS = 4  # approximate hours per session
+SESSION_HOURS = 18  # approximate hours per session (actual: ~1.3 sessions/day = ~18h)
 
 # DB path for memorydatabase
 _DB_ROOT = Path(__file__).parent.parent.parent / "memorydatabase" / "database"
