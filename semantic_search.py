@@ -29,6 +29,10 @@ MEMORY_DIR = Path(__file__).parent
 # - Qwen3-Embedding-8B: 4096
 # We don't enforce dimension - just compare what we have
 
+# Ablation hooks — set by ablation_framework.py StageDisabler, never by production code
+_ABLATION_SKIP_GRAVITY = False
+_ABLATION_SKIP_CURIOSITY = False
+
 
 def get_embedding_openai(text: str, model: str = "text-embedding-3-small") -> Optional[list[float]]:
     """Get embedding from OpenAI API."""
@@ -521,7 +525,7 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
                  'have', 'did', 'on', 'in', 'for', 'to', 'of', 'and', 'or', 'how',
                  'why', 'where', 'when', 'who', 'should', 'today', 'done', 'been'}
     key_terms = query_terms - stopwords
-    if key_terms and len(key_terms) >= 1:
+    if key_terms and len(key_terms) >= 1 and not _ABLATION_SKIP_GRAVITY:
         for result in results:
             preview_lower = result.get("preview", "").lower()
             # Check if ANY key term appears in the preview
@@ -708,6 +712,8 @@ def search_memories(query: str, limit: int = 5, threshold: float = 0.3,
     # the system to build connections in sparse graph regions
     _ts = _time.monotonic()
     try:
+        if _ABLATION_SKIP_CURIOSITY:
+            raise ImportError('Ablation: curiosity_boost disabled')
         from curiosity_engine import _build_degree_map, LOW_DEGREE_THRESHOLD
         _degree_map = _build_degree_map()
         if _degree_map:

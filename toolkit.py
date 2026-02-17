@@ -322,6 +322,11 @@ def build_registry():
         Command("causal-list", "memory", "List all causal hypotheses with confidence", "causal_model", "list"),
         Command("causal-health", "memory", "Causal model health check", "causal_model", "health"),
         Command("causal-seed", "memory", "Bootstrap initial hypotheses from experience", "causal_model", "seed"),
+        # N6 Verification: Ablation Testing
+        Command("ablation-stages", "experiment", "List all ablatable pipeline stages", "ablation_framework", "stages"),
+        Command("ablation-benchmark", "experiment", "Run single-stage ablation sweep", "ablation_framework", "benchmark"),
+        Command("ablation-report", "experiment", "Generate ablation analysis report", "ablation_framework", "report"),
+        Command("ablation-analyze", "experiment", "Analyze passive live logs", "ablation_framework", "analyze"),
     ]
 
     # === LESSONS ===
@@ -658,6 +663,7 @@ def cmd_health():
         ("goal_generator", "Volitional goal generation (N4)"),
         ("inner_monologue", "Inner monologue engine (N6)"),
         ("causal_model", "Causal hypothesis engine (N6)"),
+        ("ablation_framework", "Ablation testing framework (N6 verification)"),
     ]
 
     # Social subpackage
