@@ -469,6 +469,117 @@ def cmd_history():
         print()
 
 
+async def publish_sts_v2() -> dict | None:
+    """
+    Publish STS v2.0 Verifiable Presentation to Nostr as a Kind 1 event.
+    Generates the full VP with all credentials and publishes as structured JSON.
+    """
+    try:
+        from sts_v2 import build_verifiable_presentation
+    except ImportError:
+        sys.path.insert(0, str(MEMORY_DIR))
+        from sts_v2 import build_verifiable_presentation
+
+    vp = build_verifiable_presentation()
+    if not vp:
+        print("Failed to generate STS v2.0 VP.")
+        return None
+
+    # Count credentials and extract key fields
+    cred_count = len(vp.get("verifiableCredential", []))
+    holder = vp.get("holder", "?")
+
+    # Summarize for human-readable event text
+    cog_cred = next((c for c in vp["verifiableCredential"]
+                     if "CognitiveIdentityCredential" in c.get("type", [])), None)
+    taste_cred = next((c for c in vp["verifiableCredential"]
+                       if "TasteCredential" in c.get("type", [])), None)
+    op_cred = next((c for c in vp["verifiableCredential"]
+                    if "OperationalTrustCredential" in c.get("type", [])), None)
+
+    lines = [
+        "STS v2.0 — Structured Trust Schema (W3C Verifiable Credentials)",
+        f"holder: {holder}",
+        f"credentials: {cred_count}",
+        "",
+    ]
+    if cog_cred:
+        cs = cog_cred["credentialSubject"]
+        lines.append(f"Cognitive Identity: {cs.get('nodeCount', 0)} nodes, {cs.get('edgeCount', 0)} edges, Gini {cs.get('giniCoefficient', 0)}")
+        lines.append(f"  Topology hash: {cs.get('topologyHash', '?')[:32]}...")
+        lines.append(f"  Hubs: {cs.get('hubOrdering', [])}")
+    if taste_cred:
+        cs = taste_cred["credentialSubject"]
+        lines.append(f"Taste: {cs.get('rejectionCount', 0)} rejections")
+        lines.append(f"  Taste hash: {cs.get('tasteHash', '?')[:32]}...")
+    if op_cred:
+        cs = op_cred["credentialSubject"]
+        lines.append(f"Operational: {cs.get('memoryCount', 0)} memories, {cs.get('daysActive', 0)} days, {len(cs.get('platforms', []))} platforms")
+    lines.append("")
+    lines.append(f"Full VP JSON attached as #sts-v2 tagged event.")
+    lines.append(f"Schema: https://driftcornwall.github.io/drift-memory/sts/v2")
+    lines.append(f"Repo: https://github.com/driftcornwall/drift-memory")
+
+    content = "\n".join(lines)
+
+    keys = load_or_create_keys()
+    signer = NostrSigner.keys(keys)
+    client = Client(signer)
+
+    for relay in RELAYS:
+        try:
+            await client.add_relay(RelayUrl.parse(relay))
+        except Exception as e:
+            print(f"  Warning: Could not add relay {relay}: {e}")
+
+    print("Connecting to relays...")
+    await client.connect()
+
+    builder = EventBuilder(Kind(1), content).tags([
+        Tag.hashtag("sts-v2"),
+        Tag.hashtag("drift-memory"),
+        Tag.hashtag("verifiable-credentials"),
+        Tag.hashtag("agent-identity"),
+        Tag.hashtag("w3c-vc"),
+    ])
+
+    print("Publishing STS v2.0 VP to Nostr...")
+    output = await client.send_event_builder(builder)
+
+    event_id_hex = output.id.to_hex()
+    event_id_bech32 = output.id.to_bech32()
+    success_relays = [str(r) for r in output.success]
+    failed_relays = {str(k): str(v) for k, v in output.failed.items()} if output.failed else {}
+
+    await client.disconnect()
+
+    result = {
+        "type": "sts_v2",
+        "event_id_hex": event_id_hex,
+        "event_id_bech32": event_id_bech32,
+        "holder": holder,
+        "credential_count": cred_count,
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "public_key": keys.public_key().to_bech32(),
+        "success_relays": success_relays,
+        "failed_relays": failed_relays,
+        "nostr_link": f"https://njump.me/{event_id_bech32}",
+    }
+
+    save_history_entry(result)
+
+    print(f"\nSTS v2.0 VP published to Nostr!")
+    print(f"  Holder:        {holder}")
+    print(f"  Credentials:   {cred_count}")
+    print(f"  Event ID:      {event_id_bech32}")
+    print(f"  Link:          https://njump.me/{event_id_bech32}")
+    print(f"  Relays OK:     {len(success_relays)}/{len(RELAYS)}")
+    if failed_relays:
+        print(f"  Failed:        {failed_relays}")
+
+    return result
+
+
 def cmd_identity():
     """Show Drift's Nostr identity."""
     keys = load_or_create_keys()
@@ -491,6 +602,10 @@ if __name__ == "__main__":
         result = asyncio.run(publish_dossier())
         if result:
             print("\nDone. Full identity dossier is now on Nostr.")
+    elif command == "publish-sts-v2":
+        result = asyncio.run(publish_sts_v2())
+        if result:
+            print("\nDone. STS v2.0 VP is now on Nostr.")
     elif command == "needs-publish":
         if needs_dossier_publish():
             print("true")
@@ -513,5 +628,5 @@ if __name__ == "__main__":
         cmd_identity()
     else:
         print(f"Unknown command: {command}")
-        print("Commands: publish, publish-dossier, needs-publish, verify EVENT_ID, history, latest-link, identity")
+        print("Commands: publish, publish-dossier, publish-sts-v2, needs-publish, verify EVENT_ID, history, latest-link, identity")
         sys.exit(1)

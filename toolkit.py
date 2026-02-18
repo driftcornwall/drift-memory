@@ -75,6 +75,8 @@ def build_registry():
         Command("rejections", "identity", "List rejections", "rejection_log", "list"),
         Command("nostr-publish", "identity", "Publish attestation to Nostr", "nostr_attestation", "publish"),
         Command("nostr-dossier", "identity", "Publish full dossier to Nostr", "nostr_attestation", "publish-dossier"),
+        Command("sts-v2", "identity", "Generate STS v2.0 W3C Verifiable Presentation", "sts_v2", "generate"),
+        Command("sts-v2-publish", "identity", "Generate + publish STS v2.0 to Nostr", "nostr_attestation", "publish-sts-v2"),
         Command("morning-post", "identity", "Daily proof-of-life post", "morning_post", "main"),
         Command("visualize", "identity", "Brain graph visualization", "brain_visualizer", "main"),
     ]
