@@ -124,18 +124,57 @@ def collect_vitals():
         m["fingerprint_edges"] = 0
         m["identity_drift"] = 0.0
 
-    # --- SESSION RECALLS (granular by source, from DB KV) ---
-    session_raw = db.kv_get('.session_state')
-    session = {}
-    if session_raw:
-        session = json.loads(session_raw) if isinstance(session_raw, str) else session_raw
-    retrieved = session.get('retrieved', [])
-    m["session_recalls"] = len(retrieved) if isinstance(retrieved, list) else 0
-    by_source = session.get('recalls_by_source', {})
-    m["recalls_manual"] = len(by_source.get('manual', []))
-    m["recalls_start_priming"] = len(by_source.get('start_priming', []))
-    m["recalls_thought_priming"] = len(by_source.get('thought_priming', []))
-    m["recalls_prompt_priming"] = len(by_source.get('prompt_priming', []))
+    # --- SESSION RECALLS (from durable session_recalls table) ---
+    # Reads from session_recalls table which gets direct INSERTs per recall,
+    # immune to the async race where the consolidation daemon reads .session_state
+    # KV after the next session has already overwritten it.
+    # Uses .session_state start time as window; falls back to 4h window.
+    m["session_recalls"] = 0
+    m["recalls_manual"] = 0
+    m["recalls_start_priming"] = 0
+    m["recalls_thought_priming"] = 0
+    m["recalls_prompt_priming"] = 0
+    try:
+        # Determine session start time from KV (set by session_start hook)
+        session_start = None
+        session_raw = db.kv_get('.session_state')
+        if session_raw:
+            ss_data = json.loads(session_raw) if isinstance(session_raw, str) else session_raw
+            started_str = ss_data.get('started')
+            if started_str:
+                from datetime import datetime as _dt, timezone as _tz
+                session_start = _dt.fromisoformat(started_str)
+
+        with db._conn() as conn:
+            with conn.cursor() as cur:
+                if session_start:
+                    # 60s buffer: save() sets 'started' AFTER add_retrieved(),
+                    # so prompt_priming recalls can predate the start timestamp.
+                    from datetime import timedelta as _td
+                    cur.execute(
+                        f"SELECT source, count(*) FROM {db._table('session_recalls')} "
+                        f"WHERE recalled_at >= %s GROUP BY source",
+                        (session_start - _td(seconds=60),)
+                    )
+                else:
+                    # Fallback: 4h window (matches SESSION_TIMEOUT_HOURS)
+                    cur.execute(
+                        f"SELECT source, count(*) FROM {db._table('session_recalls')} "
+                        f"WHERE recalled_at >= NOW() - interval '4 hours' GROUP BY source"
+                    )
+                for row in cur.fetchall():
+                    src, cnt = row[0], row[1]
+                    m["session_recalls"] += cnt
+                    if src == 'manual':
+                        m["recalls_manual"] = cnt
+                    elif src == 'start_priming':
+                        m["recalls_start_priming"] = cnt
+                    elif src == 'thought_priming':
+                        m["recalls_thought_priming"] = cnt
+                    elif src == 'prompt_priming':
+                        m["recalls_prompt_priming"] = cnt
+    except Exception:
+        pass  # Defaults to 0 on any DB error
 
     # --- SOCIAL (DB KV) ---
     # Keys match social_memory.py: KV_MY_REPLIES = '.social_my_replies', KV_INDEX = '.social_index'

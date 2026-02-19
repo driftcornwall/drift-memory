@@ -145,6 +145,19 @@ def categorize_text(text):
     return 'identity'
 
 
+def mine_from_source(source: str):
+    """Dispatcher for consolidation daemon — maps source name to mining function."""
+    dispatch = {
+        "memory": mine_memory_md,
+        "rejections": mine_rejections,
+        "hubs": mine_hubs,
+    }
+    fn = dispatch.get(source)
+    if fn:
+        return fn()
+    return []
+
+
 def mine_memory_md():
     """Extract lessons from MEMORY.md Common Mistakes section."""
     # Try multiple possible locations

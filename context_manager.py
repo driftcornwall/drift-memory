@@ -181,9 +181,9 @@ def _project_who(l0: dict, cache: dict) -> dict:
             continue
         id1, id2 = parts
 
-        edge_contacts = set(e.get('contact_context', []))
-        c1 = set(cache.get(id1, {}).get('contact_context', []))
-        c2 = set(cache.get(id2, {}).get('contact_context', []))
+        edge_contacts = set(e.get('contact_context') or [])
+        c1 = set(cache.get(id1, {}).get('contact_context') or [])
+        c2 = set(cache.get(id2, {}).get('contact_context') or [])
         all_c = edge_contacts | c1 | c2
 
         if not all_c:
@@ -215,8 +215,8 @@ def _project_what(l0: dict, cache: dict, topic: str = None) -> dict:
         edge_shared = set(tc.get('shared', [])) if isinstance(tc, dict) else set()
         edge_union = set(tc.get('union', [])) if isinstance(tc, dict) else set()
 
-        t1 = set(cache.get(id1, {}).get('topic_context', []))
-        t2 = set(cache.get(id2, {}).get('topic_context', []))
+        t1 = set(cache.get(id1, {}).get('topic_context') or [])
+        t2 = set(cache.get(id2, {}).get('topic_context') or [])
         all_t = edge_union | t1 | t2
         all_shared = edge_shared | (t1 & t2)
 
