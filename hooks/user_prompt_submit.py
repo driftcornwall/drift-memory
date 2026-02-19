@@ -203,6 +203,40 @@ def prime_memories_from_prompt(prompt: str, session_id: str) -> str:
     return "\n".join(lines)
 
 
+def prime_procedural_chunks(prompt: str) -> str:
+    """
+    Match procedural chunks against user prompt.
+    Chunks are capabilities/skills — they fire once per session per chunk.
+    Like biological procedural memory: context triggers skill recall.
+    """
+    memory_dir = get_memory_dir()
+    if not memory_dir:
+        return ""
+
+    try:
+        mem_str = str(memory_dir)
+        if mem_str not in sys.path:
+            sys.path.insert(0, mem_str)
+        from procedural.chunk_loader import get_loader
+        loader = get_loader()
+
+        # Build context from user's prompt
+        words = prompt.lower().split()
+        context = {
+            'text': prompt.lower(),
+            'keywords': [w.strip('.,!?;:()[]{}"\'-') for w in words
+                         if w.strip('.,!?;:()[]{}"\'-') not in STOP_WORDS],
+        }
+
+        # Match with moderate threshold — chunks have specific trigger keywords
+        text = loader.load_for_context(context, max_tokens=800, compact=True)
+        if text:
+            return f"\n=== PROCEDURAL SKILLS (prompt-triggered) ===\n{text}\n"
+    except Exception:
+        pass
+    return ""
+
+
 def log_user_prompt(session_id, input_data):
     """Log user prompt to logs directory."""
     # Ensure logs directory exists
@@ -364,6 +398,15 @@ def main():
                 print(memory_context)
         except Exception:
             pass  # Fail gracefully - never block prompt due to memory system
+
+        # Procedural chunk priming - fire skill chunks matching user's message
+        # Chunks fire once per session per chunk (deduplicated by loader)
+        try:
+            chunk_context = prime_procedural_chunks(prompt)
+            if chunk_context:
+                print(chunk_context)
+        except Exception:
+            pass  # Never block prompt for chunk loading
 
         # Success - prompt will be processed
         sys.exit(0)

@@ -308,7 +308,7 @@ def collect_vitals():
         m["graph_sparsity"] = 0
         m["graph_isolated_memories"] = 0
 
-    # --- KNOWLEDGE GRAPH METRICS (Phase 4) ---
+    # --- KNOWLEDGE GRAPH METRICS (Phase 4 + T2.5 density monitoring) ---
     try:
         from knowledge_graph import get_stats as kg_stats
         kg = kg_stats()
@@ -317,12 +317,19 @@ def collect_vitals():
         m["typed_edges_types_used"] = kg.get('types_used', 0)
         m["typed_edges_density"] = kg.get('density', 0)
         m["typed_edges_sources"] = kg.get('unique_sources', 0)
+        # T2.5: Track type distribution for diversity monitoring
+        by_type = kg.get('by_type', {})
+        m["typed_edges_type_distribution"] = {
+            k: v.get('count', 0) if isinstance(v, dict) else v
+            for k, v in by_type.items()
+        }
     except Exception:
         m["typed_edges_total"] = 0
         m["typed_edges_auto"] = 0
         m["typed_edges_types_used"] = 0
         m["typed_edges_density"] = 0
         m["typed_edges_sources"] = 0
+        m["typed_edges_type_distribution"] = {}
 
     # --- COGNITIVE STATE METRICS (Phase 3) ---
     try:
@@ -529,6 +536,7 @@ def check_alerts():
         "wgraph_total_edges": (True, "warn", "W-graph edges not growing"),
         "curiosity_targets_surfaced": (True, "info", "Curiosity targets not being surfaced"),
         "typed_edges_total": (True, "info", "Knowledge graph not growing"),
+        "typed_edges_types_used": (True, "warn", "KG type diversity not improving - only using same edge types"),
     }
 
     for metric, (should_grow, severity, desc) in metrics_to_watch.items():
@@ -813,7 +821,8 @@ def format_snapshot(snapshot, compact=False):
         "",
         "KNOWLEDGE GRAPH",
         f"  Typed edges: {m.get('typed_edges_total', '?')} (auto={m.get('typed_edges_auto', '?')})",
-        f"  Types used: {m.get('typed_edges_types_used', '?')} | Sources: {m.get('typed_edges_sources', '?')} | Density: {m.get('typed_edges_density', '?')}",
+        f"  Types used: {m.get('typed_edges_types_used', '?')}/17 | Sources: {m.get('typed_edges_sources', '?')} | Density: {m.get('typed_edges_density', '?')}",
+        f"  Type distribution: {m.get('typed_edges_type_distribution', {})}",
         "",
         "COGNITIVE STATE",
         f"  Curiosity: {m.get('cognitive_curiosity', '?')} | Confidence: {m.get('cognitive_confidence', '?')} | Focus: {m.get('cognitive_focus', '?')}",

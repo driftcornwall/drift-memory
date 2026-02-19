@@ -1,11 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.8"
-# dependencies = [
-#     "pyyaml",
-#     "psycopg2-binary",
-# ]
-# ///
+#!/usr/bin/env python3
 
 """
 Post-tool-use hook for Claude Code.
@@ -717,6 +710,36 @@ def _generate_thought_context(transcript_path: str, memory_dir: Path) -> str:
         return ""
 
 
+def _generate_chunk_context(api_type: str, tool_result: str, has_error: bool) -> str:
+    """Load relevant procedural chunk when platform detected (especially on errors)."""
+    if api_type == "unknown":
+        return ""
+    try:
+        memory_dir = get_memory_dir()
+        sys.path.insert(0, str(memory_dir))
+        from procedural.chunk_loader import get_loader
+        loader = get_loader()
+        # Map API types to chunk platform names
+        platform_map = {
+            'moltx': 'moltx', 'moltbook': 'moltbook', 'github': 'github',
+            'clawtasks': 'clawtasks', 'lobsterpedia': 'lobsterpedia',
+            'dead-internet': 'dead_internet', 'clawbr': 'clawbr',
+            'thecolony': 'colony', 'twitter': 'twitter', 'agentlink': 'agentlink',
+        }
+        platform = platform_map.get(api_type, api_type)
+        context = {'platform': platform, 'keywords': [platform]}
+        if has_error:
+            context['keywords'] = ['error', 'fix', platform]
+        # Fire chunks on first platform interaction (once per chunk per session)
+        # Chunks self-deduplicate via _loaded_this_session
+        text = loader.load_for_context(context, max_tokens=500, compact=True)
+        if text:
+            return f"=== PROCEDURAL SKILL ({platform}) ===\n{text}"
+        return ""
+    except Exception:
+        return ""
+
+
 def _check_pending_monologue() -> str:
     """
     N6 System 2: Check for pending async monologue result.
@@ -771,23 +794,37 @@ def main():
                 detect_my_post_from_command(tool_input, tool_result, debug=debug_mode)
                 track_engagement(tool_input, tool_result, debug=debug_mode)
 
-        # === ADDITIONAL CONTEXT (parallel: lesson injection + thought priming) ===
+        # === ADDITIONAL CONTEXT (parallel: lesson injection + thought priming + chunks) ===
         lesson_context = ""
         thought_context = ""
+        chunk_context = ""
         pending_monologue = ""
 
         memory_dir = get_memory_dir()
         transcript_path = input_data.get("transcript_path", "")
+        api_type = detect_api_type(tool_result, tool_command) if tool_result else "unknown"
 
         # N6 System 2: Check for async monologue result from previous thought priming
         if memory_dir and memory_dir.exists():
             pending_monologue = _check_pending_monologue()
 
         if memory_dir and memory_dir.exists() and tool_result:
-            # Run both context generators in parallel
-            with ThreadPoolExecutor(max_workers=2) as pool:
+            # Detect if this is an error response
+            result_lower = tool_result.lower()
+            has_error = any(p in result_lower for p in [
+                "traceback", "exit code 1", "httperror", "urlerror",
+                "status: 4", "status: 5", 'status": 4', 'status": 5',
+                "connection refused", "rate limit", "unauthorized",
+                "forbidden", "error:", 'error":', "failed:",
+            ])
+
+            # Run all context generators in parallel
+            with ThreadPoolExecutor(max_workers=3) as pool:
                 f_lesson = pool.submit(
                     _generate_lesson_context, tool_result, tool_command, memory_dir
+                )
+                f_chunk = pool.submit(
+                    _generate_chunk_context, api_type, tool_result, has_error
                 )
                 f_thought = None
                 if transcript_path:
@@ -799,14 +836,30 @@ def main():
                 lesson_context = f_lesson.result(timeout=6)
             except Exception:
                 pass
+            try:
+                chunk_context = f_chunk.result(timeout=4)
+            except Exception:
+                pass
             if f_thought:
                 try:
                     thought_context = f_thought.result(timeout=9)
                 except Exception:
                     pass
 
+        # T4.2: Check episodic future thinking triggers
+        eft_trigger_context = ""
+        if memory_dir and memory_dir.exists() and tool_result:
+            try:
+                eft = _get_mod("episodic_future_thinking")
+                if eft and hasattr(eft, "check_triggers"):
+                    _eft_triggered = eft.check_triggers(tool_result[:2000])
+                    if _eft_triggered:
+                        eft_trigger_context = eft.format_triggered(_eft_triggered)
+            except Exception:
+                pass
+
         # Output JSON with additionalContext if we have memory triggers
-        combined_context = "\n\n".join(filter(None, [pending_monologue, lesson_context, thought_context]))
+        combined_context = "\n\n".join(filter(None, [pending_monologue, eft_trigger_context, lesson_context, chunk_context, thought_context]))
         if combined_context:
             hook_response = {
                 "hookSpecificOutput": {

@@ -324,6 +324,23 @@ def build_registry():
         Command("causal-list", "memory", "List all causal hypotheses with confidence", "causal_model", "list"),
         Command("causal-health", "memory", "Causal model health check", "causal_model", "health"),
         Command("causal-seed", "memory", "Bootstrap initial hypotheses from experience", "causal_model", "seed"),
+        # T4.1: Retrieval Prediction (Predictive Coding)
+        Command("predict-retrieval", "memory", "Retrieval prediction status", "retrieval_prediction", "status"),
+        Command("predict-weights", "memory", "Show prediction source weights", "retrieval_prediction", "weights"),
+        Command("predict-accuracy", "memory", "Per-source prediction accuracy", "retrieval_prediction", "accuracy"),
+        Command("predict-test", "memory", "Run prediction test query", "retrieval_prediction", "test"),
+        # T4.2: Episodic Future Thinking
+        Command("eft-status", "memory", "Active prospective memories + stats", "episodic_future_thinking", "status"),
+        Command("eft-history", "memory", "Prospective memory evaluation history", "episodic_future_thinking", "history"),
+        Command("eft-generate", "memory", "Manually generate prospective memories", "episodic_future_thinking", "test"),
+        Command("eft-health", "memory", "EFT module health check", "episodic_future_thinking", "health"),
+        # T3.3: Attention Schema Theory
+        Command("ast-status", "dashboard", "Attention schema profile + blind spots", "attention_schema", "status"),
+        Command("ast-bias", "dashboard", "Detect attention bias (blind spots & dominance)", "attention_schema", "bias"),
+        Command("ast-predict", "dashboard", "Predict next workspace competition winners", "attention_schema", "predict"),
+        Command("ast-modulation", "dashboard", "Current salience modulation adjustments", "attention_schema", "modulation"),
+        Command("ast-history", "dashboard", "Attention schema session history", "attention_schema", "history"),
+        Command("ast-update", "dashboard", "Force update from latest broadcasts", "attention_schema", "update"),
         # N6 Verification: Ablation Testing
         Command("ablation-stages", "experiment", "List all ablatable pipeline stages", "ablation_framework", "stages"),
         Command("ablation-benchmark", "experiment", "Run single-stage ablation sweep", "ablation_framework", "benchmark"),
@@ -666,6 +683,9 @@ def cmd_health():
         ("inner_monologue", "Inner monologue engine (N6)"),
         ("causal_model", "Causal hypothesis engine (N6)"),
         ("ablation_framework", "Ablation testing framework (N6 verification)"),
+        ("retrieval_prediction", "Retrieval prediction engine (T4.1)"),
+        ("episodic_future_thinking", "Episodic future thinking (T4.2)"),
+        ("attention_schema", "Attention Schema Theory (T3.3)"),
     ]
 
     # Social subpackage

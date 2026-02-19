@@ -352,8 +352,47 @@ def _score_single(prediction: dict, actuals: dict) -> float:
         return 1.0 if actual > 0 else 0.0
 
     elif pred_type == 'intention':
-        # Intentions are hard to auto-score — conservative 0.5
-        return 0.5
+        # T1.5: Jaccard matching against decision trace (ported from SpindriftMend)
+        desc = (prediction.get('description') or '').strip()
+        if not desc:
+            return 0.5
+        # Strip common prefix
+        for prefix in ['Will act on: ', 'Will pursue: ', 'Will complete: ']:
+            if desc.startswith(prefix):
+                desc = desc[len(prefix):]
+                break
+        _stop_words = {
+            'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+            'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+            'should', 'may', 'might', 'shall', 'can', 'need', 'dare', 'ought',
+            'and', 'but', 'or', 'nor', 'not', 'so', 'yet', 'for', 'to', 'of',
+            'in', 'on', 'at', 'by', 'with', 'from', 'into', 'that', 'this',
+        }
+        desc_words = {w.lower() for w in desc.split() if len(w) > 2 and w.isalpha() and w.lower() not in _stop_words}
+        if not desc_words:
+            return 0.5
+        try:
+            from counterfactual_engine import get_decision_trace
+            trace = get_decision_trace()
+            if not trace:
+                return 0.5
+            best_jaccard = 0.0
+            for entry in trace:
+                action = (entry.get('action') or '')
+                action_words = {w.lower() for w in action.split() if len(w) > 2 and w.isalpha() and w.lower() not in _stop_words}
+                if action_words and desc_words:
+                    intersection = desc_words & action_words
+                    union = desc_words | action_words
+                    jaccard = len(intersection) / len(union) if union else 0.0
+                    best_jaccard = max(best_jaccard, jaccard)
+            if best_jaccard > 0.3:
+                return 0.8  # Strong match — intention acted on
+            elif best_jaccard > 0.15:
+                return 0.6  # Partial match
+            else:
+                return 0.2  # Not pursued
+        except Exception:
+            return 0.5
 
     elif pred_type == 'causal':
         # Causal hypothesis predictions: check if the predicted platform/contact/outcome appeared

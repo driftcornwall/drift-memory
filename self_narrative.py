@@ -185,14 +185,31 @@ def _get_contacts_summary() -> dict:
 
 
 def _get_attention_summary() -> dict:
-    """B2: Pull attention schema stats."""
+    """B2: Pull attention schema stats (T3.3 AST-aware with fallback)."""
     def _inner():
         db = _get_db()
+        # Try T3.3 Attention Schema first
+        ast_state = db.kv_get('.attention_schema_state')
+        if ast_state and ast_state.get('broadcast_count', 0) > 0:
+            blind_spots = ast_state.get('blind_spots', [])
+            dominant = ast_state.get('dominant_modules', [])
+            top_attended = sorted(
+                ast_state.get('module_profiles', {}).items(),
+                key=lambda kv: kv[1].get('win_rate', 0), reverse=True
+            )[:3]
+            return {
+                'searches': ast_state.get('broadcast_count', 0),
+                'blind_spots': len(blind_spots),
+                'dominant': len(dominant),
+                'top_attended': [m for m, _ in top_attended],
+                'shift': round(ast_state.get('shift_magnitude', 0), 3),
+                'confidence': round(ast_state.get('schema_confidence', 0), 2),
+            }
+        # Fallback: raw pipeline timing from .attention_schema
         schema = db.kv_get('.attention_schema') or []
         if not schema:
             return {'searches': 0, 'avg_ms': 0, 'heaviest': 'none'}
         avg_ms = sum(s.get('total_ms', 0) for s in schema) / len(schema)
-        # Find heaviest stage across all searches
         stage_totals = {}
         for entry in schema:
             for stage in entry.get('stages', []):

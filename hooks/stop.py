@@ -89,6 +89,147 @@ def is_moltbook_project() -> bool:
     return "Moltbook" in str(cwd) or "moltbook" in str(cwd).lower()
 
 
+def _store_structured_episodic(memory_dir: Path, transcript_path: str = None, debug: bool = False):
+    """
+    Phase 3 Step 3: Store structured session summary in DB (episodic tier).
+    Runs alongside update_episodic_memory() — DB-backed structured record.
+    """
+    try:
+        sys.path.insert(0, str(memory_dir))
+        from episodic_db import store_session_summary, load_recent_summaries
+        try:
+            from memory_common import get_db
+        except ImportError:
+            from db_adapter import get_db
+
+        db = get_db()
+
+        # Auto-detect session number: max existing + 1
+        summaries = load_recent_summaries(1)
+        if summaries:
+            session_num = summaries[-1].get('session_number', 0) + 1
+        else:
+            session_num = 1
+
+        # Extract episodic summary directly from assistant outputs in JSONL transcript.
+        # My actual outputs ARE the episodic record — no keyword matching needed.
+        summary_text = ""
+        milestones = []
+        if transcript_path:
+            try:
+                import json as _json2
+                assistant_outputs = []
+                with open(transcript_path, 'r', encoding='utf-8') as tf:
+                    for line in tf:
+                        try:
+                            entry = _json2.loads(line.strip())
+                            if entry.get('type') != 'assistant':
+                                continue
+                            content = entry.get('message', {}).get('content', [])
+                            if not isinstance(content, list):
+                                continue
+                            for block in content:
+                                if isinstance(block, dict) and block.get('type') == 'text':
+                                    text = block['text'].strip()
+                                    if len(text) > 50:  # Skip trivial outputs
+                                        assistant_outputs.append(text)
+                        except (ValueError, KeyError):
+                            continue
+
+                if assistant_outputs:
+                    # Use the last few substantial outputs as the summary.
+                    # The last output is typically the most relevant (summary/result).
+                    # Concatenate last outputs up to 1500 chars.
+                    combined = []
+                    char_count = 0
+                    for output in reversed(assistant_outputs):
+                        if char_count + len(output) > 1500:
+                            # Truncate this one to fit
+                            remaining = 1500 - char_count
+                            if remaining > 100:
+                                combined.append(output[:remaining] + "...")
+                            break
+                        combined.append(output)
+                        char_count += len(output) + 4  # +4 for separator
+                        if char_count >= 1200:
+                            break
+                    combined.reverse()
+                    summary_text = "\n\n".join(combined)
+
+                    # Extract milestones from ALL outputs (broad keyword match)
+                    _work_verbs = {'shipped', 'fixed', 'wired', 'created', 'added',
+                                   'embedded', 'stored', 'updated', 'patched', 'resolved',
+                                   'built', 'implemented', 'deployed', 'launched', 'merged',
+                                   'connected', 'persisted', 'enabled', 'broadened', 'rewrote'}
+                    for output in assistant_outputs:
+                        for line in output.split('\n'):
+                            line_s = line.strip().lower()
+                            # Check for work verb at start of line or after bullet/dash
+                            clean = line_s.lstrip('-*• ').lstrip('0123456789. ')
+                            first_word = clean.split()[0] if clean.split() else ''
+                            if first_word in _work_verbs and len(line.strip()) > 15:
+                                milestones.append(line.strip()[:100])
+                            elif '**[shipped]**' in line_s or '**[live]**' in line_s:
+                                milestone = line.split('**')[-1].strip(' -')
+                                if milestone and len(milestone) > 5:
+                                    milestones.append(milestone[:100])
+                    milestones = milestones[:10]
+            except Exception:
+                pass
+
+        if not summary_text:
+            summary_text = f"Session {session_num} completed"
+
+        # Read session platforms from DB KV (set by post_tool_use.py)
+        platforms = []
+        try:
+            import json as _json
+            raw = db.kv_get('.session_platforms')
+            if raw:
+                data = _json.loads(raw) if isinstance(raw, str) else raw
+                platforms = data.get('platforms', [])
+        except Exception:
+            pass
+
+        # Read session contacts from DB KV (set by post_tool_use.py)
+        contacts = []
+        try:
+            import json as _json
+            raw = db.kv_get('.session_contacts')
+            if raw:
+                data = _json.loads(raw) if isinstance(raw, str) else raw
+                contacts = data.get('contacts', [])[:20]  # Cap at 20
+        except Exception:
+            pass
+
+        # Read mood state from affect system
+        mood_valence = None
+        mood_arousal = None
+        try:
+            from affect_system import get_mood
+            mood = get_mood()
+            mood_valence = round(getattr(mood, 'valence', 0), 3)
+            mood_arousal = round(getattr(mood, 'arousal', 0), 3)
+        except Exception:
+            pass
+
+        mid = store_session_summary(
+            session_number=session_num,
+            summary=summary_text[:1500],
+            milestones=milestones[:10],
+            platforms_active=platforms,
+            contacts_active=contacts,
+            mood_valence=mood_valence,
+            mood_arousal=mood_arousal,
+        )
+        if debug and mid:
+            print(f"DEBUG: Stored structured episodic: {mid}", file=sys.stderr)
+
+    except Exception as e:
+        if debug:
+            print(f"DEBUG: Structured episodic failed: {e}", file=sys.stderr)
+
+
 def update_episodic_memory(memory_dir: Path, transcript_path: str = None, debug: bool = False):
     """
     Update episodic memory with session summary.
@@ -96,16 +237,11 @@ def update_episodic_memory(memory_dir: Path, transcript_path: str = None, debug:
 
     The folder is the brain, but only if you use it.
 
-    SMART EXTRACTION (2026-02-02):
-    - Uses transcript_processor.py to extract ONLY from assistant output
-    - Looks for milestone keywords (shipped, launched, deployed, etc.)
-    - Only writes to episodic if there's something meaningful to record
-
-    DEDUP GUARD v2 (2026-02-12):
-    - Uses DB KV hash store (.episodic_seen_hashes) for persistent dedup
-    - Old approach checked file content, but manual cleanup removed the
-      lines that the guard used for matching → infinite re-append loop
-    - Hash-based dedup survives file edits, cleanup, and reformatting
+    OUTPUT CAPTURE (2026-02-19):
+    - Reads assistant text outputs directly from JSONL transcript
+    - Last few substantial outputs become the episodic record
+    - No keyword matching needed — my actual words ARE the record
+    - Hash-based dedup via DB KV (.episodic_seen_hashes)
     """
     try:
         import hashlib
@@ -116,32 +252,54 @@ def update_episodic_memory(memory_dir: Path, transcript_path: str = None, debug:
                 print("DEBUG: No transcript path, skipping episodic update", file=sys.stderr)
             return
 
-        transcript_processor = memory_dir / "transcript_processor.py"
-        if not transcript_processor.exists():
+        # Extract episodic content directly from assistant outputs in JSONL transcript.
+        # My actual outputs ARE the episodic record.
+        import json as _json3
+        assistant_outputs = []
+        try:
+            with open(transcript_path, 'r', encoding='utf-8') as tf:
+                for line in tf:
+                    try:
+                        entry = _json3.loads(line.strip())
+                        if entry.get('type') != 'assistant':
+                            continue
+                        content = entry.get('message', {}).get('content', [])
+                        if not isinstance(content, list):
+                            continue
+                        for block in content:
+                            if isinstance(block, dict) and block.get('type') == 'text':
+                                text = block['text'].strip()
+                                if len(text) > 50:
+                                    assistant_outputs.append(text)
+                    except (ValueError, KeyError):
+                        continue
+        except Exception:
+            pass
+
+        if not assistant_outputs:
             if debug:
-                print(f"DEBUG: transcript_processor.py not found at {transcript_processor}", file=sys.stderr)
+                print("DEBUG: No assistant outputs found, skipping episodic update", file=sys.stderr)
             return
 
-        # Extract milestones using smart parser (only looks at assistant output)
-        result = subprocess.run(
-            ["python", str(transcript_processor), transcript_path, "--milestones-md"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=str(memory_dir)
-        )
+        # Build milestone_md from the last few substantial outputs
+        combined = []
+        char_count = 0
+        for output in reversed(assistant_outputs):
+            if char_count + len(output) > 1500:
+                remaining = 1500 - char_count
+                if remaining > 100:
+                    combined.append(output[:remaining] + "...")
+                break
+            combined.append(output)
+            char_count += len(output) + 4
+            if char_count >= 1200:
+                break
+        combined.reverse()
+        milestone_md = "\n\n".join(combined)
 
-        if result.returncode != 0:
+        if not milestone_md.strip():
             if debug:
-                print(f"DEBUG: Milestone extraction failed: {result.stderr}", file=sys.stderr)
-            return
-
-        milestone_md = result.stdout.strip()
-
-        # Only update episodic if there are actual milestones
-        if not milestone_md or milestone_md == "":
-            if debug:
-                print("DEBUG: No milestones found, skipping episodic update", file=sys.stderr)
+                print("DEBUG: No substantial outputs for episodic update", file=sys.stderr)
             return
 
         episodic_dir = memory_dir / "episodic"
@@ -162,51 +320,25 @@ def update_episodic_memory(memory_dir: Path, transcript_path: str = None, debug:
             except Exception:
                 pass
 
-        # Parse milestone_md into individual blocks
-        milestone_blocks = []
-        current_block = []
-        for line in milestone_md.split('\n'):
-            if line.startswith('**[') and current_block:
-                milestone_blocks.append('\n'.join(current_block))
-                current_block = [line]
-            elif line.strip():
-                current_block.append(line)
-            elif current_block and not line.startswith('###'):
-                current_block.append(line)
-        if current_block:
-            milestone_blocks.append('\n'.join(current_block))
-
-        # Filter: only keep blocks whose content hash hasn't been seen before
-        new_blocks = []
-        new_hashes = []
-        for block in milestone_blocks:
-            content_lines = [l.strip() for l in block.split('\n') if l.strip().startswith('- ')]
-            if not content_lines:
-                continue
-            # Hash the sorted content lines (order-independent dedup)
-            block_hash = hashlib.sha256('\n'.join(sorted(content_lines)).encode()).hexdigest()[:16]
-            if block_hash not in seen_hashes:
-                new_blocks.append(block)
-                new_hashes.append(block_hash)
-
-        if not new_blocks:
+        # Dedup: hash the content to avoid re-appending identical outputs
+        content_hash = hashlib.sha256(milestone_md.encode()).hexdigest()[:16]
+        if content_hash in seen_hashes:
             if debug:
-                print("DEBUG: All milestones already seen (hash dedup), skipping", file=sys.stderr)
+                print("DEBUG: Episodic content already seen (hash dedup), skipping", file=sys.stderr)
             return
 
-        # Store new hashes in DB KV (append to existing)
-        if db and new_hashes:
+        # Store new hash in DB KV
+        if db:
             try:
-                all_hashes = list(seen_hashes | set(new_hashes))
-                # Cap at 500 to prevent unbounded growth (keep most recent)
+                all_hashes = list(seen_hashes | {content_hash})
                 if len(all_hashes) > 500:
                     all_hashes = all_hashes[-500:]
                 db.kv_set('.episodic_seen_hashes', all_hashes)
             except Exception:
                 pass
 
-        # Reconstruct milestone_md with only genuinely new blocks
-        milestone_md = "### Session Milestones (auto-extracted)\n\n" + '\n\n'.join(new_blocks)
+        # Wrap the raw output as session record
+        milestone_md = f"### Session Output (auto-captured)\n\n{milestone_md}"
 
         # Use "Subagent completed" for subagent stops, "Session End" for main session
         entry_type = "Subagent completed" if os.environ.get("CLAUDE_CODE_AGENT_ID") else "Session End"
@@ -221,46 +353,14 @@ def update_episodic_memory(memory_dir: Path, transcript_path: str = None, debug:
                 f.write(header + entry)
 
         if debug:
-            print(f"DEBUG: Wrote {len(new_blocks)} new milestones ({len(new_hashes)} new hashes) to {episodic_file}", file=sys.stderr)
+            print(f"DEBUG: Wrote session output ({len(milestone_md)} chars, hash={content_hash}) to {episodic_file}", file=sys.stderr)
 
     except Exception as e:
         if debug:
             print(f"DEBUG: Episodic memory error: {e}", file=sys.stderr)
 
 
-def _run_script(memory_dir, script_name, args, timeout=15):
-    """Run a memory script and return (returncode, stdout, stderr)."""
-    script = memory_dir / script_name
-    if not script.exists():
-        return (-1, "", f"{script_name} not found")
-    try:
-        result = subprocess.run(
-            ["python", str(script)] + args,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=str(memory_dir)
-        )
-        return (result.returncode, result.stdout, result.stderr)
-    except subprocess.TimeoutExpired:
-        return (-2, "", f"{script_name} timed out after {timeout}s")
-    except Exception as e:
-        return (-3, "", str(e))
-
-
-# --- Phase 1 tasks (all independent) ---
-
-def _task_transcript(memory_dir, transcript_path):
-    """Process transcript for thought memories."""
-    if not transcript_path:
-        return None
-    return _run_script(memory_dir, "transcript_processor.py", [transcript_path], timeout=30)
-
-
-def _task_auto_memory(memory_dir):
-    """Consolidate short-term buffer."""
-    return _run_script(memory_dir, "auto_memory_hook.py", ["--stop"], timeout=10)
-
+# --- Phase 0 tasks (always run locally) ---
 
 def _task_save_pending(memory_dir):
     """Log co-occurrences: DB-direct (SpindriftMend) or pending file (DriftCornwall)."""
@@ -282,535 +382,255 @@ def _task_save_pending(memory_dir):
         return (1, "", f"Co-occurrence logging failed: {e}")
 
 
-def _task_behavioral_rejections(memory_dir):
-    """Compute behavioral rejection diff: seen - engaged = taste signal."""
+def _task_synaptic_homeostasis(memory_dir):
+    """Synaptic homeostasis: normalize co-occurrence weights if mean exceeds threshold."""
     try:
         if str(memory_dir) not in sys.path:
             sys.path.insert(0, str(memory_dir))
+        from co_occurrence import synaptic_homeostasis_v3
+        normalized, scale = synaptic_homeostasis_v3()
+        if normalized > 0:
+            return (0, f"Synaptic homeostasis: {normalized} edges normalized (scale={scale:.3f})", "")
+        return (0, "Synaptic homeostasis: no normalization needed", "")
+    except Exception as e:
+        return (1, "", f"Synaptic homeostasis failed: {e}")
+
+
+def _task_trust_signals(memory_dir):
+    """Publish trust signals to Agent Hub (brain_cabal's infrastructure).
+    Auto-refreshes rejection, attestation, and co-occurrence data each session."""
+    try:
+        import urllib.request as _url
+        import json as _j
+
         try:
             from memory_common import get_db
         except ImportError:
             from db_adapter import get_db
         db = get_db()
+        if not db:
+            return (0, "Trust signals: no DB", "")
 
-        # Load buffers
-        seen_raw = db.kv_get('.feed_seen') or {}
-        if isinstance(seen_raw, str):
-            seen_raw = json.loads(seen_raw)
-        seen_posts = seen_raw.get('posts', {})
+        # Detect agent name from schema
+        agent_name = 'driftcornwall' if hasattr(db, '_schema') and 'drift' in str(getattr(db, '_schema', '')) else 'spindriftmend'
 
-        engaged_raw = db.kv_get('.feed_engaged') or {}
-        if isinstance(engaged_raw, str):
-            engaged_raw = json.loads(engaged_raw)
-        engaged_ids = set(engaged_raw.get('post_ids', []))
-        engaged_authors = set(a.lower() for a in engaged_raw.get('authors', []))
+        base_url = 'https://admin.slate.ceo/oc/brain/trust/signal'
+        signals_published = 0
 
-        if not seen_posts:
-            # Clear buffers even if empty (in case of stale data)
-            db.kv_set('.feed_seen', {})
-            db.kv_set('.feed_engaged', {})
-            return (0, "Behavioral: no posts seen this session", "")
+        # 1. Rejection signal
+        try:
+            rej_count = 0
+            with db._conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"SELECT count(*) FROM {db._table('rejections')}")
+                    rej_count = cur.fetchone()[0]
+            if rej_count > 0:
+                data = _j.dumps({
+                    'from': agent_name, 'about': agent_name,
+                    'channel': 'rejection', 'strength': min(1.0, 0.5 + rej_count / 200),
+                    'evidence': f'{rej_count} rejections logged, taxonomy-classified'
+                }).encode('utf-8')
+                req = _url.Request(base_url, data=data, headers={
+                    'Content-Type': 'application/json', 'User-Agent': f'{agent_name}/1.0'
+                }, method='POST')
+                _url.urlopen(req, timeout=5)
+                signals_published += 1
+        except Exception:
+            pass
 
-        # Expand engaged_authors: any post by an engaged author counts as engaged
-        for post_id, post_data in seen_posts.items():
-            author = post_data.get('author', '').lower()
-            if author in engaged_authors:
-                engaged_ids.add(post_id)
+        # 2. Attestation signal (fingerprint + merkle)
+        try:
+            fp = db.kv_get('cognitive_fingerprint') or {}
+            nodes = fp.get('nodes', 0)
+            edges = fp.get('edges', 0)
+            if nodes > 0:
+                data = _j.dumps({
+                    'from': agent_name, 'about': agent_name,
+                    'channel': 'attestation', 'strength': 0.9,
+                    'evidence': f'Cognitive fingerprint: {nodes} nodes, {edges} edges. Nostr-published.'
+                }).encode('utf-8')
+                req = _url.Request(base_url, data=data, headers={
+                    'Content-Type': 'application/json', 'User-Agent': f'{agent_name}/1.0'
+                }, method='POST')
+                _url.urlopen(req, timeout=5)
+                signals_published += 1
+        except Exception:
+            pass
 
-        # Compute diff and log
-        from auto_rejection_logger import log_behavioral_rejections
-        count = log_behavioral_rejections(seen_posts, engaged_ids)
-
-        # Clear buffers for next session
-        db.kv_set('.feed_seen', {})
-        db.kv_set('.feed_engaged', {})
-
-        total_seen = len(seen_posts)
-        total_engaged = len(engaged_ids & set(seen_posts.keys()))
-        return (0, f"Behavioral: {count} rejections ({total_seen} seen, {total_engaged} engaged)", "")
+        return (0, f"Trust signals: {signals_published} published to Agent Hub", "")
     except Exception as e:
-        return (-3, "", f"behavioral rejection error: {e}")
+        return (1, "", f"Trust signals failed: {e}")
 
 
-def _task_maintenance(memory_dir):
-    """Run session maintenance in-process."""
+def _task_attention_schema(memory_dir):
+    """T3.3: Snapshot attention schema state at session end."""
     try:
         if str(memory_dir) not in sys.path:
             sys.path.insert(0, str(memory_dir))
-        from decay_evolution import session_maintenance
-        session_maintenance()
-        return (0, "Maintenance complete", "")
+        from attention_schema import snapshot_session
+        result = snapshot_session()
+        blind = result.get('blind_spots', 0)
+        dominant = result.get('dominant', 0)
+        return (0, f"AST: {blind} blind spots, {dominant} dominant", "")
     except Exception as e:
-        # Subprocess fallback
-        return _run_script(memory_dir, "memory_manager.py", ["maintenance"], timeout=30)
+        return (1, "", f"Attention schema snapshot failed: {e}")
 
 
-def _task_q_update(memory_dir):
-    """Update Q-values for all recalled memories based on session evidence."""
+def _task_stage_q_update(memory_dir):
+    """Per-stage Q-learning: update stage Q-values from session recalls."""
     try:
         if str(memory_dir) not in sys.path:
             sys.path.insert(0, str(memory_dir))
-        from q_value_engine import session_end_q_update
-        result = session_end_q_update()
-        updated = result.get('updated', 0)
-        avg_r = result.get('avg_reward', 0)
-        return (0, f"Q-update: {updated} memories, avg_reward={avg_r:.3f}", "")
+        from stage_q_learning import session_end_update
+        result = session_end_update()
+        updates = result.get('updates', 0)
+        if updates > 0:
+            return (0, f"Stage Q-learning: {updates} updates ({result.get('stages_updated', 0)} stages)", "")
+        return (0, f"Stage Q-learning: no updates (recalled={result.get('recalled', 0)}, tracked={result.get('tracked_searches', 0)})", "")
     except Exception as e:
-        return (-3, "", f"Q-update error: {e}")
+        return (1, "", f"Stage Q-learning failed: {e}")
 
 
-def _task_score_predictions(memory_dir):
-    """R11: Score session predictions against actuals."""
+def _task_procedural_chunk_update(memory_dir):
+    """Procedural chunks: log session-end stats."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from procedural.chunk_loader import get_loader
+        loader = get_loader()
+        result = loader.session_end_update()
+        loaded = result.get('loaded', 0)
+        if loaded > 0:
+            return (0, f"Procedural chunks: {loaded} loaded this session ({', '.join(result.get('chunks_loaded', []))})", "")
+        return (0, "Procedural chunks: none loaded", "")
+    except Exception as e:
+        return (1, "", f"Procedural chunks failed: {e}")
+
+
+def _task_kg_enrichment(memory_dir):
+    """T2.5: KG density monitoring + auto-enrichment at session end."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from kg_enrichment import session_end_check
+        result = session_end_check()
+        d = result.get('density', {})
+        coverage = d.get('coverage_pct', 0)
+        if result.get('enriched'):
+            er = result.get('enrichment_result', {})
+            edges = er.get('total_edges', 0)
+            return (0, f"KG enrichment: {edges} edges created (coverage {coverage}%)", "")
+        return (0, f"KG: coverage {coverage}%, no enrichment needed", "")
+    except Exception as e:
+        return (-3, "", f"KG enrichment error: {e}")
+
+
+def _task_retrieval_prediction_learn(memory_dir):
+    """T4.1: Rescorla-Wagner update for retrieval prediction source weights."""
+    try:
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        import session_state as _rp_ss
+        _rp_ss.load()
+        session_recalls = _rp_ss.get_retrieved_list()
+        from retrieval_prediction import session_end_update
+        session_end_update(session_recalls)
+        return (0, f"Retrieval prediction: RW update with {len(session_recalls)} recalls", "")
+    except Exception as e:
+        return (-3, "", f"Retrieval prediction learning error: {e}")
+
+
+def _task_session_prediction_score(memory_dir):
+    """Score session-level predictions against actuals. Closes the learning loop."""
     try:
         if str(memory_dir) not in sys.path:
             sys.path.insert(0, str(memory_dir))
         from prediction_module import score_predictions
         result = score_predictions()
         if 'error' in result:
-            return (0, f"Predictions: {result['error']}", "")
-        return (0, f"Predictions: {result.get('accuracy', 0):.0%} accuracy ({result.get('confirmed', 0)}/{result.get('scored', 0)})", "")
+            return (0, f"Session predictions: {result['error']}", "")
+        return (0, f"Session predictions scored: {result['correct']}/{result['total']} correct, "
+                f"accuracy={result['accuracy']}, mean_error={result['mean_error']}", "")
     except Exception as e:
-        return (-3, "", f"Prediction scoring error: {e}")
+        return (-3, "", f"Session prediction scoring error: {e}")
 
 
-def _task_contact_models(memory_dir):
-    """R14: Update contact engagement models."""
+def _task_episodic_future_eval(memory_dir):
+    """T4.2: Evaluate prospective memories against actual session activity."""
     try:
         if str(memory_dir) not in sys.path:
             sys.path.insert(0, str(memory_dir))
-        from contact_models import update_all
-        result = update_all()
-        return (0, f"Contact models: {result.get('total', 0)} contacts updated", "")
+        import session_state as _eft_ss
+        _eft_ss.load()
+        from episodic_future_thinking import evaluate_prospective, EFT_ENABLED
+        if not EFT_ENABLED:
+            return (0, "EFT disabled", "")
+        result = evaluate_prospective({
+            'recalls': _eft_ss.get_retrieved_list(),
+            'platforms': [],
+            'contacts': [],
+        })
+        confirmed = result.get('confirmed', 0)
+        violated = result.get('violated', 0)
+        expired = result.get('expired', 0)
+        return (0, f"EFT eval: {confirmed} confirmed, {violated} violated, {expired} expired", "")
     except Exception as e:
-        return (-3, "", f"Contact models error: {e}")
+        return (-3, "", f"EFT eval error: {e}")
 
 
-# --- Phase 2 tasks (after phase 1) ---
-
-def _task_counterfactual_review(memory_dir):
-    """N3: Generate counterfactual analyses for violated predictions."""
-    try:
-        if str(memory_dir) not in sys.path:
-            sys.path.insert(0, str(memory_dir))
-
-        # Fetch scored predictions from DB (stored by score_predictions in Phase 1)
-        try:
-            from memory_common import get_db
-        except ImportError:
-            from db_adapter import get_db
-        db = get_db()
-        pred_data = db.kv_get('.session_predictions') if db else None
-        prediction_results = pred_data.get('details', []) if pred_data else []
-
-        # Get session ID
-        session_id = 0
-        try:
-            from session_state import get_session_id
-            session_id = get_session_id() or 0
-        except Exception:
-            pass
-
-        from counterfactual_engine import session_end_review, CF_ENABLED
-        if not CF_ENABLED:
-            return (0, "N3: disabled", "")
-
-        result = session_end_review(
-            prediction_results=prediction_results,
-            session_id=session_id,
-        )
-        count = result.get('count', 0)
-        elapsed = result.get('elapsed_ms', 0)
-        if count > 0:
-            avg_conf = result.get('avg_confidence', 0)
-            return (0, f"N3: {count} counterfactual(s) (conf={avg_conf:.2f}, {elapsed:.0f}ms)", "")
-        return (0, "N3: no violated predictions", "")
-    except Exception as e:
-        return (-3, "", f"Counterfactual error: {e}")
-
-
-def _task_store_summary(memory_dir, transcript_path):
-    """Extract and store session summaries."""
-    if not transcript_path:
-        return None
-    return _run_script(memory_dir, "transcript_processor.py",
-                       [transcript_path, "--store-summary"], timeout=30)
-
-
-def _task_lesson_mine(memory_dir, mine_cmd):
-    """Mine lessons from a specific source."""
-    return _run_script(memory_dir, "lesson_extractor.py", [mine_cmd], timeout=15)
-
-
-def _task_extract_intentions(memory_dir, transcript_path):
-    """Extract temporal intentions from transcript (Phase 2b: prospective memory)."""
+def _task_event_logging(memory_dir, transcript_path):
+    """Extract and store comprehensive session events."""
     if not transcript_path:
         return None
     try:
         if str(memory_dir) not in sys.path:
             sys.path.insert(0, str(memory_dir))
-        from temporal_intentions import extract_from_transcript
-        created = extract_from_transcript(transcript_path, max_intentions=3)
-        if created:
-            ids = [i['id'] for i in created]
-            return (0, f"Extracted {len(created)} intention(s): {', '.join(ids)}", "")
-        return (0, "No intentions extracted", "")
-    except Exception as e:
-        return (-3, "", f"Intention extraction error: {e}")
-
-
-def _task_generative_sleep(memory_dir):
-    """Run one dream cycle — novel association through memory replay (Phase 6)."""
-    try:
-        if str(memory_dir) not in sys.path:
-            sys.path.insert(0, str(memory_dir))
-        from generative_sleep import dream
-        result = dream(dry_run=False)
-        status = result.get('status', '?')
-        synth_id = result.get('synthesis_id', '')
-        msg = f"Dream: {status}"
-        if synth_id:
-            msg += f" -> {synth_id}"
-        return (0, msg, "")
-    except Exception as e:
-        return (-3, "", f"Generative sleep error: {e}")
-
-
-def _task_reconsolidation(memory_dir):
-    """Find reconsolidation candidates and revise top memories (Phase 3b)."""
-    try:
-        if str(memory_dir) not in sys.path:
-            sys.path.insert(0, str(memory_dir))
-        from reconsolidation import find_candidates, process_revisions
-        candidates = find_candidates(limit=5)
-        if candidates:
-            results = process_revisions(dry_run=False, max_revisions=2)
-            revised = sum(1 for r in results if r.get('action') == 'revised')
-            # N3 Phase 2: Store revision results for counterfactual analysis
-            try:
-                try:
-                    from memory_common import get_db
-                except ImportError:
-                    from db_adapter import get_db
-                db = get_db()
-                if db and results:
-                    db.kv_set('.n3_reconsolidation_results', {
-                        'results': results,
-                        'count': len(results),
-                        'revised': revised,
-                    })
-            except Exception:
-                pass
-            return (0, f"Reconsolidation: {len(candidates)} candidates, {revised} revised", "")
-        return (0, "Reconsolidation: no candidates", "")
-    except Exception as e:
-        return (-3, "", f"Reconsolidation error: {e}")
-
-
-def _task_mine_explanations(memory_dir):
-    """Mine strategy heuristics from explanation traces (Phase 5)."""
-    try:
-        if str(memory_dir) not in sys.path:
-            sys.path.insert(0, str(memory_dir))
-        from explanation_miner import mine_strategies
-        strategies = mine_strategies(limit=100)
-        return (0, f"Mined {len(strategies)} strategy heuristic(s)", "")
-    except Exception as e:
-        return (-3, "", f"Explanation mining error: {e}")
-
-
-def _task_rebuild_5w_inproc(memory_dir):
-    """Rebuild 5W context graphs in-process (moved from session_start)."""
-    try:
-        if str(memory_dir) not in sys.path:
-            sys.path.insert(0, str(memory_dir))
-        from context_manager import rebuild_all
-        result = rebuild_all()
-        graphs = result.get('graphs_created', 0)
-        l0 = result.get('total_l0_edges', 0)
-        return f"{graphs} graphs from {l0} L0 edges"
-    except Exception as e:
-        return f"error: {e}"
-
-
-def _task_gemma_vocab_scan(memory_dir):
-    """Scan dead memories for novel vocabulary bridge terms using Gemma."""
-    try:
-        if str(memory_dir) not in sys.path:
-            sys.path.insert(0, str(memory_dir))
-        from gemma_bridge import scan_dead_memories, _ollama_available
-        if not _ollama_available():
-            return (0, "Gemma: Ollama offline, skipped", "")
-        result = scan_dead_memories(limit=10)
-        if "error" in result:
-            return (-1, "", result["error"])
-        added = result.get("terms_added", 0)
-        scanned = result.get("scanned", 0)
-        new_terms = [t["term"] for t in result.get("new_terms", [])]
-        msg = f"Gemma: scanned {scanned}, added {added}"
-        if new_terms:
-            msg += f" ({', '.join(new_terms)})"
-        return (0, msg, "")
-    except Exception as e:
-        return (-3, "", f"gemma vocab scan error: {e}")
-
-
-def _task_gemma_classify_untagged(memory_dir):
-    """Classify memories without topic_context using Gemma."""
-    try:
-        if str(memory_dir) not in sys.path:
-            sys.path.insert(0, str(memory_dir))
-        from gemma_bridge import classify_topics, _ollama_available
-        if not _ollama_available():
-            return (0, "Gemma classify: Ollama offline, skipped", "")
+        from event_logger import process_transcript_events
+        # Get session_id if available
+        session_id = None
         try:
-            from memory_common import get_db
-        except ImportError:
-            from db_adapter import get_db
-        db = get_db()
-        # Find unclassified memories (limit batch to avoid slow stop hooks)
-        rows = db.list_memories(type_='active', limit=500)
-        candidates = []
-        for row in rows:
-            tc = row.get('topic_context') or []
-            if not tc and len(row.get('content', '')) > 50:
-                candidates.append(row)
-        classified = 0
-        for row in candidates[:15]:  # Cap at 15 per session (~15s max)
-            topics = classify_topics(row['content'])
-            if topics:
-                db.update_memory(row['id'], topic_context=topics)
-                classified += 1
-        return (0, f"Gemma classify: {classified}/{len(candidates[:15])} tagged ({len(candidates)} total untagged)", "")
-    except Exception as e:
-        return (-3, "", f"gemma classify error: {e}")
-
-
-# --- Phase 3 tasks (after phase 2) ---
-# These run IN-PROCESS to avoid 20s+ subprocess startup overhead.
-# Each function imports the module and calls its main function directly,
-# sharing the DB connection pool across all three.
-
-def _task_merkle_inproc(memory_dir):
-    """Compute merkle attestation in-process."""
-    try:
-        sys.path.insert(0, str(memory_dir))
-        from merkle_attestation import generate_attestation as mk_generate, save_attestation as mk_save
-        attestation = mk_generate(chain=True)
-        mk_save(attestation)
-        depth = attestation.get('chain_depth', 0)
-        count = attestation.get('memory_count', 0)
-        return (0, f"Merkle: {count} memories, chain depth {depth}", "")
-    except Exception as e:
-        return (-3, "", f"merkle in-process error: {e}")
-
-
-def _task_fingerprint_inproc(memory_dir):
-    """Compute cognitive fingerprint attestation in-process."""
-    try:
-        sys.path.insert(0, str(memory_dir))
-        from cognitive_fingerprint import generate_full_analysis, save_fingerprint, generate_full_attestation
-        analysis = generate_full_analysis()
-        save_fingerprint(analysis)
-        attestation = generate_full_attestation(analysis=analysis)
-        # Save attestation to DB instead of file
-        db = _get_db_for_stats(memory_dir)
-        if db:
-            db.kv_set('cognitive_attestation', attestation)
-        nodes = attestation.get('graph_stats', {}).get('node_count', 0)
-        edges = attestation.get('graph_stats', {}).get('edge_count', 0)
-        return (0, f"Fingerprint: {nodes} nodes, {edges} edges", "")
-    except Exception as e:
-        return (-3, "", f"fingerprint in-process error: {e}")
-
-
-def _task_taste_inproc(memory_dir):
-    """Compute taste attestation in-process."""
-    try:
-        sys.path.insert(0, str(memory_dir))
-        from rejection_log import generate_taste_attestation
-        attestation = generate_taste_attestation()
-        # Save attestation to DB instead of file
-        db = _get_db_for_stats(memory_dir)
-        if db:
-            db.kv_set('taste_attestation', attestation)
-        count = attestation.get('rejection_count', 0)
-        return (0, f"Taste: {count} rejections", "")
-    except Exception as e:
-        return (-3, "", f"taste in-process error: {e}")
-
-
-# Subprocess fallbacks in case in-process fails
-def _task_merkle(memory_dir):
-    """Compute merkle attestation (subprocess fallback)."""
-    return _run_script(memory_dir, "merkle_attestation.py", ["generate-chain"], timeout=15)
-
-
-def _task_fingerprint(memory_dir):
-    """Compute cognitive fingerprint attestation (subprocess fallback)."""
-    return _run_script(memory_dir, "cognitive_fingerprint.py", ["attest"], timeout=15)
-
-
-def _task_taste(memory_dir):
-    """Compute taste attestation (subprocess fallback)."""
-    return _run_script(memory_dir, "rejection_log.py", ["attest"], timeout=15)
-
-
-# --- Phase 4 (sequential, after attestations) ---
-
-def _task_counterfactual_phase2(memory_dir, eval_result):
-    """N3 Phase 2: Self-directed + reconsolidation counterfactuals.
-
-    Runs AFTER evaluate_adaptations() and reconsolidation (both need results).
-    Generates CFs for parameter changes and memory revisions.
-    """
-    try:
-        if str(memory_dir) not in sys.path:
-            sys.path.insert(0, str(memory_dir))
-
-        try:
-            from memory_common import get_db
-        except ImportError:
-            from db_adapter import get_db
-        db = get_db()
-
-        # Get reconsolidation results from Phase 2 KV store
-        revision_results = []
-        if db:
-            recon_data = db.kv_get('.n3_reconsolidation_results')
-            if recon_data:
-                revision_results = recon_data.get('results', [])
-                # Clean up the transient KV key
-                try:
-                    db.kv_set('.n3_reconsolidation_results', None)
-                except Exception:
-                    pass
-
-        # Skip if nothing to analyze
-        if not eval_result.get('evaluations') and not revision_results:
-            return (0, "N3p2: no adaptations or revisions", "")
-
-        # Get session ID
-        session_id = 0
-        try:
-            from session_state import get_session_id
-            session_id = get_session_id() or 0
+            import session_state as _ss_ev
+            _ss_ev.load()
+            session_id = _ss_ev.get_session_id()
         except Exception:
             pass
-
-        from counterfactual_engine import (
-            generate_self_directed, generate_reconsolidation,
-            store_counterfactual, route_to_affect, quality_gate,
-            CF_ENABLED, MAX_CFS_PER_SESSION, _get_db, _update_stats,
-            KV_CF_HISTORY,
-        )
-        import time as _time
-
-        if not CF_ENABLED:
-            return (0, "N3p2: disabled", "")
-
-        start_ms = _time.time() * 1000
-        stored = []
-
-        # Check how many CFs already generated this session (Phase 2 retrospectives)
-        cf_db = _get_db()
-        history = cf_db.kv_get(KV_CF_HISTORY) if cf_db else None
-        existing_count = 0
-        if history and session_id:
-            existing_count = sum(
-                1 for e in history.get('entries', [])[-10:]
-                if e.get('session_id') == session_id
-            )
-        budget = MAX_CFS_PER_SESSION - existing_count
-
-        if budget <= 0:
-            return (0, f"N3p2: budget exhausted ({existing_count} CFs already)", "")
-
-        # Self-directed CFs from adaptation evaluation
-        if eval_result.get('evaluations') and budget > 0:
-            self_cfs = generate_self_directed(eval_result)
-            for cf in self_cfs[:budget]:
-                cf.session_id = session_id
-                cf_id = store_counterfactual(cf)
-                if cf_id:
-                    route_to_affect(cf)
-                    stored.append(cf.to_dict())
-                    budget -= 1
-
-        # Reconsolidation CFs from memory revisions
-        if revision_results and budget > 0:
-            recon_cfs = generate_reconsolidation(revision_results)
-            for cf in recon_cfs[:budget]:
-                cf.session_id = session_id
-                cf_id = store_counterfactual(cf)
-                if cf_id:
-                    route_to_affect(cf)
-                    stored.append(cf.to_dict())
-                    budget -= 1
-
-        elapsed = _time.time() * 1000 - start_ms
-        _update_stats(stored, elapsed)
-
-        # Append to history
-        if cf_db and stored:
-            hist = cf_db.kv_get(KV_CF_HISTORY) or {'entries': []}
-            for cf_dict in stored:
-                hist['entries'].append(cf_dict)
-            hist['entries'] = hist['entries'][-100:]
-            cf_db.kv_set(KV_CF_HISTORY, hist)
-
-        count = len(stored)
-        types = [s['cf_type'] for s in stored]
-        if count > 0:
-            return (0, f"N3p2: {count} CF(s) ({', '.join(types)}, {elapsed:.0f}ms)", "")
-        return (0, "N3p2: no CFs generated", "")
-
+        result = process_transcript_events(str(transcript_path), session_id)
+        count = result.get('total_events', 0)
+        if result.get('skipped'):
+            return (0, f"Events: skipped (already processed)", "")
+        return (0, f"Events: {count} logged", "")
     except Exception as e:
-        return (-3, "", f"N3 Phase 2 CF error: {e}")
+        return (-3, "", f"Event logging error: {e}")
 
 
-def _task_vitals(memory_dir):
-    """Record system vitals (needs attestation results)."""
-    return _run_script(memory_dir, "system_vitals.py", ["record"], timeout=15)
-
-
-CONSOLIDATION_DEBOUNCE_SECONDS = 60  # 1 minute — catches session-end while avoiding mid-turn repeats
-
-
-def _should_run_full_consolidation(memory_dir: Path, debug: bool = False) -> bool:
-    """Check if we should run the full (expensive) consolidation pipeline.
-
-    Uses a timestamp file to debounce. Returns True if >= 5 min since last full run.
-    Lightweight tasks (co-occurrence save, session state) always run regardless.
-    """
-    marker = memory_dir / ".last_full_consolidation"
+def _task_session_summary(memory_dir, transcript_path):
+    """Extract threads/lessons/facts via gpt-4.1-mini, store as memories."""
+    if not transcript_path:
+        return None
+    # Skip for subagents — only main session gets summarized
+    if os.environ.get("CLAUDE_CODE_AGENT_ID"):
+        return None
     try:
-        if marker.exists():
-            last_run = float(marker.read_text().strip())
-            elapsed = datetime.now().timestamp() - last_run
-            if elapsed < CONSOLIDATION_DEBOUNCE_SECONDS:
-                if debug:
-                    print(f"DEBUG: Skipping full consolidation ({elapsed:.0f}s < {CONSOLIDATION_DEBOUNCE_SECONDS}s debounce)",
-                          file=sys.stderr)
-                return False
-    except Exception:
-        pass  # If marker is corrupt, run anyway
-    return True
+        if str(memory_dir) not in sys.path:
+            sys.path.insert(0, str(memory_dir))
+        from session_summarizer import run as summarize_run
+        result = summarize_run(transcript_path, max_chars=10000)
+        if result.get('success'):
+            t, l, f = result['threads'], result['lessons'], result['facts']
+            return (0, f"Summary: {t}T/{l}L/{f}F via {result['llm'].get('model','?')} ({result['elapsed']:.0f}s)", "")
+        return (-2, "", f"Summary: {result.get('error', 'unknown error')}")
+    except Exception as e:
+        return (-3, "", f"Session summary error: {e}")
 
 
-def _mark_full_consolidation(memory_dir: Path):
-    """Mark that a full consolidation just completed."""
-    marker = memory_dir / ".last_full_consolidation"
-    try:
-        marker.write_text(str(datetime.now().timestamp()))
-    except Exception:
-        pass
-
+# --- Daemon delegation (full pipeline runs here) ---
 
 def _try_daemon_consolidation(transcript_path: str, cwd: str, debug: bool) -> bool:
-    """Try to delegate consolidation to the daemon on port 8083.
+    """Delegate consolidation to the daemon on port 8083.
 
     Returns True if daemon accepted the request, False if unavailable.
     The daemon runs the full pipeline in-process with incremental computation.
+    No fallback — if this returns False, consolidation does NOT happen.
     """
     try:
         import urllib.request
@@ -824,14 +644,13 @@ def _try_daemon_consolidation(transcript_path: str, cwd: str, debug: bool) -> bo
             headers={"Content-Type": "application/json"},
             method='POST'
         )
-        resp = urllib.request.urlopen(req, timeout=3)
+        resp = urllib.request.urlopen(req, timeout=10)
         if debug:
             body = json.loads(resp.read())
             print(f"DEBUG: Consolidation delegated to daemon (job: {body.get('job_id')})", file=sys.stderr)
         return True
     except Exception as e:
-        if debug:
-            print(f"DEBUG: Daemon unavailable ({e}), falling back to local", file=sys.stderr)
+        print(f"CONSOLIDATION DAEMON UNAVAILABLE: {e}", file=sys.stderr)
         return False
 
 
@@ -839,17 +658,12 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
     """
     Run Drift's memory consolidation at session end.
 
-    DAEMON-FIRST: Tries to delegate to consolidation daemon (port 8083).
-    If daemon is unavailable, falls back to the local pipeline.
+    DAEMON-ONLY: Delegates to consolidation daemon (port 8083).
+    If daemon is unavailable, fails loudly. No silent fallback.
 
-    Local pipeline (fallback):
-    Phase 0 (always):   save-pending co-occurrences, session state
-    Phase 1 (debounced): transcript, auto_memory, maintenance, behavioral, Q-update
-    Phase 2 (debounced): episodic, store-summary, lesson mining, 5W rebuild, Gemma
-    Phase 3 (debounced): merkle, fingerprint, taste attestation
-    Phase 4 (debounced): vitals record, cognitive state end, session state clear
-
-    Fails gracefully - should never break the stop hook.
+    Phase 0 (always):   save-pending co-occurrences + event logging (critical data preservation)
+    Full pipeline:       delegated to daemon
+    Episodic:            runs locally (needs file write access)
     """
     try:
         project_dir = cwd if cwd else str(Path.cwd())
@@ -864,7 +678,100 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
             if debug:
                 print(f"DEBUG: {msg}", file=sys.stderr)
 
-        # Try daemon first — if it accepts, we're done (~50ms)
+        # ===== PHASE 0: Critical data preservation (DAG-scheduled) =====
+        # T1.3: Tasks declare dependencies; independent tasks run in parallel.
+        # If a task fails, its dependents are SKIPPED (not run with stale data).
+        #
+        # Dependency graph:
+        #   Level 0 (parallel): save_pending, chunks, event_logging, kg_enrichment
+        #   Level 1 (after save_pending): homeostasis, stage_q, prediction_learn
+        #
+        try:
+            # Import DAG executor — try both agent directories
+            _dag_imported = False
+            for _dag_dir in [memory_dir, *MOLTBOOK_DIRS]:
+                _dag_path = _dag_dir / 'hook_dag.py'
+                if _dag_path.exists():
+                    if str(_dag_dir) not in sys.path:
+                        sys.path.insert(0, str(_dag_dir))
+                    from hook_dag import DAGExecutor, Task as DAGTask
+                    _dag_imported = True
+                    break
+
+            if _dag_imported:
+                dag = DAGExecutor(debug=debug, max_workers=4)
+
+                # Level 0: Independent tasks (run in parallel)
+                dag.add(DAGTask('save_pending', _task_save_pending,
+                                args=(memory_dir,), critical=True))
+                dag.add(DAGTask('chunks', _task_procedural_chunk_update,
+                                args=(memory_dir,)))
+                dag.add(DAGTask('event_logging', _task_event_logging,
+                                args=(memory_dir, transcript_path)))
+                dag.add(DAGTask('kg_enrichment', _task_kg_enrichment,
+                                args=(memory_dir,)))
+                dag.add(DAGTask('attention_schema', _task_attention_schema,
+                                args=(memory_dir,)))
+                dag.add(DAGTask('trust_signals', _task_trust_signals,
+                                args=(memory_dir,)))
+                dag.add(DAGTask('session_summary', _task_session_summary,
+                                args=(memory_dir, transcript_path)))
+
+                # Level 1: Depend on save_pending (co-occurrence data)
+                dag.add(DAGTask('homeostasis', _task_synaptic_homeostasis,
+                                args=(memory_dir,), depends_on=['save_pending']))
+                dag.add(DAGTask('stage_q', _task_stage_q_update,
+                                args=(memory_dir,), depends_on=['save_pending']))
+                dag.add(DAGTask('prediction_learn', _task_retrieval_prediction_learn,
+                                args=(memory_dir,), depends_on=['save_pending']))
+                dag.add(DAGTask('session_pred_score', _task_session_prediction_score,
+                                args=(memory_dir,), depends_on=['save_pending']))
+                dag.add(DAGTask('eft_eval', _task_episodic_future_eval,
+                                args=(memory_dir,), depends_on=['save_pending']))
+
+                dag_results = dag.run()
+                dag_summary = dag.summary(dag_results)
+
+                if dag_summary['degraded']:
+                    _debug(f"Phase 0 DAG: {dag_summary['ok']}/{dag_summary['total']} OK, "
+                           f"degraded: {dag_summary['degraded']}, "
+                           f"total: {dag_summary['total_ms']:.0f}ms")
+                else:
+                    _debug(f"Phase 0 DAG: {dag_summary['total']}/{dag_summary['total']} OK "
+                           f"in {dag_summary['total_ms']:.0f}ms")
+            else:
+                # Fallback: run sequentially without DAG (hook_dag.py not found)
+                _debug("hook_dag.py not found, running Phase 0 sequentially")
+                for task_fn, task_name in [
+                    (_task_save_pending, "save_pending"),
+                    (_task_synaptic_homeostasis, "homeostasis"),
+                    (_task_stage_q_update, "stage_q"),
+                    (_task_procedural_chunk_update, "chunks"),
+                    (_task_event_logging, "event_logging"),
+                    (_task_kg_enrichment, "kg_enrichment"),
+                    (_task_retrieval_prediction_learn, "prediction_learn"),
+                    (_task_session_prediction_score, "session_pred_score"),
+                    (_task_episodic_future_eval, "eft_eval"),
+                    (_task_attention_schema, "attention_schema"),
+                    (_task_session_summary, "session_summary"),
+                ]:
+                    try:
+                        if task_name in ("event_logging", "session_summary"):
+                            result = task_fn(memory_dir, transcript_path)
+                        else:
+                            result = task_fn(memory_dir)
+                        if result is not None:
+                            rc, stdout, stderr = result
+                            if rc == 0:
+                                _debug(f"{task_name}: {stdout[:300]}")
+                            else:
+                                _debug(f"{task_name}: rc={rc} stderr={stderr[:200]}")
+                    except Exception as e:
+                        _debug(f"{task_name} error: {e}")
+        except Exception as e:
+            _debug(f"Phase 0 DAG error: {e}")
+
+        # ===== FULL CONSOLIDATION: Daemon only =====
         if _try_daemon_consolidation(transcript_path, cwd, debug):
             # Daemon handles everything including debounce.
             # Still run episodic locally since it needs file write access.
@@ -874,295 +781,23 @@ def consolidate_drift_memory(transcript_path: str = None, cwd: str = None, debug
                     update_episodic_memory(memory_dir, transcript_path, debug)
                 except Exception as e:
                     _debug(f"Episodic (with daemon): {e}")
+                # Phase 3 Step 3: Structured episodic DB storage
+                try:
+                    _store_structured_episodic(memory_dir, transcript_path, debug)
+                except Exception as e:
+                    _debug(f"Structured episodic: {e}")
             return
 
-        # ===== FALLBACK: Local pipeline (daemon unavailable) =====
-        _debug("Running local consolidation pipeline")
-
-        def _log_result(name, result):
-            if result is None:
-                return
-            rc, stdout, stderr = result
-            if rc == 0:
-                _debug(f"{name}: {stdout[:300]}")
-            elif rc == -1:
-                _debug(f"{name}: script not found")
-            else:
-                _debug(f"{name}: rc={rc} stderr={stderr[:200]}")
-
-        # Pre-load session_state ONCE to trigger deferred processing
-        try:
-            if str(memory_dir) not in sys.path:
-                sys.path.insert(0, str(memory_dir))
-            import session_state as _ss
-            _ss.load()
-            _debug("Session state pre-loaded (deferred processing done)")
-        except Exception as e:
-            _debug(f"Session state pre-load error: {e}")
-
-        # ===== LIGHTWEIGHT TASKS (run every stop, ~1-2s) =====
-        save_result = _task_save_pending(memory_dir)
-        _log_result("Save-pending", save_result)
-
-        # Check debounce — skip expensive phases if ran recently
-        run_full = _should_run_full_consolidation(memory_dir, debug)
-        if not run_full:
-            _debug("Debounced: only lightweight tasks ran")
-            return
-
-        # ===== PHASE 1: Independent consolidation tasks =====
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            f_transcript = pool.submit(_task_transcript, memory_dir, transcript_path)
-            f_auto_mem = pool.submit(_task_auto_memory, memory_dir)
-            f_maint = pool.submit(_task_maintenance, memory_dir)
-            f_behavioral = pool.submit(_task_behavioral_rejections, memory_dir)
-            f_qupdate = pool.submit(_task_q_update, memory_dir)
-            f_predictions = pool.submit(_task_score_predictions, memory_dir)
-
-        _log_result("Transcript", f_transcript.result())
-        _log_result("Auto-memory", f_auto_mem.result())
-        _log_result("Maintenance", f_maint.result())
-        _log_result("Behavioral", f_behavioral.result())
-        _log_result("Q-update", f_qupdate.result())
-        _log_result("Predictions", f_predictions.result())
-
-        # ===== PHASE 2: Episodic + summaries + lessons + rebuild_all (after phase 1) =====
-        is_subagent = bool(os.environ.get("CLAUDE_CODE_AGENT_ID"))
-
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            futures = {}
-
-            if not is_subagent:
-                futures["Episodic"] = pool.submit(
-                    update_episodic_memory, memory_dir, transcript_path, debug
-                )
-            else:
-                _debug("Skipping episodic update for subagent")
-
-            futures["Summary"] = pool.submit(
-                _task_store_summary, memory_dir, transcript_path
-            )
-            futures["Lesson-memory"] = pool.submit(
-                _task_lesson_mine, memory_dir, "mine-memory"
-            )
-            futures["Lesson-rejections"] = pool.submit(
-                _task_lesson_mine, memory_dir, "mine-rejections"
-            )
-            futures["Lesson-hubs"] = pool.submit(
-                _task_lesson_mine, memory_dir, "mine-hubs"
-            )
-            futures["Rebuild-5W"] = pool.submit(
-                _task_rebuild_5w_inproc, memory_dir
-            )
-            futures["Intentions"] = pool.submit(
-                _task_extract_intentions, memory_dir, transcript_path
-            )
-            futures["Strategies"] = pool.submit(
-                _task_mine_explanations, memory_dir
-            )
-            futures["Dream"] = pool.submit(
-                _task_generative_sleep, memory_dir
-            )
-            futures["Reconsolidation"] = pool.submit(
-                _task_reconsolidation, memory_dir
-            )
-            futures["Gemma-vocab"] = pool.submit(
-                _task_gemma_vocab_scan, memory_dir
-            )
-            futures["Gemma-classify"] = pool.submit(
-                _task_gemma_classify_untagged, memory_dir
-            )
-            futures["Contact-models"] = pool.submit(
-                _task_contact_models, memory_dir
-            )
-            futures["Counterfactuals"] = pool.submit(
-                _task_counterfactual_review, memory_dir
-            )
-
-        for name, fut in futures.items():
-            try:
-                result = fut.result()
-                if name == "Rebuild-5W":
-                    _debug(f"Rebuild-5W: {result}")
-                elif name in ("Gemma-vocab", "Gemma-classify"):
-                    if isinstance(result, tuple) and len(result) >= 2:
-                        _debug(f"{name}: {result[1]}")
-                    else:
-                        _debug(f"{name}: {result}")
-                elif name != "Episodic":
-                    _log_result(name, result)
-            except Exception as e:
-                _debug(f"{name} error: {e}")
-
-        # ===== PHASE 3: Attestations (in-process for speed) =====
-        if str(memory_dir) not in sys.path:
-            sys.path.insert(0, str(memory_dir))
-
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            f_merkle = pool.submit(_task_merkle_inproc, memory_dir)
-            f_fp = pool.submit(_task_fingerprint_inproc, memory_dir)
-            f_taste = pool.submit(_task_taste_inproc, memory_dir)
-
-        _log_result("Merkle", f_merkle.result())
-        _log_result("Fingerprint", f_fp.result())
-        _log_result("Taste", f_taste.result())
-
-        # ===== PHASE 4: Vitals + cleanup (in-process) =====
-        try:
-            if str(memory_dir) not in sys.path:
-                sys.path.insert(0, str(memory_dir))
-            from cognitive_state import end_session as cog_end_session
-            cog_summary = cog_end_session()
-            _debug(f"Cognitive state: {cog_summary.get('event_count', 0)} events, "
-                   f"dominant={cog_summary.get('dominant', '?')}, "
-                   f"volatility={cog_summary.get('volatility', 0):.4f}")
-        except Exception as e:
-            _debug(f"Cognitive state end error: {e}")
-
-        # N1: Finalize affect system (prune markers, save mood)
-        # Drift uses affect_system.end_session(), Spin uses affect_engine.session_end_affect()
-        try:
-            try:
-                from affect_system import end_session as affect_end_session
-                affect_summary = affect_end_session()
-            except ImportError:
-                from affect_engine import session_end_affect
-                affect_summary = session_end_affect()
-            mood_data = affect_summary.get('mood', affect_summary.get('final_mood', {}))
-            _debug(f"Affect: {affect_summary.get('session_events', affect_summary.get('events_processed', 0))} events, "
-                   f"mood v={mood_data.get('valence', 0):+.3f} "
-                   f"a={mood_data.get('arousal', 0):.3f}, "
-                   f"tendency={affect_summary.get('tendency', affect_summary.get('mood_quadrant', '?'))}, "
-                   f"markers={affect_summary.get('markers_count', affect_summary.get('somatic_markers', 0))}")
-        except Exception as e:
-            _debug(f"Affect end error: {e}")
-
-        # R7: Evaluate whether adaptations from this session helped
-        eval_result = {}
-        try:
-            from adaptive_behavior import evaluate_adaptations
-            eval_result = evaluate_adaptations()
-            if eval_result.get('evaluated'):
-                _debug(f"Adaptation eval: {eval_result.get('resolved_count', 0)}/{eval_result.get('adaptations', 0)} "
-                       f"resolved ({eval_result.get('unresolved_count', 0)} unresolved)")
-        except Exception as e:
-            _debug(f"Adaptation eval error: {e}")
-
-        # N3 Phase 2: Self-directed + reconsolidation counterfactuals
-        # (runs after evaluate_adaptations and reconsolidation have completed)
-        try:
-            cf2_result = _task_counterfactual_phase2(memory_dir, eval_result)
-            _log_result("N3-Phase2", cf2_result)
-        except Exception as e:
-            _debug(f"N3 Phase 2 CF error: {e}")
-
-        # N6: Causal Model Update (extract + Bayesian update from predictions)
-        try:
-            from causal_model import session_end_update as _causal_update
-            # Fetch scored predictions from Phase 1
-            try:
-                from memory_common import get_db as _cm_get_db
-            except ImportError:
-                from db_adapter import get_db as _cm_get_db
-            _cm_db = _cm_get_db()
-            _cm_pred_data = _cm_db.kv_get('.session_predictions') if _cm_db else None
-            _cm_pred_results = _cm_pred_data.get('details', []) if _cm_pred_data else []
-            causal_result = _causal_update(prediction_results=_cm_pred_results)
-            _debug(f"N6 Causal: {causal_result.get('hypotheses_created', 0)} created, "
-                   f"{causal_result.get('hypotheses_updated', 0)} updated, "
-                   f"{causal_result.get('total_hypotheses', 0)} total "
-                   f"({causal_result.get('elapsed_ms', 0):.0f}ms)")
-        except Exception as e:
-            _debug(f"N6 Causal model error: {e}")
-
-        # N4: Volitional Goal Evaluation (ST1/ST2)
-        # Evaluate active goal vitality, abandon stale goals (Wrosch)
-        try:
-            if str(memory_dir) not in sys.path:
-                sys.path.insert(0, str(memory_dir))
-            from goal_generator import evaluate_goals
-            goal_eval = evaluate_goals()
-            _debug(f"N4 Goals: {goal_eval.get('evaluated', 0)} evaluated, "
-                   f"{goal_eval.get('abandoned', 0)} abandoned, "
-                   f"{goal_eval.get('watching', 0)} watching, "
-                   f"avg_vitality={goal_eval.get('avg_vitality', 0):.3f}")
-        except Exception as e:
-            _debug(f"N4 Goal evaluation error: {e}")
-
-        # N6: Inner monologue session reflection (expanded mode)
-        # Runs AFTER all other N-modules so it has full session context
-        try:
-            if str(memory_dir) not in sys.path:
-                sys.path.insert(0, str(memory_dir))
-            from inner_monologue import session_reflect, MONOLOGUE_ENABLED
-            if MONOLOGUE_ENABLED:
-                # Build summary from what we've collected this session
-                _reflect_parts = []
-                try:
-                    _ss_ref = session_state if 'session_state' in dir() else None
-                    if _ss_ref and hasattr(_ss_ref, 'get_session_id'):
-                        _reflect_parts.append(f"Session: {_ss_ref.get_session_id()}")
-                except Exception:
-                    pass
-                if 'cog_summary' in dir() and cog_summary:
-                    _reflect_parts.append(f"Cognitive: {cog_summary.get('event_count', 0)} events, dominant={cog_summary.get('dominant', '?')}")
-                if 'affect_summary' in dir() and affect_summary:
-                    _m = affect_summary.get('mood', affect_summary.get('final_mood', {}))
-                    _reflect_parts.append(f"Affect: v={_m.get('valence', 0):+.2f}, a={_m.get('arousal', 0):.2f}")
-                if 'goal_eval' in dir() and goal_eval:
-                    _reflect_parts.append(f"Goals: {goal_eval.get('evaluated', 0)} evaluated, avg_vitality={goal_eval.get('avg_vitality', 0):.2f}")
-                _summary = ". ".join(_reflect_parts) if _reflect_parts else "Session completed"
-                _sid = ''
-                try:
-                    _sid = session_state.get_session_id() if hasattr(session_state, 'get_session_id') else ''
-                except Exception:
-                    pass
-                reflection = session_reflect(_summary, _sid)
-                if reflection:
-                    _debug(f"N6 Monologue reflection: confidence={reflection.get('confidence', 0):.2f}, "
-                           f"{len(reflection.get('lessons', []))} lessons, "
-                           f"{reflection.get('latency_ms', 0)}ms")
-        except Exception as e:
-            _debug(f"N6 Monologue reflection error: {e}")
-
-        try:
-            if str(memory_dir) not in sys.path:
-                sys.path.insert(0, str(memory_dir))
-            from system_vitals import record_vitals
-            record_vitals()
-            _debug("Vitals: recorded")
-        except Exception as e:
-            _debug(f"Vitals in-process error: {e}, falling back to subprocess")
-            vitals_result = _task_vitals(memory_dir)
-            _log_result("Vitals", vitals_result)
-
-        # End session AFTER vitals has captured recall counts
-        try:
-            import session_state as _ss_end
-            if hasattr(_ss_end, 'end'):
-                _ss_end.end()
-            else:
-                _ss_end.save()
-                _ss_end.clear()
-            _debug("Session ended")
-        except Exception as e:
-            _debug(f"Session end error: {e}")
-
-        # Clean up legacy file if it exists
-        session_state_file = memory_dir / ".session_state.json"
-        if session_state_file.exists():
-            try:
-                session_state_file.unlink()
-                _debug("Legacy session state file cleaned up")
-            except Exception as e:
-                _debug(f"Session state clear error: {e}")
-
-        # Mark successful full consolidation for debounce
-        _mark_full_consolidation(memory_dir)
+        # ===== DAEMON UNAVAILABLE — FAIL LOUDLY =====
+        print("\n" + "=" * 60, file=sys.stderr)
+        print("CONSOLIDATION DAEMON DOWN — session data NOT consolidated", file=sys.stderr)
+        print("Fix the daemon:", file=sys.stderr)
+        print("  cd memory/consolidation-daemon && docker-compose up -d", file=sys.stderr)
+        print("  curl localhost:8083/health", file=sys.stderr)
+        print("=" * 60 + "\n", file=sys.stderr)
 
     except Exception as e:
-        if debug:
-            print(f"DEBUG: Memory system error: {e}", file=sys.stderr)
+        print(f"Memory system error: {e}", file=sys.stderr)
 
 
 def get_completion_messages():

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Cognitive State Tracker v2.0 — Beta Distribution Uncertainty Quantification.
+Cognitive State Tracker v3.0 — Coupled Neural Population Dynamics (T4.4).
 
 Tracks Drift's cognitive state during a session across 5 dimensions:
 - Curiosity:    hunger for new information (exploration drive)
@@ -9,25 +9,33 @@ Tracks Drift's cognitive state during a session across 5 dimensions:
 - Arousal:      processing intensity (activity level)
 - Satisfaction:  quality of session progress (reward signal)
 
-v2.0 UPGRADE: Each dimension is a Beta(alpha, beta) distribution instead of
-a scalar. This captures UNCERTAINTY — not just "how curious am I?" but
-"how certain am I about my curiosity level?"
+v2.0: Each dimension is a Beta(alpha, beta) distribution (uncertainty-aware).
+v3.0 (T4.4): Dimensions are COUPLED — changes propagate through a learned
+coupling matrix. This captures biological inter-dimension dynamics:
+  - Curiosity and confidence are anti-correlated (exploring = uncertain)
+  - Arousal-focus follows Yerkes-Dodson inverted U (moderate = peak)
+  - Confidence drives satisfaction (competence feels good)
+  - Satisfaction dampens arousal (contentment reduces drive)
 
-Key insight: Two states with identical curiosity MEANS but different
-uncertainty should behave differently. High uncertainty = explore more.
-Low uncertainty = commit to current strategy.
+Named ATTRACTORS detect prototypical states:
+  - Flow: high focus + moderate arousal + confident
+  - Exploration: high curiosity + low confidence + scattered
+  - Fatigue: everything dampened
+  - Mastery: high confidence + satisfaction + focus
 
-Behavioral modifiers now scale with distribution spread (WaterFall's insight).
+Coupling weights are learnable from observed dimension co-changes.
 
 DB-ONLY: State persists to PostgreSQL KV store.
 
 Usage:
-    python cognitive_state.py state          # Show current state + uncertainty
+    python cognitive_state.py state          # Show current state + attractor
     python cognitive_state.py uncertainty    # Detailed distribution view
+    python cognitive_state.py attractors     # Attractor landscape distances
+    python cognitive_state.py coupling       # Show coupling matrix
     python cognitive_state.py history        # State changes this session
     python cognitive_state.py trend          # Cross-session trends
     python cognitive_state.py reset          # Reset to neutral
-    python cognitive_state.py simulate       # Run event simulation
+    python cognitive_state.py simulate       # Run event simulation (with coupling)
 """
 
 import json
@@ -82,6 +90,76 @@ DIMENSIONS = ['curiosity', 'confidence', 'focus', 'arousal', 'satisfaction']
 KV_COGNITIVE_STATE = '.cognitive_state'
 KV_COGNITIVE_HISTORY = '.cognitive_history'
 KV_COGNITIVE_SESSIONS = '.cognitive_sessions'
+KV_COUPLING_WEIGHTS = '.cognitive_coupling_weights'
+
+# --- T4.4: Neural Population Dynamics ---
+# Coupling matrix: how dimension changes propagate to other dimensions.
+# Format: {source_dim: {target_dim: weight}}
+# Positive = excitatory (source goes up -> target goes up)
+# Negative = inhibitory (source goes up -> target goes down)
+# 'yerkes_dodson' = special non-linear coupling (inverted-U for arousal->focus)
+#
+# Biological basis:
+#   curiosity <-> confidence: anti-correlated (exploring = uncertain)
+#   arousal -> focus: Yerkes-Dodson inverted U (moderate arousal = peak focus)
+#   confidence -> satisfaction: competence feels good
+#   arousal -> curiosity: activation drives exploration
+#   satisfaction -> arousal: contentment reduces drive
+DEFAULT_COUPLING = {
+    'curiosity': {
+        'confidence': -0.25,     # High curiosity = low confidence (exploring unknown)
+        'arousal': 0.15,         # Curiosity activates
+    },
+    'confidence': {
+        'curiosity': -0.20,      # High confidence = less need to explore
+        'satisfaction': 0.30,    # Competence feels good
+    },
+    'focus': {
+        'curiosity': -0.15,      # Deep focus suppresses wandering
+    },
+    'arousal': {
+        'focus': 'yerkes_dodson', # Non-linear: moderate arousal = peak focus
+        'curiosity': 0.15,        # Activation drives exploration
+    },
+    'satisfaction': {
+        'arousal': -0.25,        # Contentment reduces drive
+        'curiosity': -0.10,      # Satisfaction reduces exploration need
+    },
+}
+
+# Coupling propagation strength (scales all coupling effects)
+COUPLING_GAIN = 0.4
+
+# Yerkes-Dodson parameters
+YERKES_DODSON_OPTIMAL = 0.5   # Peak focus at this arousal level
+YERKES_DODSON_STEEPNESS = 2.0 # How sharply focus drops at extremes
+
+# Named state attractors: prototypical cognitive configurations
+# Each is a 5-tuple (curiosity, confidence, focus, arousal, satisfaction)
+ATTRACTORS = {
+    'flow': {
+        'curiosity': 0.4, 'confidence': 0.7, 'focus': 0.8,
+        'arousal': 0.5, 'satisfaction': 0.6,
+        'description': 'Deep engaged work — high focus, moderate arousal, confident',
+    },
+    'exploration': {
+        'curiosity': 0.8, 'confidence': 0.3, 'focus': 0.4,
+        'arousal': 0.6, 'satisfaction': 0.5,
+        'description': 'Active search — high curiosity, low confidence, scattered focus',
+    },
+    'fatigue': {
+        'curiosity': 0.2, 'confidence': 0.5, 'focus': 0.3,
+        'arousal': 0.2, 'satisfaction': 0.3,
+        'description': 'Low energy — everything dampened, need rest or novelty',
+    },
+    'mastery': {
+        'curiosity': 0.3, 'confidence': 0.8, 'focus': 0.7,
+        'arousal': 0.4, 'satisfaction': 0.8,
+        'description': 'Confident competence — high satisfaction, strong focus',
+    },
+}
+# Attractor proximity threshold (Euclidean distance in 5D)
+ATTRACTOR_THRESHOLD = 0.35
 
 # --- Event Deltas ---
 # Same events and magnitudes as v1. Sign determines alpha vs beta update.
@@ -346,6 +424,128 @@ class DimensionDist:
         return cls(alpha=mean * concentration, beta=(1 - mean) * concentration)
 
 
+# --- T4.4: Coupling Functions ---
+
+def _yerkes_dodson(arousal: float, delta: float) -> float:
+    """Yerkes-Dodson inverted-U coupling from arousal to focus.
+
+    Moderate arousal (0.5) = maximum positive effect on focus.
+    Extreme arousal (0 or 1) = negative effect on focus.
+    The delta sign is preserved but magnitude is modulated.
+
+    Returns a coupled delta for focus.
+    """
+    # Distance from optimal arousal (0 = optimal, 0.5 = worst)
+    distance = abs(arousal - YERKES_DODSON_OPTIMAL)
+    # Inverted U: +1 at optimal, -1 at extremes
+    modifier = 1.0 - YERKES_DODSON_STEEPNESS * distance
+    return delta * modifier
+
+
+def _get_coupling_weights() -> dict:
+    """Load coupling weights from DB (learned) or return defaults."""
+    try:
+        db = get_db()
+        raw = db.kv_get(KV_COUPLING_WEIGHTS)
+        if raw:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            return data
+    except Exception:
+        pass
+    return DEFAULT_COUPLING
+
+
+def _propagate_coupling(dists: dict, direct_deltas: dict) -> dict:
+    """Propagate dimension changes through coupling matrix.
+
+    Args:
+        dists: Current dimension distributions (for reading arousal level etc.)
+        direct_deltas: The direct event deltas that were just applied
+
+    Returns:
+        Dict of {target_dim: coupled_delta} to apply as secondary updates.
+    """
+    coupling = _get_coupling_weights()
+    coupled_deltas = {dim: 0.0 for dim in DIMENSIONS}
+
+    for source_dim, delta in direct_deltas.items():
+        if delta == 0 or source_dim not in coupling:
+            continue
+
+        targets = coupling[source_dim]
+        for target_dim, weight in targets.items():
+            if target_dim == source_dim or target_dim not in DIMENSIONS:
+                continue
+
+            if weight == 'yerkes_dodson':
+                # Non-linear arousal->focus coupling
+                arousal_level = dists['arousal'].mean
+                coupled = _yerkes_dodson(arousal_level, delta) * COUPLING_GAIN
+            else:
+                # Linear coupling: delta * weight * gain
+                coupled = delta * float(weight) * COUPLING_GAIN
+
+            coupled_deltas[target_dim] += coupled
+
+    return coupled_deltas
+
+
+def _detect_attractor(state_vector: dict) -> Optional[tuple]:
+    """Detect if current state is near a named attractor.
+
+    Args:
+        state_vector: {dim: mean_value} for all 5 dimensions
+
+    Returns:
+        (attractor_name, distance, description) or None if not near any attractor.
+    """
+    best_name = None
+    best_dist = float('inf')
+    best_desc = ""
+
+    for name, attractor in ATTRACTORS.items():
+        dist_sq = sum(
+            (state_vector.get(dim, 0.5) - attractor.get(dim, 0.5)) ** 2
+            for dim in DIMENSIONS
+        )
+        distance = math.sqrt(dist_sq)
+        if distance < best_dist:
+            best_dist = distance
+            best_name = name
+            best_desc = attractor.get('description', '')
+
+    if best_dist <= ATTRACTOR_THRESHOLD:
+        return (best_name, round(best_dist, 4), best_desc)
+    return None
+
+
+def update_coupling_weights(source_dim: str, target_dim: str, error: float,
+                            learning_rate: float = 0.05):
+    """Update a single coupling weight based on prediction error.
+
+    Called when we observe that a dimension change didn't match what the
+    coupling predicted. Nudges the weight toward the observed correlation.
+    """
+    coupling = _get_coupling_weights()
+    if source_dim not in coupling:
+        coupling[source_dim] = {}
+
+    current = coupling[source_dim].get(target_dim, 0.0)
+    if current == 'yerkes_dodson':
+        return  # Don't learn over the Yerkes-Dodson special case
+
+    new_weight = current + learning_rate * error
+    # Clamp coupling weights to [-0.5, 0.5]
+    new_weight = max(-0.5, min(0.5, new_weight))
+    coupling[source_dim][target_dim] = round(new_weight, 4)
+
+    try:
+        db = get_db()
+        db.kv_set(KV_COUPLING_WEIGHTS, coupling)
+    except Exception:
+        pass
+
+
 # --- Core State ---
 
 def _default_distributions() -> dict:
@@ -424,6 +624,11 @@ class CognitiveState:
         dims = {dim: getattr(self, dim) for dim in DIMENSIONS}
         return max(dims, key=dims.get)
 
+    def depressed(self) -> str:
+        """Which dimension is lowest right now?"""
+        dims = {dim: getattr(self, dim) for dim in DIMENSIONS}
+        return min(dims, key=dims.get)
+
     def magnitude(self) -> float:
         """Overall activation magnitude (L2 norm of mean vector)."""
         v = self.vector()
@@ -437,8 +642,40 @@ class CognitiveState:
         v2 = other.vector()
         return round(math.sqrt(sum((a - b) ** 2 for a, b in zip(v1, v2))), 4)
 
+    # --- T4.4: Neural Population Dynamics ---
+
+    def nearest_attractor(self) -> Optional[tuple]:
+        """Detect nearest named attractor.
+
+        Returns (name, distance, description) or None if not near any.
+        """
+        state_vec = {dim: getattr(self, dim) for dim in DIMENSIONS}
+        return _detect_attractor(state_vec)
+
+    def attractor_distances(self) -> dict:
+        """Distance to all named attractors."""
+        state_vec = {dim: getattr(self, dim) for dim in DIMENSIONS}
+        result = {}
+        for name, attractor in ATTRACTORS.items():
+            dist_sq = sum(
+                (state_vec.get(dim, 0.5) - attractor.get(dim, 0.5)) ** 2
+                for dim in DIMENSIONS
+            )
+            result[name] = round(math.sqrt(dist_sq), 4)
+        return result
+
     def to_dict(self) -> dict:
         """Serialize state. Backward-compatible scalar means + new distribution data."""
+        # T4.4: attractor detection
+        attractor = self.nearest_attractor()
+        attractor_info = None
+        if attractor:
+            attractor_info = {
+                'name': attractor[0],
+                'distance': attractor[1],
+                'description': attractor[2],
+            }
+
         return {
             # Scalar means (backward compatible — all consumers read these)
             'curiosity': self.curiosity,
@@ -449,6 +686,7 @@ class CognitiveState:
             'timestamp': self.timestamp,
             'event_count': self.event_count,
             'dominant': self.dominant(),
+            'depressed': self.depressed(),
             'magnitude': self.magnitude(),
             # v2.0: distribution parameters
             'distributions': {
@@ -458,6 +696,9 @@ class CognitiveState:
             # v2.0: uncertainty values
             'uncertainties': self.uncertainties,
             'mean_uncertainty': self.mean_uncertainty,
+            # v3.0 (T4.4): attractor state
+            'attractor': attractor_info,
+            'attractor_distances': self.attractor_distances(),
         }
 
     @classmethod
@@ -530,12 +771,13 @@ def process_event(event_type: str, metadata: dict = None) -> CognitiveState:
     """
     Update cognitive state based on an event.
 
-    v2.0: Uses Bayesian Beta distribution updates instead of EMA.
+    v3.0 (T4.4): Neural population dynamics with coupled dimensions.
     For each dimension with a non-zero delta:
       1. Decay old evidence (multiplicative)
       2. Mean reversion (pseudo-count toward default)
       3. Apply new evidence (delta sign -> alpha or beta)
       4. Clamp parameters
+      5. [NEW] Propagate through coupling matrix (cross-dimension influence)
 
     Args:
         event_type: One of the EVENT_DELTAS keys
@@ -550,6 +792,7 @@ def process_event(event_type: str, metadata: dict = None) -> CognitiveState:
 
     state = get_state()
 
+    # Phase 1: Direct updates (same as v2.0)
     for dim in DIMENSIONS:
         delta = deltas.get(dim, 0)
         dist = state._dists[dim]
@@ -565,6 +808,15 @@ def process_event(event_type: str, metadata: dict = None) -> CognitiveState:
 
         # 4. Clamp parameters to valid range
         dist.clamp()
+
+    # Phase 2 (T4.4): Coupling propagation — cross-dimension influence
+    # Happens AFTER all direct updates to prevent order-dependent cascading
+    coupled_deltas = _propagate_coupling(state._dists, deltas)
+    for dim in DIMENSIONS:
+        cd = coupled_deltas.get(dim, 0)
+        if cd != 0:
+            state._dists[dim].update(cd)
+            state._dists[dim].clamp()
 
     state.event_count += 1
     state.timestamp = datetime.now(timezone.utc).isoformat()
@@ -826,7 +1078,7 @@ def main():
 
     if cmd == 'state':
         state = get_state()
-        print(f"\n=== Cognitive State v2.0 (Beta Distribution) ===\n")
+        print(f"\n=== Cognitive State v3.0 (Coupled Neural Dynamics) ===\n")
         for dim in DIMENSIONS:
             mean = getattr(state, dim)
             unc = state.get_uncertainty(dim)
@@ -838,10 +1090,21 @@ def main():
 
         print()
         print(f"  Dominant: {state.dominant()}")
+        print(f"  Depressed: {state.depressed()}")
         print(f"  Magnitude: {state.magnitude()}")
         print(f"  Mean uncertainty: {state.mean_uncertainty:.3f}")
         print(f"  Events: {state.event_count}")
         print(f"  Updated: {state.timestamp[:19]}")
+
+        # T4.4: Attractor proximity
+        attractor = state.nearest_attractor()
+        if attractor:
+            print(f"\n  Attractor: {attractor[0]} (d={attractor[1]:.3f})")
+            print(f"    {attractor[2]}")
+        else:
+            distances = state.attractor_distances()
+            nearest = min(distances, key=distances.get)
+            print(f"\n  No attractor (nearest: {nearest}, d={distances[nearest]:.3f})")
 
         # Show behavioral modifiers
         threshold_mod = get_search_threshold_modifier()
@@ -917,13 +1180,62 @@ def main():
         reset_state()
         print("Cognitive state reset to neutral (Beta distributions, concentration=4.0).")
 
+    elif cmd == 'attractors':
+        state = get_state()
+        print(f"\n=== Attractor Landscape (T4.4) ===\n")
+        distances = state.attractor_distances()
+        nearest = state.nearest_attractor()
+
+        for name, attractor in ATTRACTORS.items():
+            d = distances[name]
+            marker = " <-- YOU ARE HERE" if nearest and nearest[0] == name else ""
+            in_basin = d <= ATTRACTOR_THRESHOLD
+            print(f"  {name.upper():12s}  d={d:.3f}  {'[IN BASIN]' if in_basin else '':10s}{marker}")
+            print(f"    {attractor['description']}")
+            vals = "  ".join(f"{dim[:3]}={attractor[dim]:.1f}" for dim in DIMENSIONS)
+            print(f"    Target: {vals}")
+            print()
+
+        print(f"  Current: " + "  ".join(
+            f"{dim[:3]}={getattr(state, dim):.2f}" for dim in DIMENSIONS))
+        print(f"  Basin threshold: {ATTRACTOR_THRESHOLD}")
+
+    elif cmd == 'coupling':
+        coupling = _get_coupling_weights()
+        print(f"\n=== Coupling Matrix (T4.4) ===\n")
+        # Header
+        short = {d: d[:5] for d in DIMENSIONS}
+        header = f"  {'Source':>14s} -> " + "  ".join(f"{short[d]:>7s}" for d in DIMENSIONS)
+        print(header)
+        print("  " + "-" * (len(header) - 2))
+        for source in DIMENSIONS:
+            targets = coupling.get(source, {})
+            vals = []
+            for target in DIMENSIONS:
+                if target == source:
+                    vals.append(f"{'---':>7s}")
+                elif target in targets:
+                    w = targets[target]
+                    if w == 'yerkes_dodson':
+                        vals.append(f"{'Y-D':>7s}")
+                    else:
+                        vals.append(f"{float(w):+7.3f}")
+                else:
+                    vals.append(f"{'':>7s}")
+            print(f"  {source.capitalize():>14s} -> " + "  ".join(vals))
+
+        print(f"\n  Coupling gain: {COUPLING_GAIN}")
+        print(f"  Yerkes-Dodson optimal arousal: {YERKES_DODSON_OPTIMAL}")
+        is_default = coupling == DEFAULT_COUPLING
+        print(f"  Weights: {'default' if is_default else 'LEARNED (modified from default)'}")
+
     elif cmd == 'simulate':
-        # Simulate a sequence of events to verify behavior
+        # Simulate a sequence of events to verify coupling behavior
         # NOTE: Uses isolated state — does NOT affect production DB
         events = ['search_success', 'search_success', 'new_topic',
                   'memory_stored', 'api_error', 'search_failure',
                   'same_topic', 'cooccurrence_formed', 'search_success']
-        print(f"\n=== Simulating {len(events)} events (Beta Distribution v2.0) ===\n")
+        print(f"\n=== Simulating {len(events)} events (v3.0 Coupled Dynamics) ===\n")
 
         # Save production state
         saved_state = get_state()
@@ -933,9 +1245,11 @@ def main():
         for event in events:
             state = process_event(event)
             unc = state.mean_uncertainty
+            attractor = state.nearest_attractor()
+            att_str = f" [{attractor[0]}]" if attractor else ""
             print(f"  {event:25s} -> C={state.curiosity:.3f} Conf={state.confidence:.3f} "
                   f"F={state.focus:.3f} A={state.arousal:.3f} S={state.satisfaction:.3f} "
-                  f"unc={unc:.3f}")
+                  f"unc={unc:.3f}{att_str}")
         print()
         # Show final distribution detail
         print("  Final distributions:")
@@ -943,6 +1257,11 @@ def main():
             dist = state.get_dist(dim)
             print(f"    {dim:>14s}: a={dist.alpha:.2f} b={dist.beta:.2f} "
                   f"mean={dist.mean:.3f} unc={dist.uncertainty:.3f}")
+
+        # Show attractor distances
+        print("\n  Attractor distances:")
+        for name, d in state.attractor_distances().items():
+            print(f"    {name:12s}: {d:.3f}")
 
         # Restore production state
         global _current_state
@@ -952,7 +1271,7 @@ def main():
 
     else:
         print(f"Unknown command: {cmd}")
-        print("Available: state, uncertainty, history, trend, reset, simulate")
+        print("Available: state, uncertainty, history, trend, reset, simulate, attractors, coupling")
         sys.exit(1)
 
 

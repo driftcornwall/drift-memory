@@ -306,6 +306,18 @@ def store_memory(
     except Exception:
         pass
 
+    # T2.5: KG metadata extraction (auto-create collaborator/causes/resolves edges)
+    try:
+        def _kg_extract_bg(mid):
+            try:
+                from knowledge_graph import extract_from_memory
+                extract_from_memory(mid)
+            except Exception:
+                pass
+        threading.Thread(target=_kg_extract_bg, args=(memory_id,), daemon=True).start()
+    except Exception:
+        pass
+
     return memory_id, display_name
 
 

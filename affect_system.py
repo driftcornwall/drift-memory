@@ -1020,31 +1020,117 @@ def save_markers():
     db.kv_set(KV_SOMATIC_MARKERS, markers.to_dict())
 
 
+def _extract_marker_context_from_memory(row: dict) -> list[list[str]]:
+    """
+    T2.3: Bridge memory metadata → somatic marker context keys.
+
+    Markers are keyed by context (e.g. ['api_post', 'platform:moltx']),
+    but search pipeline queries by memory_id. This function extracts the
+    context keys that a memory's API interactions would have generated,
+    allowing fuzzy matching against existing markers.
+
+    Returns list of key-lists, most specific first (matching the 3-level
+    hierarchy in learn_from_api_outcome).
+    """
+    tags = row.get('tags', []) or []
+    source = ''
+    extra = row.get('extra_metadata') or {}
+    if isinstance(extra, dict):
+        source = extra.get('source', '') or extra.get('platform', '') or ''
+
+    # Detect platform from tags or source metadata
+    platform = ''
+    platform_names = {
+        'moltx', 'moltbook', 'clawtasks', 'colony', 'thecolony',
+        'clawbr', 'lobsterpedia', 'twitter', 'github', 'deadinternet',
+        'dead-internet', 'agenthub', 'nostr', 'agentlink',
+    }
+    # Check tags
+    for t in tags:
+        t_lower = t.lower().strip()
+        if t_lower in platform_names:
+            platform = t_lower.replace('dead-internet', 'deadinternet').replace('thecolony', 'colony')
+            break
+    # Check platform_context column
+    if not platform:
+        pc = row.get('platform_context') or []
+        if isinstance(pc, list):
+            for p in pc:
+                if isinstance(p, str) and p.lower() in platform_names:
+                    platform = p.lower().replace('dead-internet', 'deadinternet')
+                    break
+    # Check source metadata
+    if not platform and source:
+        for pn in platform_names:
+            if pn in source.lower():
+                platform = pn.replace('dead-internet', 'deadinternet')
+                break
+
+    # Detect action type from tags
+    action = 'post'  # default assumption
+    action_tags = {'reply': 'reply', 'comment': 'comment', 'like': 'like',
+                   'follow': 'follow', 'post': 'post', 'article': 'post'}
+    for t in tags:
+        if t.lower() in action_tags:
+            action = action_tags[t.lower()]
+            break
+
+    # Detect target/agent from entities
+    target = ''
+    entities = row.get('entities') or {}
+    if isinstance(entities, dict):
+        people = entities.get('people') or entities.get('agents') or []
+        if isinstance(people, list) and people:
+            target = str(people[0]).lower()
+        elif isinstance(people, dict) and people:
+            target = str(next(iter(people))).lower()
+
+    # Build context key lists (most specific → least specific)
+    # Mirrors learn_from_api_outcome's 3-level hierarchy
+    candidates = []
+    if platform:
+        if target:
+            # Level 1: exact (action + platform + target)
+            candidates.append([f'api_{action}', f'platform:{platform}', f'target:{target}'])
+        # Level 2: platform (action + platform)
+        candidates.append([f'api_{action}', f'platform:{platform}'])
+    # Level 3: action family
+    candidates.append([f'api_{action}'])
+
+    return candidates
+
+
 def get_somatic_bias(memory_id: str) -> float:
     """
-    FINDING-20 fix: Get somatic marker bias for a memory ID.
-    Used as System 1 pre-analytical signal in search pipeline.
+    T2.3: Get somatic marker bias for a memory ID (context-aware).
 
-    Context keys: [memory_id] + entities from memory (if available).
+    Bridges the gap between markers keyed by context (platform/action/target)
+    and search pipeline results identified by memory_id.
+
     Returns additive bias typically in range [-0.15, +0.15].
     """
     try:
         cache = get_markers()
         mood = get_mood()
-        # Primary: check marker for memory ID directly
+
+        # 1. Direct memory_id check (existing, keep for forward compat)
         bias = cache.get_bias([memory_id], mood.arousal)
-        if abs(bias) > 0.01:
-            # Scale to search-pipeline range (somatic bias should be gentle)
+        if abs(bias) > 0.001:
             return max(-0.15, min(0.15, bias * 0.15))
-        # Secondary: try multi-hash (memory_id + type)
+
+        # 2. Context-aware lookup: extract platform/action/target from memory
+        # Threshold 0.001 (not 0.01): at low arousal, valid markers produce
+        # signals ~0.005 which are real but gentle. get_bias() returns 0.0
+        # for no-marker/low-confidence, so any non-zero signal is meaningful.
         try:
             db = get_db()
             row = db.get_memory(memory_id)
             if row:
-                mem_type = row.get('type', 'active')
-                multi_bias = cache.get_bias([memory_id, mem_type], mood.arousal)
-                if abs(multi_bias) > 0.01:
-                    return max(-0.15, min(0.15, multi_bias * 0.15))
+                context_keys = _extract_marker_context_from_memory(row)
+                for keys in context_keys:
+                    b = cache.get_bias(keys, mood.arousal)
+                    if abs(b) > 0.001:
+                        return max(-0.15, min(0.15, b * 0.15))
         except Exception:
             pass
     except Exception:

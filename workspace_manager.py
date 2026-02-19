@@ -80,6 +80,9 @@ MODULE_CATEGORIES = {
     'counterfactual': 'imagination',
     'goals': 'action',  # N4: Volitional goals compete in action category
     'monologue': 'meta',  # N6: Inner monologue competes in meta category
+    'procedural': 'action',  # Phase 3: Context-triggered skill chunks
+    'agenthub': 'social',  # Agent Hub DMs
+    'episodic_future': 'imagination',  # T4.2: Episodic future thinking
 }
 
 
@@ -289,6 +292,18 @@ def _salience_counterfactual(content: str, meta: dict) -> float:
     return min(1.0, base)
 
 
+def _salience_episodic_future(content: str, meta: dict) -> float:
+    """T4.2: Salience scorer for prospective memory (episodic future thinking)."""
+    base = 0.20
+    active = meta.get('active_count', 0)
+    if active > 0:
+        base += 0.15
+    # Boost if trigger fired (would be injected via post_tool_use, not workspace)
+    if 'TRIGGERED' in content:
+        base += 0.30
+    return min(1.0, base)
+
+
 def _salience_goals(content: str, meta: dict) -> float:
     """N4/WS1: Focus goal gets high salience; active goals moderate."""
     has_focus = 'FOCUS GOAL' in content
@@ -346,6 +361,7 @@ _SALIENCE_SCORERS = {
     'counterfactual': _salience_counterfactual,
     'goals': _salience_goals,
     'monologue': _salience_monologue,
+    'episodic_future': _salience_episodic_future,
 }
 
 
@@ -356,6 +372,194 @@ def compute_salience(module: str, content: str, metadata: dict) -> float:
         return max(0.0, min(1.0, scorer(content, metadata)))
     except Exception:
         return _salience_default(content, metadata)
+
+
+# ─── T2.2: Lazy Evaluation (Ported from SpindriftMend) ──────────────────────
+# Probes predict which modules will produce EMPTY content. Cheap checks (DB/file)
+# that run in ~50-100ms total and save 200-800ms by skipping empty subprocesses.
+
+LAZY_EVALUATION_ENABLED = True  # Feature flag for rollback
+
+_PROBES: dict = {}  # module_name -> probe_function
+
+
+def _register_probe(module_name: str):
+    """Decorator to register a probe for a module."""
+    def decorator(fn):
+        _PROBES[module_name] = fn
+        return fn
+    return decorator
+
+
+@_register_probe('consolidation')
+def _probe_consolidation() -> bool:
+    """True = EMPTY (skip). Check if consolidation daemon has recent output."""
+    try:
+        db = get_db()
+        data = db.kv_get('.consolidation_pending')
+        if data and isinstance(data, list) and len(data) > 0:
+            return False
+        # Also check if daemon is running (port 8083)
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.1)
+        result = s.connect_ex(('127.0.0.1', 8083))
+        s.close()
+        return result != 0  # Skip if daemon not running
+    except Exception:
+        return True
+
+
+@_register_probe('excavation')
+def _probe_excavation() -> bool:
+    """True = EMPTY. Check if curiosity engine has targets."""
+    try:
+        db = get_db()
+        targets = db.kv_get('.curiosity_targets')
+        return not (targets and isinstance(targets, list) and len(targets) > 0)
+    except Exception:
+        return True
+
+
+@_register_probe('intentions')
+def _probe_intentions() -> bool:
+    """True = EMPTY. Check if temporal intentions exist."""
+    try:
+        db = get_db()
+        intentions = db.kv_get('.temporal_intentions')
+        if intentions and isinstance(intentions, list) and len(intentions) > 0:
+            return False
+        # Also check active goals (intentions derive from committed goals)
+        goals = db.kv_get('.active_goals')
+        return not (goals and isinstance(goals, list) and len(goals) > 0)
+    except Exception:
+        return True
+
+
+@_register_probe('adaptive')
+def _probe_adaptive() -> bool:
+    """True = EMPTY. Check if affect system has action tendency."""
+    try:
+        db = get_db()
+        affect = db.kv_get('.affect_state')
+        if not affect or not isinstance(affect, dict):
+            return True
+        # If there's a non-default tendency, adaptive has work to do
+        tendency = affect.get('action_tendency', '')
+        return tendency in ('', 'approach_engage')  # Default = nothing adaptive to do
+    except Exception:
+        return True
+
+
+@_register_probe('research')
+def _probe_research() -> bool:
+    """True = EMPTY. Check if unimplemented research items exist."""
+    try:
+        import os
+        research_dir = os.path.join(os.path.dirname(__file__), 'plans')
+        if not os.path.isdir(research_dir):
+            return True
+        files = [f for f in os.listdir(research_dir)
+                 if f.endswith('.md') and 'research' in f.lower()]
+        return len(files) == 0
+    except Exception:
+        return True
+
+
+@_register_probe('buffer')
+def _probe_buffer() -> bool:
+    """True = EMPTY. Check if short-term buffer has items."""
+    try:
+        db = get_db()
+        buf = db.kv_get('.short_term_buffer')
+        return not (buf and isinstance(buf, list) and len(buf) > 0)
+    except Exception:
+        return True
+
+
+@_register_probe('phone_sensors')
+def _probe_phone_sensors() -> bool:
+    """True = EMPTY. Quick TCP check to phone Tailscale IP."""
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.05)  # 50ms — just checking reachability
+        result = s.connect_ex(('100.122.228.96', 3001))
+        s.close()
+        return result != 0  # Skip if phone unreachable
+    except Exception:
+        return True
+
+
+@_register_probe('counterfactual')
+def _probe_counterfactual() -> bool:
+    """True = EMPTY. Check if there are violated predictions to reason about."""
+    try:
+        db = get_db()
+        preds = db.kv_get('.session_predictions')
+        if not preds or not isinstance(preds, list):
+            return True
+        # Need at least one prediction with an outcome to generate CFs
+        return not any(p.get('outcome') is not None for p in preds if isinstance(p, dict))
+    except Exception:
+        return True
+
+
+@_register_probe('agenthub')
+def _probe_agenthub() -> bool:
+    """True = EMPTY. Check if Agent Hub credentials exist."""
+    try:
+        import os
+        creds_path = os.path.expanduser('~/.config/agenthub/credentials.json')
+        return not os.path.exists(creds_path)
+    except Exception:
+        return True
+
+
+@_register_probe('procedural')
+def _probe_procedural() -> bool:
+    """True = EMPTY. Check if procedural chunks directory has files."""
+    try:
+        import os
+        chunks_dir = os.path.join(os.path.dirname(__file__), 'procedural', 'chunks')
+        if not os.path.isdir(chunks_dir):
+            return True
+        files = [f for f in os.listdir(chunks_dir) if f.endswith('.json')]
+        return len(files) == 0
+    except Exception:
+        return True
+
+
+def probe_modules() -> set:
+    """Run all probes and return set of module names to SKIP (predicted empty).
+
+    Called by session_start.py before ThreadPoolExecutor. ~50-100ms total.
+    Modules NOT in _PROBES always run (priming, social, episodic, etc.).
+    """
+    if not LAZY_EVALUATION_ENABLED:
+        return set()
+
+    skip = set()
+    import time
+    start = time.time()
+
+    for module, probe_fn in _PROBES.items():
+        try:
+            if probe_fn():  # True = empty = skip
+                skip.add(module)
+        except Exception:
+            pass  # On probe failure, don't skip (safe default)
+
+    elapsed_ms = (time.time() - start) * 1000
+    if elapsed_ms > 200:
+        # Log if probes are slow (should be <100ms)
+        try:
+            db = get_db()
+            db.kv_set('.probe_timing', {'elapsed_ms': elapsed_ms, 'skipped': list(skip)})
+        except Exception:
+            pass
+
+    return skip
 
 
 # ─── Suppression Fatigue ─────────────────────────────────────────────────────
@@ -498,6 +702,17 @@ def compete(candidates: list, budget_tokens: int) -> WorkspaceResult:
         penalty = _get_winner_fatigue_penalty(c.module)
         if penalty > 0:
             c.salience = max(0.0, c.salience - penalty)
+
+    # T3.3: Attention Schema modulation (advisory — never breaks competition)
+    try:
+        from attention_schema import get_salience_modulation
+        ast_mods = get_salience_modulation()
+        for c in pool:
+            mod_delta = ast_mods.get(c.module, 0)
+            if mod_delta != 0:
+                c.salience = max(0.0, min(1.0, c.salience + mod_delta))
+    except Exception:
+        pass  # AST unavailable or cold start — no modulation
 
     pool.sort(key=lambda x: x.salience, reverse=True)
     for c in pool:
@@ -657,9 +872,44 @@ def _cmd_suppression():
               f"last broadcast {last_bc}{bonus_str}")
 
 
+def _cmd_probe():
+    """Run T2.2 lazy evaluation probes and show results."""
+    import time
+    print("=== T2.2 Lazy Evaluation Probes ===")
+    print(f"LAZY_EVALUATION_ENABLED: {LAZY_EVALUATION_ENABLED}")
+    print(f"Registered probes: {len(_PROBES)}")
+    print()
+
+    start = time.time()
+    skip = set()
+    for module, probe_fn in sorted(_PROBES.items()):
+        t0 = time.time()
+        try:
+            is_empty = probe_fn()
+            elapsed = (time.time() - t0) * 1000
+            status = "SKIP (empty)" if is_empty else "RUN (has content)"
+            if is_empty:
+                skip.add(module)
+        except Exception as e:
+            elapsed = (time.time() - t0) * 1000
+            status = f"ERROR: {e}"
+        print(f"  {module:20s} | {status:20s} | {elapsed:.1f}ms")
+
+    total = (time.time() - start) * 1000
+    print(f"\nTotal probe time: {total:.1f}ms")
+    print(f"Modules to skip: {len(skip)} / {len(_PROBES)}")
+    if skip:
+        print(f"  Skipping: {sorted(skip)}")
+
+    # Show always-run modules
+    always_run = {'priming', 'social', 'episodic', 'stats', 'platform',
+                  'self_narrative', 'predictions', 'lessons', 'goals'}
+    print(f"  Always run (no probe): {sorted(always_run)}")
+
+
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print("Usage: python workspace_manager.py [status|history|suppression]")
+        print("Usage: python workspace_manager.py [status|history|suppression|probe]")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -669,7 +919,9 @@ if __name__ == '__main__':
         _cmd_history()
     elif cmd == 'suppression':
         _cmd_suppression()
+    elif cmd == 'probe':
+        _cmd_probe()
     else:
         print(f"Unknown command: {cmd}")
-        print("Usage: python workspace_manager.py [status|history|suppression]")
+        print("Usage: python workspace_manager.py [status|history|suppression|probe]")
         sys.exit(1)

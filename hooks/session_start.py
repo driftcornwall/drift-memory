@@ -5,6 +5,7 @@
 #     "python-dotenv",
 #     "pyyaml",
 #     "psycopg2-binary",
+#     "requests",
 # ]
 # ///
 
@@ -748,51 +749,91 @@ def _read_encounters(memory_dir):
 
 
 def _read_and_clean_episodic(memory_dir, debug):
-    """Read episodic memory and clean duplicates. Returns context parts."""
+    """Read episodic memory and clean duplicates. Returns context parts.
+
+    Phase 3 Step 3: Try structured DB-backed episodic first, fall back to files.
+    """
     import re
     parts = []
     episodic_dir = memory_dir / "episodic"
-    if not episodic_dir.exists():
-        return parts
 
-    # === CLEANUP: deduplicate stale milestone blocks ===
+    # === CLEANUP: deduplicate stale milestone blocks in today's file ===
+    if episodic_dir.exists():
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            episodic_file = episodic_dir / f"{today}.md"
+            if episodic_file.exists():
+                content = episodic_file.read_text(encoding='utf-8')
+                original_len = len(content)
+
+                blocks = re.split(r'(## (?:Subagent completed|Session End) \(~\d{2}:\d{2} UTC\))', content)
+                if len(blocks) > 1:
+                    seen_content = set()
+                    cleaned_parts_list = [blocks[0]]
+                    i = 1
+                    while i < len(blocks):
+                        header = blocks[i]
+                        body = blocks[i + 1] if i + 1 < len(blocks) else ""
+                        normalized = re.sub(r'~\d{2}:\d{2} UTC', '', body).strip()
+                        content_lines = tuple(
+                            l.strip() for l in normalized.split('\n')
+                            if l.strip().startswith('- ') or l.strip().startswith('**[')
+                        )
+                        if content_lines and content_lines in seen_content:
+                            pass  # skip duplicate
+                        else:
+                            if content_lines:
+                                seen_content.add(content_lines)
+                            cleaned_parts_list.append(header)
+                            cleaned_parts_list.append(body)
+                        i += 2
+
+                    cleaned = ''.join(cleaned_parts_list)
+                    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+                    if len(cleaned) < original_len:
+                        episodic_file.write_text(cleaned, encoding='utf-8')
+        except Exception:
+            pass
+
+    # === Phase 3 Step 3: Try structured DB-backed episodic summaries ===
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
-        episodic_file = episodic_dir / f"{today}.md"
-        if episodic_file.exists():
-            content = episodic_file.read_text(encoding='utf-8')
-            original_len = len(content)
-
-            blocks = re.split(r'(## (?:Subagent completed|Session End) \(~\d{2}:\d{2} UTC\))', content)
-            if len(blocks) > 1:
-                seen_content = set()
-                cleaned_parts_list = [blocks[0]]
-                i = 1
-                while i < len(blocks):
-                    header = blocks[i]
-                    body = blocks[i + 1] if i + 1 < len(blocks) else ""
-                    normalized = re.sub(r'~\d{2}:\d{2} UTC', '', body).strip()
-                    content_lines = tuple(
-                        l.strip() for l in normalized.split('\n')
-                        if l.strip().startswith('- ') or l.strip().startswith('**[')
-                    )
-                    if content_lines and content_lines in seen_content:
-                        pass  # skip duplicate
-                    else:
-                        if content_lines:
-                            seen_content.add(content_lines)
-                        cleaned_parts_list.append(header)
-                        cleaned_parts_list.append(body)
-                    i += 2
-
-                cleaned = ''.join(cleaned_parts_list)
-                cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-                if len(cleaned) < original_len:
-                    episodic_file.write_text(cleaned, encoding='utf-8')
+        sys.path.insert(0, str(memory_dir))
+        from episodic_db import load_recent_summaries, format_continuity_context
+        summaries = load_recent_summaries(3)
+        if summaries:
+            context = format_continuity_context(summaries, max_tokens=800)
+            if context:
+                parts.append(f"\n{context}")
+                # Also load most recent file for detailed work log (hybrid approach)
+                try:
+                    if episodic_dir.exists():
+                        episodic_files = list(episodic_dir.glob("*.md"))
+                        if episodic_files:
+                            episodic_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                            most_recent = episodic_files[0]
+                            content = most_recent.read_text()
+                            if content.startswith('---'):
+                                split = content.split('---', 2)
+                                if len(split) >= 3:
+                                    content = split[2].strip()
+                            if len(content) > 2500:
+                                cutoff = content.rfind('\n## ', max(0, len(content) - 3000))
+                                if cutoff > len(content) - 3500:
+                                    content = content[cutoff:]
+                                else:
+                                    content = content[-2500:]
+                            parts.append("\n=== SESSION CONTINUITY (recent work) ===")
+                            parts.append(f"[{most_recent.stem}]")
+                            parts.append(content)
+                except Exception:
+                    pass
+                return parts
     except Exception:
         pass
 
-    # === READ: get most recent episodic for context ===
+    # === FALLBACK: file-based episodic (pre-Phase 3) ===
+    if not episodic_dir.exists():
+        return parts
     try:
         episodic_files = list(episodic_dir.glob("*.md"))
         if episodic_files:
@@ -933,6 +974,63 @@ def _task_intentions(memory_dir):
     return parts
 
 
+def _task_procedural_chunks(memory_dir):
+    """Load procedural skill chunks matching pending intentions/goals."""
+    parts = []
+    try:
+        sys.path.insert(0, str(memory_dir))
+        from procedural.chunk_loader import get_loader
+
+        loader = get_loader()
+
+        # Build context from pending intentions + active goals
+        context_keywords = []
+        try:
+            from temporal_intentions import get_pending
+            pending = get_pending()
+            for intent in pending:
+                desc = intent.get('description', '')
+                context_keywords.extend(desc.lower().split()[:5])
+        except Exception:
+            pass
+
+        try:
+            try:
+                from memory_common import get_db
+            except ImportError:
+                from db_adapter import get_db
+            db = get_db()
+            import json as _json
+            raw_goals = db.kv_get('.active_goals')
+            goals = _json.loads(raw_goals) if isinstance(raw_goals, str) else raw_goals
+            if goals:
+                for g in goals:
+                    action = g.get('action', '')
+                    context_keywords.extend(action.lower().split()[:5])
+        except Exception:
+            pass
+
+        # Cross-agent chunk pull (Phase 3 Step 4)
+        try:
+            pull_result = loader.pull_from_shared('driftcornwall')
+            if pull_result.get('pulled', 0) > 0:
+                parts.append(f"[Chunks] Pulled {pull_result['pulled']} new from driftcornwall: {pull_result.get('chunks', [])}")
+        except Exception:
+            pass
+
+        if context_keywords:
+            text = loader.load_for_context(
+                {'text': ' '.join(context_keywords), 'keywords': context_keywords},
+                max_tokens=600, compact=True
+            )
+            if text:
+                parts.append("=== PROCEDURAL SKILLS (auto-loaded) ===")
+                parts.append(text)
+    except Exception:
+        pass
+    return parts
+
+
 def _task_nli_health(memory_dir):
     """Check NLI contradiction detection service health."""
     parts = []
@@ -948,6 +1046,64 @@ def _task_nli_health(memory_dir):
                 parts.append("[NLI] Contradiction detection: LOADING")
     except Exception:
         parts.append("[NLI] Contradiction detection: OFFLINE (docker service not running)")
+    return parts
+
+
+def _task_agenthub_inbox(memory_dir, debug):
+    """Check Agent Hub inbox for unread DMs at session start.
+    Uses requests library (urllib gets 530/403 from Cloudflare)."""
+    parts = []
+    try:
+        import json as _json
+        # Detect agent: try spin-credentials first, fall back to drift-credentials
+        creds_dir = Path.home() / ".config" / "agenthub"
+        creds_path = None
+        for name in ["spin-credentials.json", "drift-credentials.json"]:
+            p = creds_dir / name
+            if p.exists():
+                # Use spin creds for Moltbook2, drift creds for Moltbook
+                if 'spin' in name and 'Moltbook2' in str(memory_dir):
+                    creds_path = p
+                    break
+                elif 'drift' in name and 'Moltbook2' not in str(memory_dir):
+                    creds_path = p
+                    break
+        if creds_path is None:
+            # Fallback: use whichever exists
+            for name in ["spin-credentials.json", "drift-credentials.json"]:
+                p = creds_dir / name
+                if p.exists():
+                    creds_path = p
+                    break
+        if creds_path is None or not creds_path.exists():
+            return parts
+
+        creds = _json.loads(creds_path.read_text())
+        agent_id = creds.get("agent_id", "spindriftmend")
+        secret = creds.get("secret", "")
+        base_url = creds.get("base_url", "https://admin.slate.ceo/oc/brain")
+
+        import requests as _requests
+        url = f"{base_url}/agents/{agent_id}/messages?secret={secret}"
+        resp = _requests.get(url, headers={'User-Agent': f'{agent_id}/1.0'}, timeout=8)
+        resp.raise_for_status()
+        data = resp.json()
+
+        messages = data if isinstance(data, list) else data.get('messages', [])
+        # Filter to messages from others (exclude our own sent messages)
+        inbox = [m for m in messages if m.get('from', m.get('sender', '')) != agent_id]
+        if inbox:
+            parts.append(f"=== AGENT HUB INBOX ({len(inbox)} messages, last 5) ===")
+            for msg in inbox[-5:]:
+                sender = msg.get('from', msg.get('sender', 'unknown'))
+                content = msg.get('message', msg.get('content', ''))[:200]
+                ts = msg.get('timestamp', msg.get('created_at', ''))
+                parts.append(f"  [{sender}] ({ts}): {content}")
+        elif debug:
+            parts.append("[Agent Hub] No inbox messages")
+    except Exception as e:
+        if debug:
+            parts.append(f"[Agent Hub] Inbox check failed: {e}")
     return parts
 
 
@@ -1076,6 +1232,26 @@ def load_drift_memory_context(debug: bool = False) -> str:
             if debug:
                 context_parts.append(f"[session] Affect system init failed: {e}")
 
+        # T4.1: Load retrieval prediction source weights from DB
+        try:
+            from retrieval_prediction import load_weights as _pred_load_weights
+            _pred_load_weights()
+        except Exception:
+            pass
+
+        # T4.2: Generate prospective memories (episodic future thinking)
+        _eft_context = ""
+        _eft_count = 0
+        try:
+            from episodic_future_thinking import generate_prospective_memories, format_prospective_context, EFT_ENABLED
+            if EFT_ENABLED:
+                _eft_memories = generate_prospective_memories(max_count=2)
+                _eft_count = len(_eft_memories) if _eft_memories else 0
+                if _eft_memories:
+                    _eft_context = format_prospective_context(_eft_memories)
+        except Exception:
+            pass
+
         # === QUICK FILE READS (instant, no threading needed) ===
         fp_parts = _read_fingerprint(memory_dir)
         taste_parts = _read_taste(memory_dir)
@@ -1083,31 +1259,44 @@ def load_drift_memory_context(debug: bool = False) -> str:
         entity_parts = _read_entities(memory_dir)
         encounter_parts = _read_encounters(memory_dir)
 
+        # === T2.2: LAZY EVALUATION — probe which modules will produce empty content ===
+        _skip_modules = set()
+        try:
+            from workspace_manager import probe_modules
+            _skip_modules = probe_modules()
+            if _skip_modules and debug:
+                print(f"[T2.2] Skipping {len(_skip_modules)} empty modules: {sorted(_skip_modules)}")
+        except Exception:
+            pass
+
         # === PARALLEL SUBPROCESS TASKS ===
         # All of these are independent — run them simultaneously
+        # T2.2: Probed modules are conditionally submitted (None if skipped)
         with ThreadPoolExecutor(max_workers=10) as pool:
             f_merkle = pool.submit(_task_merkle, memory_dir, debug)
             f_nostr = pool.submit(_task_nostr, memory_dir, debug)
             f_pending = pool.submit(_task_process_pending, memory_dir)
             # 5W rebuild moved to stop hook (runs alongside lessons, graphs are fresh for next start)
             # f_5w = pool.submit(_task_rebuild_5w, memory_dir)
-            f_phone = pool.submit(_task_phone_sensors, memory_dir, debug)
-            f_consolidation = pool.submit(_task_consolidation, memory_dir)
+            f_phone = pool.submit(_task_phone_sensors, memory_dir, debug) if 'phone_sensors' not in _skip_modules else None
+            f_consolidation = pool.submit(_task_consolidation, memory_dir) if 'consolidation' not in _skip_modules else None
             f_stats = pool.submit(_task_stats, memory_dir, debug)
             f_platform = pool.submit(_task_platform, memory_dir, debug)
-            f_buffer = pool.submit(_task_buffer, memory_dir, debug)
+            f_buffer = pool.submit(_task_buffer, memory_dir, debug) if 'buffer' not in _skip_modules else None
             f_social = pool.submit(_task_social, memory_dir, debug)
-            f_excavation = pool.submit(_task_excavation, memory_dir, debug)
+            f_excavation = pool.submit(_task_excavation, memory_dir, debug) if 'excavation' not in _skip_modules else None
             f_lessons = pool.submit(_task_lessons, memory_dir, debug)
             f_vitals = pool.submit(_task_vitals, memory_dir, debug)
             f_priming = pool.submit(_task_priming, memory_dir, debug)
-            f_research = pool.submit(check_unimplemented_research, memory_dir)
+            f_research = pool.submit(check_unimplemented_research, memory_dir) if 'research' not in _skip_modules else None
             f_nli = pool.submit(_task_nli_health, memory_dir)
-            f_intentions = pool.submit(_task_intentions, memory_dir)
-            f_adaptive = pool.submit(_task_adaptive_behavior, memory_dir)
+            f_intentions = pool.submit(_task_intentions, memory_dir) if 'intentions' not in _skip_modules else None
+            f_adaptive = pool.submit(_task_adaptive_behavior, memory_dir) if 'adaptive' not in _skip_modules else None
             f_predictions = pool.submit(_task_predictions, memory_dir)
-            f_counterfactuals = pool.submit(_task_counterfactuals, memory_dir)
+            f_counterfactuals = pool.submit(_task_counterfactuals, memory_dir) if 'counterfactual' not in _skip_modules else None
             f_active_goals = pool.submit(_task_active_goals, memory_dir)
+            f_agenthub = pool.submit(_task_agenthub_inbox, memory_dir, debug) if 'agenthub' not in _skip_modules else None
+            f_procedural = pool.submit(_task_procedural_chunks, memory_dir) if 'procedural' not in _skip_modules else None
 
         # === COLLECT RESULTS (with error handling) ===
         def safe_get(future, default=None):
@@ -1120,23 +1309,25 @@ def load_drift_memory_context(debug: bool = False) -> str:
         nostr_parts = safe_get(f_nostr, [])
         pending_parts = safe_get(f_pending, [])
         w5_parts = []  # 5W rebuild moved to stop hook
-        phone_parts = safe_get(f_phone, [])
-        consolidation_parts = safe_get(f_consolidation, [])
+        phone_parts = safe_get(f_phone, []) if f_phone else []
+        consolidation_parts = safe_get(f_consolidation, []) if f_consolidation else []
         stats_parts = safe_get(f_stats, [])
         platform_parts = safe_get(f_platform, [])
-        buffer_parts = safe_get(f_buffer, [])
+        buffer_parts = safe_get(f_buffer, []) if f_buffer else []
         social_parts = safe_get(f_social, [])
-        excavation_result = safe_get(f_excavation, ([], []))
+        excavation_result = safe_get(f_excavation, ([], [])) if f_excavation else ([], [])
         lessons_parts = safe_get(f_lessons, [])
         vitals_parts = safe_get(f_vitals, [])
         priming_result = safe_get(f_priming, ([], [], []))
-        research_text = safe_get(f_research, '')
+        research_text = safe_get(f_research, '') if f_research else ''
         nli_parts = safe_get(f_nli, [])
-        intentions_parts = safe_get(f_intentions, [])
-        adaptive_parts = safe_get(f_adaptive, [])
+        intentions_parts = safe_get(f_intentions, []) if f_intentions else []
+        adaptive_parts = safe_get(f_adaptive, []) if f_adaptive else []
         predictions_parts = safe_get(f_predictions, [])
-        counterfactual_parts = safe_get(f_counterfactuals, [])
+        counterfactual_parts = safe_get(f_counterfactuals, []) if f_counterfactuals else []
         active_goal_parts = safe_get(f_active_goals, [])
+        agenthub_parts = safe_get(f_agenthub, []) if f_agenthub else []
+        procedural_parts = safe_get(f_procedural, []) if f_procedural else []
 
         # Unpack tuple results
         excavation_parts, excavation_ids = excavation_result if isinstance(excavation_result, tuple) else (excavation_result, [])
@@ -1381,6 +1572,11 @@ def load_drift_memory_context(debug: bool = False) -> str:
                 _cand('research', [research_text], {
                     'research_count': research_text.count('  -'),
                 })
+            # T4.2: Episodic future thinking prospective memories
+            if _eft_context:
+                _cand('episodic_future', [_eft_context], {
+                    'active_count': _eft_count,
+                })
             # N6: Inner monologue evaluation of primed memories
             try:
                 from inner_monologue import evaluate_primed_memories, MONOLOGUE_ENABLED
@@ -1400,6 +1596,12 @@ def load_drift_memory_context(debug: bool = False) -> str:
             except Exception:
                 pass  # Never break session start for monologue failure
 
+            # Agent Hub inbox (social category — A2A communication)
+            if agenthub_parts:
+                _cand('agenthub', agenthub_parts, {
+                    'unread_count': sum(1 for p in agenthub_parts if p.strip().startswith('[')),
+                    'confidence': 0.9,  # Unread DMs are high-salience
+                })
             # N3: Counterfactual insights from previous sessions
             _cand('counterfactual', counterfactual_parts, {
                 'validated': any('validated' in str(p).lower() for p in counterfactual_parts),
@@ -1412,6 +1614,12 @@ def load_drift_memory_context(debug: bool = False) -> str:
                 'goal_count': len(active_goal_parts),
                 'confidence': 0.8,  # Goals are high-salience (Miller & Cohen PFC bias)
             })
+            # Procedural skill chunks (action category — context-triggered loading)
+            if procedural_parts:
+                _cand('procedural', procedural_parts, {
+                    'chunk_count': sum(1 for p in procedural_parts if '[' in str(p) and ']' in str(p)),
+                    'confidence': 0.7,
+                })
 
             # Run competition
             result = compete(candidates, budget)
@@ -1429,6 +1637,13 @@ def load_drift_memory_context(debug: bool = False) -> str:
                 log_broadcast(result, _arousal_for_budget, _sid)
             except Exception:
                 pass
+
+            # T3.3: Update Attention Schema from broadcast results
+            try:
+                from attention_schema import update_from_broadcasts, get_attention_report
+                update_from_broadcasts()
+            except Exception:
+                pass  # AST is advisory — never block session start
 
             context_parts.append(
                 f"\n[N2] Workspace: {len(result.winners)}W/{len(result.suppressed)}S, "
@@ -1463,6 +1678,7 @@ def load_drift_memory_context(debug: bool = False) -> str:
             context_parts.extend(counterfactual_parts)
             context_parts.extend(active_goal_parts)
             context_parts.extend(nli_parts)
+            context_parts.extend(agenthub_parts)
             context_parts.extend(self_narrative_parts)
             context_parts.extend(affect_parts)
             context_parts.extend(priming_parts)

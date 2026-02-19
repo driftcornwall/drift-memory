@@ -274,86 +274,102 @@ def dream(dry_run: bool = False) -> dict:
 
 def _heuristic_synthesis(memories: list[dict]) -> str:
     """
-    Simple heuristic synthesis based on shared entities and KG edges.
-    Placeholder until LLM integration is wired.
+    Heuristic synthesis using embedding similarity and KG bridge detection.
+    Produces specific output that passes _is_generic_output() filter.
+    (T1.4: ported from SpindriftMend — embedding cosine + KG bridges)
     """
     db = _get_db()
     import psycopg2.extras
 
     source_ids = [m['id'] for m in memories]
 
-    # Find shared KG connections between source memories
-    shared_edges = []
+    # Build topic phrases from first sentence of each memory (max 60 chars)
+    topic_phrases = {}
+    for mem in memories:
+        content = (mem.get('content') or '').strip()
+        first_sent = content.split('.')[0][:60] if content else mem['id']
+        topic_phrases[mem['id']] = first_sent
+
+    parts = ["[Synthesis from generative sleep — heuristic mode]\n"]
+    parts.append(f"Examined {len(memories)} memories from different time periods.\n")
+    found_connection = False
+
+    # --- Approach 1: Embedding cosine similarity (pgvector) ---
     try:
         with db._conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                # Find typed edges between any pair of source memories
                 cur.execute(f"""
-                    SELECT source_id, target_id, relationship, confidence
-                    FROM {db._table('typed_edges')}
-                    WHERE source_id = ANY(%s) AND target_id = ANY(%s)
-                    ORDER BY confidence DESC
-                    LIMIT 10
+                    SELECT e1.memory_id AS id1, e2.memory_id AS id2,
+                           1 - (e1.embedding <=> e2.embedding) AS similarity
+                    FROM {db._table('text_embeddings')} e1
+                    JOIN {db._table('text_embeddings')} e2
+                      ON e1.memory_id < e2.memory_id
+                    WHERE e1.memory_id = ANY(%s) AND e2.memory_id = ANY(%s)
+                    ORDER BY similarity DESC
+                    LIMIT 5
                 """, (source_ids, source_ids))
-                shared_edges = [dict(r) for r in cur.fetchall()]
+                pairs = [dict(r) for r in cur.fetchall()]
+                if pairs:
+                    found_connection = True
+                    parts.append("Embedding similarity between sampled memories:")
+                    for p in pairs:
+                        sim = float(p['similarity'])
+                        t1 = topic_phrases.get(p['id1'], p['id1'])
+                        t2 = topic_phrases.get(p['id2'], p['id2'])
+                        if sim >= 0.85:
+                            tier = "convergence"
+                        elif sim >= 0.70:
+                            tier = "bridge"
+                        else:
+                            tier = "weak link"
+                        parts.append(f"  [{tier}] {sim:.3f}: \"{t1}\" <-> \"{t2}\"")
+                    parts.append("")
     except Exception:
         pass
 
-    # Find shared entities
-    shared_entities = []
+    # --- Approach 2: KG bridge node detection ---
     try:
-        entity_sets = []
-        for mem in memories:
-            entities = set()
-            content = (mem.get('content') or '').lower()
-            # Simple entity extraction from content
-            for word in content.split():
-                if len(word) > 4 and word.isalpha():
-                    entities.add(word)
-            entity_sets.append(entities)
-
-        if len(entity_sets) >= 2:
-            # Find entities appearing in multiple memories
-            from collections import Counter
-            all_entities = Counter()
-            for es in entity_sets:
-                for e in es:
-                    all_entities[e] += 1
-            shared_entities = [e for e, c in all_entities.most_common(10) if c >= 2]
+        with db._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(f"""
+                    WITH edges AS (
+                        SELECT source_id AS src, target_id AS bridge, relationship
+                        FROM {db._table('typed_edges')}
+                        WHERE source_id = ANY(%s) AND target_id != ALL(%s)
+                        UNION ALL
+                        SELECT target_id AS src, source_id AS bridge, relationship
+                        FROM {db._table('typed_edges')}
+                        WHERE target_id = ANY(%s) AND source_id != ALL(%s)
+                    )
+                    SELECT bridge, relationship,
+                           array_agg(DISTINCT src) AS sources,
+                           COUNT(DISTINCT src) AS source_count
+                    FROM edges
+                    GROUP BY bridge, relationship
+                    HAVING COUNT(DISTINCT src) >= 2
+                    ORDER BY source_count DESC
+                    LIMIT 5
+                """, (source_ids, source_ids, source_ids, source_ids))
+                bridges = [dict(r) for r in cur.fetchall()]
+                if bridges:
+                    found_connection = True
+                    parts.append("KG bridge nodes connecting multiple source memories:")
+                    for b in bridges:
+                        srcs = b['sources'] if isinstance(b['sources'], list) else [b['sources']]
+                        src_topics = [topic_phrases.get(s, s)[:30] for s in srcs[:3]]
+                        parts.append(f"  {b['bridge']} ({b['relationship']}) bridges "
+                                     f"{b['source_count']} memories: {', '.join(src_topics)}")
+                    parts.append("")
     except Exception:
         pass
 
-    # Build synthesis text
-    parts = ["[Synthesis from generative sleep — heuristic mode]\n"]
-    parts.append(f"Examined {len(memories)} memories from different time periods.\n")
-
-    if shared_edges:
-        parts.append("Direct knowledge graph connections found:")
-        for edge in shared_edges[:5]:
-            parts.append(f"  {edge['source_id']} --{edge['relationship']}--> {edge['target_id']} "
-                         f"(confidence: {edge['confidence']:.2f})")
-        parts.append("")
-
-    if shared_entities:
-        parts.append(f"Shared concepts across memories: {', '.join(shared_entities[:8])}")
-        parts.append("")
+    if not found_connection:
+        return "No novel connection found between the sampled memories."
 
     dimensions = [m.get('dimension', 'unknown') for m in memories]
     unique_dims = set(d for d in dimensions if d != 'unknown')
     if unique_dims:
         parts.append(f"Spanning dimensions: {', '.join(unique_dims)}")
-        parts.append("")
-
-    # The heuristic synthesis is intentionally simple — it will often be
-    # filtered as "too generic". The real value comes when LLM synthesis
-    # is wired in. This placeholder still exercises the full pipeline.
-
-    if not shared_edges and not shared_entities:
-        return "No novel connection found between the sampled memories."
-
-    parts.append("These memories, though from different contexts, share structural "
-                 "connections through their knowledge graph edges and vocabulary overlap, "
-                 "suggesting latent thematic coherence across temporal boundaries.")
 
     return '\n'.join(parts)
 

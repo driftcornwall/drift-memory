@@ -30,6 +30,14 @@ HEAT_PROMOTION_ENABLED = True
 IMPORTED_PRUNE_SESSIONS = 14
 GRACE_PERIOD_SESSIONS = 7  # New memories immune from decay for 7 sessions (~2.3 days)
 
+# Phase 3 Step 5: Tier-specific decay multipliers
+# Episodic decays at base rate, semantic much slower, procedural near-zero
+TIER_DECAY_MULTIPLIER = {
+    'episodic': 1.0,     # Base rate — events fade naturally
+    'semantic': 0.1,     # 10x slower — knowledge persists
+    'procedural': 0.01,  # 100x slower — skills are near-permanent
+}
+
 # Trust-based decay for imported memories (v2.11, credit: SpindriftMend)
 DECAY_MULTIPLIERS = {
     'self': 1.0,
@@ -122,14 +130,15 @@ def list_imported_memories() -> list:
 def session_maintenance():
     """
     Run at session end/start to:
-    1. Increment sessions_since_recall for all active memories
-    2. Identify decay candidates (with trust-based decay multipliers for imports)
+    1. Increment sessions_since_recall for all active memories (tier-aware)
+    2. Identify decay candidates (with trust-based + tier-based multipliers)
     3. Prune never-recalled imports after IMPORTED_PRUNE_SESSIONS
     4. Report status
 
     v2.11: Trust-based decay for imported memories
     v2.12: DB-accelerated path (bulk SQL UPDATE, ~0.2s vs ~13s)
     v3.0: DB-only — no file fallback
+    v4.0: Phase 3 Step 5 — Tier-aware decay (episodic=fast, semantic=slow, procedural=near-zero)
     """
     import psycopg2.extras
 
@@ -150,13 +159,14 @@ def session_maintenance():
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(f"""
                 SELECT id, type, tags, recall_count, emotional_weight,
-                       sessions_since_recall, source, extra_metadata
+                       sessions_since_recall, source, extra_metadata,
+                       COALESCE(memory_tier, 'episodic') as memory_tier
                 FROM {db._table('memories')}
                 WHERE type = 'active'
             """)
             rows = cur.fetchall()
 
-    # Also count core/archive for reporting
+    # Also count by type + tier for reporting
     with db._conn() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
@@ -165,11 +175,20 @@ def session_maintenance():
             """)
             type_counts = dict(cur.fetchall())
 
+            cur.execute(f"""
+                SELECT COALESCE(memory_tier, 'episodic') as tier, COUNT(*)
+                FROM {db._table('memories')}
+                WHERE type = 'active'
+                GROUP BY memory_tier
+            """)
+            tier_counts = dict(cur.fetchall())
+
     decay_candidates = []
     reinforced = []
     prune_candidates = []
 
     for row in rows:
+        memory_tier = row.get('memory_tier', 'episodic')
         meta = {
             'id': row['id'],
             'tags': row.get('tags') or [],
@@ -177,10 +196,14 @@ def session_maintenance():
             'emotional_weight': row.get('emotional_weight', 0.5),
             'sessions_since_recall': row.get('sessions_since_recall', 0),
             'source': row.get('source') or row.get('extra_metadata', {}).get('source', {}),
+            'memory_tier': memory_tier,
         }
 
         sessions = meta['sessions_since_recall']
-        decay_multiplier = get_decay_multiplier(meta)
+        # Phase 3: Apply tier-specific decay multiplier ON TOP of trust-based multiplier
+        trust_multiplier = get_decay_multiplier(meta)
+        tier_multiplier = TIER_DECAY_MULTIPLIER.get(memory_tier, 1.0)
+        decay_multiplier = trust_multiplier * tier_multiplier
         effective_sessions = sessions * decay_multiplier
         emotional_weight = meta.get('emotional_weight') or 0.5
         recall_count = meta.get('recall_count', 0)
@@ -210,17 +233,21 @@ def session_maintenance():
             reinforced.append(meta)
 
     # Step 3: Report (compact)
-    print(f"\n=== Memory Session Maintenance (DB) ===\n")
+    print(f"\n=== Memory Session Maintenance (DB, tier-aware) ===\n")
     print(f"Active memories: {type_counts.get('active', 0)} (incremented {updated})")
     print(f"Core memories: {type_counts.get('core', 0)}")
     print(f"Archived memories: {type_counts.get('archive', 0)}")
+    if tier_counts:
+        tier_str = ", ".join(f"{t}={c}" for t, c in sorted(tier_counts.items()))
+        print(f"Tiers: {tier_str}")
 
     if decay_candidates:
         print(f"\nDecay candidates: {len(decay_candidates)}")
         for meta in decay_candidates[:5]:
             m = meta.get('_decay_multiplier', 1.0)
             eff = meta['sessions_since_recall'] * m
-            print(f"  - {meta['id']}: {meta['sessions_since_recall']} sessions (eff: {eff:.1f}), weight={meta.get('emotional_weight') or 0.5:.2f}")
+            tier = meta.get('memory_tier', '?')
+            print(f"  - {meta['id']}: {meta['sessions_since_recall']}s (eff: {eff:.1f}), tier={tier}, weight={meta.get('emotional_weight') or 0.5:.2f}")
         if len(decay_candidates) > 5:
             print(f"  ... and {len(decay_candidates) - 5} more")
 
@@ -230,7 +257,8 @@ def session_maintenance():
     if reinforced:
         print(f"\nReinforced: {len(reinforced)}")
         for meta in reinforced[:3]:
-            print(f"  - {meta['id']}: recalls={meta.get('recall_count')}, weight={meta.get('emotional_weight') or 0.5:.2f}")
+            tier = meta.get('memory_tier', '?')
+            print(f"  - {meta['id']}: recalls={meta.get('recall_count')}, tier={tier}, weight={meta.get('emotional_weight') or 0.5:.2f}")
 
     return decay_candidates, prune_candidates
 

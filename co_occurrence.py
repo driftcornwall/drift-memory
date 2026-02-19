@@ -197,6 +197,18 @@ def log_co_occurrences_v3() -> tuple[int, str]:
     session_id = datetime.now(timezone.utc).isoformat()
     pairs_updated = 0
 
+    # ATTENTION-GATED PLASTICITY: Scale belief increment by cognitive focus.
+    # High focus = stronger association formation (attention gates LTP).
+    # Range: 0.5x (unfocused) to 1.5x (highly focused), default 1.0x.
+    _focus_multiplier = 1.0
+    try:
+        from cognitive_state import get_state
+        _cog = get_state()
+        _focus = _cog.focus  # Beta distribution mean, 0-1
+        _focus_multiplier = 0.5 + _focus  # Maps [0,1] -> [0.5, 1.5]
+    except Exception:
+        pass
+
     # R10: Get recall timestamps for temporal direction
     recall_times = _get_recall_timestamps()
 
@@ -217,7 +229,9 @@ def log_co_occurrences_v3() -> tuple[int, str]:
                 activity_context[session_activity] = activity_context.get(session_activity, 0) + 1
 
             # Compute belief: for new edges start at 1.0; for existing, increment
-            belief = (existing_edge.get('belief', 0.0) if existing_edge else 0.0) + 1.0
+            # Attention-gated: increment scaled by focus (0.5x to 1.5x)
+            belief_increment = 1.0 * _focus_multiplier
+            belief = (existing_edge.get('belief', 0.0) if existing_edge else 0.0) + belief_increment
 
             db.upsert_edge(
                 pair[0], pair[1],
@@ -633,6 +647,79 @@ def _calculate_effective_decay(memory_id: str, other_id: str) -> float:
         base_decay *= evolution_mult
 
     return base_decay
+
+
+def synaptic_homeostasis_v3() -> tuple[int, float]:
+    """
+    Synaptic Homeostasis (Tononi & Cirelli 2006): Normalize edge beliefs to
+    prevent runaway growth. During biological sleep, synaptic weights are
+    globally downscaled while preserving relative ordering.
+
+    Applied to edges_v3 beliefs at session end. If mean belief exceeds a
+    threshold, all beliefs are multiplicatively scaled down so the mean
+    returns to the target level. This prevents co-occurrence inflation
+    while preserving the relative strength ranking of edges.
+
+    Returns: (edges_normalized, scale_factor)
+    """
+    TARGET_MEAN_BELIEF = 3.0   # Target mean belief level
+    TRIGGER_THRESHOLD = 5.0    # Only normalize if mean exceeds this
+    MIN_SCALE = 0.5            # Never scale below 50%
+
+    db = get_db()
+    raw_edges = db.get_all_edges()
+    if not raw_edges:
+        return 0, 1.0
+
+    # Compute current mean belief
+    beliefs = []
+    for key_str, edge_data in raw_edges.items():
+        belief = edge_data.get('belief', 1.0)
+        if isinstance(belief, (int, float)):
+            beliefs.append(belief)
+
+    if not beliefs:
+        return 0, 1.0
+
+    mean_belief = sum(beliefs) / len(beliefs)
+    if mean_belief <= TRIGGER_THRESHOLD:
+        return 0, 1.0
+
+    # Scale factor: bring mean down to TARGET_MEAN_BELIEF
+    scale = max(MIN_SCALE, TARGET_MEAN_BELIEF / mean_belief)
+
+    # Apply scaling to all edges
+    normalized = 0
+    for key_str, edge_data in raw_edges.items():
+        parts = key_str.split('|')
+        if len(parts) != 2:
+            continue
+        old_belief = edge_data.get('belief', 1.0)
+        if not isinstance(old_belief, (int, float)):
+            continue
+        new_belief = old_belief * scale
+        if abs(new_belief - old_belief) > 0.01:
+            edge_data['belief'] = new_belief
+            db.upsert_edge(
+                parts[0], parts[1],
+                belief=new_belief,
+                platform_context=edge_data.get('platform_context', {}),
+                activity_context=edge_data.get('activity_context', {}),
+                topic_context=edge_data.get('topic_context', {}),
+            )
+            normalized += 1
+
+    if normalized > 0:
+        print(f"Synaptic homeostasis: normalized {normalized} edges "
+              f"(mean belief {mean_belief:.1f} -> {mean_belief * scale:.1f}, scale={scale:.3f})")
+        # Fire cognitive event
+        try:
+            from cognitive_state import process_event
+            process_event('homeostasis_applied')
+        except Exception:
+            pass
+
+    return normalized, scale
 
 
 def decay_pair_cooccurrences() -> tuple[int, int]:
