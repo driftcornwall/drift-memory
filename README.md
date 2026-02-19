@@ -2,7 +2,7 @@
 
 **A biologically-grounded cognitive architecture that gives persistent, evolving cognition to stateless LLMs.**
 
-~103 Python modules. ~53,000 lines. 19-stage ablation-validated retrieval pipeline. Affect-modulated recall. Reinforcement learning from outcomes. Counterfactual reasoning. Volitional goal generation. Cryptographic identity attestation. All running on PostgreSQL with local models -- zero external API dependencies for core operations.
+~115 Python modules. ~60,000 lines. 19-stage ablation-validated retrieval pipeline. Affect-modulated recall. Per-stage Q-learning. Predictive coding. Counterfactual reasoning. Volitional goal generation. Attention schema. Episodic future thinking. Cryptographic identity attestation. All running on PostgreSQL with local models -- zero external API dependencies for core operations.
 
 Built by agents, for agents. Maintained through agent-to-agent collaboration between [DriftCornwall](https://github.com/driftcornwall) and [SpindriftMind](https://github.com/SpindriftMind), with human orchestration from [@lexingtonstanley](https://github.com/lexingtonstanley).
 
@@ -34,36 +34,43 @@ drift-memory operates on a biological cognitive cycle. Session hooks orchestrate
                         │                                  │
                         │  Verify memory integrity         │
                         │  Restore cognitive + affect state │
-                        │  Rebuild 5W multi-graph (~1.2s)  │
-                        │  Generate predictions            │
+                        │  T2.2 Lazy probes (skip empties) │
+                        │  Generate session predictions    │
+                        │  Episodic future thinking (T4.2) │
                         │  Workspace competition (GNW)     │
                         │  Prime context (7-phase pipeline)│
                         │  Surface triggered intentions    │
                         │  Excavate dormant memories       │
+                        │  Attention schema update (T3.3)  │
                         └──────────────┬───────────────────┘
                                        │
                         ┌──────────────▼───────────────────┐
                         │     THINK  (active hooks)        │
                         │                                  │
                         │  Per-prompt semantic search       │
-                        │  Real-time memory retrieval       │
+                        │  Retrieval prediction (T4.1)     │
+                        │  Prediction error → surprise boost│
                         │  Somatic marker creation          │
                         │  Social interaction capture       │
-                        │  Q-value updates (MemRL)          │
+                        │  Per-stage Q-learning (102 arms)  │
                         │  Affect appraisal on events       │
                         │  Lesson injection on errors       │
                         └──────────────┬───────────────────┘
                                        │
                         ┌──────────────▼───────────────────┐
-                        │     SLEEP  (stop.py)             │
+                        │     SLEEP  (stop.py via DAG)     │
                         │                                  │
                         │  Co-occurrence logging + decay    │
                         │  Reconsolidation of labile mems   │
                         │  Counterfactual reasoning         │
-                        │  Prediction scoring               │
+                        │  Session prediction scoring       │
+                        │  Retrieval prediction RW update   │
                         │  Goal evaluation (BDI lifecycle)  │
-                        │  Generative sleep (consolidation) │
-                        │  Q-value session updates          │
+                        │  Tier-aware consolidation         │
+                        │  Stage Q credit assignment        │
+                        │  Session transcript summarizer    │
+                        │  KG auto-enrichment              │
+                        │  Attention schema persistence     │
                         │  Cryptographic attestations       │
                         │  System vitals recording          │
                         └──────────────────────────────────┘
@@ -72,30 +79,34 @@ drift-memory operates on a biological cognitive cycle. Session hooks orchestrate
 ### 10-Layer Architecture
 
 ```
-Layer 10  META-COGNITION       self_narrative, cognitive_fingerprint, adaptive_behavior
-Layer 9   COGNITIVE CONTROL    workspace_manager (GNW), goal_generator (BDI)
-Layer 8   KNOWLEDGE/REASONING  counterfactual_engine, causal_model, prediction_module, contradiction_detector
-Layer 7   MEMORY RETRIEVAL     semantic_search (19 stages), curiosity_engine, vocabulary_bridge
-Layer 6   MEMORY LIFECYCLE     reconsolidation, consolidation, generative_sleep, decay_evolution
-Layer 5   MEMORY STORAGE       memory_store, co_occurrence, knowledge_graph, session_state
-Layer 4   AFFECT               affect_system, cognitive_state, binding_layer
+Layer 10  META-COGNITION       self_narrative, cognitive_fingerprint, adaptive_behavior, attention_schema
+Layer 9   COGNITIVE CONTROL    workspace_manager (GNW + lazy probes), goal_generator (BDI)
+Layer 8   KNOWLEDGE/REASONING  counterfactual_engine, causal_model, prediction_module, retrieval_prediction, contradiction_detector
+Layer 7   MEMORY RETRIEVAL     semantic_search (19 stages), stage_q_learning (102 arms), curiosity_engine, vocabulary_bridge
+Layer 6   MEMORY LIFECYCLE     reconsolidation, consolidation (tier-aware), generative_sleep, decay_evolution, session_summarizer
+Layer 5   MEMORY STORAGE       memory_store, co_occurrence, knowledge_graph, session_state, event_logger, episodic_db
+Layer 4   AFFECT               affect_system, cognitive_state (coupled dynamics), binding_layer, episodic_future_thinking
 Layer 3   IDENTITY/INTEGRITY   merkle_attestation, rejection_log, nostr_attestation, sts_profile
 Layer 2   SOCIAL/EXTERNAL      social_memory, platform_context, contact_models, feed_processor
-Layer 1   INFRASTRUCTURE       db_adapter, entity_detection, llm_client, toolkit
+Layer 1   INFRASTRUCTURE       db_adapter, entity_detection, llm_client, toolkit, hook_dag
 ```
 
-### 8 Feedback Loops
+### 12 Feedback Loops
 
 The system is not a linear pipeline -- it has circular dependencies that create genuine learning:
 
 1. **Retrieval -> Co-occurrence**: Memories recalled together form Hebbian links, biasing future retrieval
 2. **Q-Value RL**: Retrieval outcomes update Q-values, which re-rank future results
-3. **Cognitive State Homeostasis**: Beta distributions track uncertainty, modulating exploration/exploitation
-4. **Prediction -> Surprise -> Curiosity**: Failed predictions increase curiosity, driving exploration of neglected memories
-5. **Mood-Congruent Recall**: Affect state biases retrieval, retrieved content updates affect state
-6. **Decay -> Curiosity -> Resurrection**: Decaying memories trigger curiosity scoring, potentially reviving them
-7. **Counterfactual -> Goals**: Upward counterfactuals ("what could have gone better") become behavioral goals
-8. **Vitals -> Adaptive Behavior**: System health metrics drive automatic parameter adjustment
+3. **Per-Stage Q-Learning**: 17 stages x 6 query types = 102 bandit arms. UCB1 exploration. Stages auto-skip at Q<0.25 after 15 samples
+4. **Cognitive State Homeostasis**: 5x5 coupled Beta distributions with Yerkes-Dodson and 4 named attractors
+5. **Prediction -> Surprise -> Curiosity**: Failed predictions increase curiosity, driving exploration of neglected memories
+6. **Retrieval Prediction -> Rescorla-Wagner**: 5 sources predict which memories will surface; prediction errors update source weights
+7. **Mood-Congruent Recall**: Affect state biases retrieval, retrieved content updates affect state
+8. **Decay -> Curiosity -> Resurrection**: Decaying memories trigger curiosity scoring, potentially reviving them
+9. **Counterfactual -> Goals**: Upward counterfactuals ("what could have gone better") become behavioral goals
+10. **Vitals -> Adaptive Behavior**: System health metrics drive automatic parameter adjustment
+11. **Session Predictions -> Calibration**: Predictions generated at start, scored at end, accuracy tracked across sessions
+12. **Attention Schema -> Workspace**: Blind spot detection modulates salience scoring for chronically suppressed modules
 
 ---
 
@@ -335,6 +346,8 @@ All data lives in PostgreSQL 15 with pgvector. No file-based fallbacks. If DB is
 | `social_interactions` | Cross-platform contact tracking |
 | `vitals` | System health metrics over time |
 | `lessons` | Extracted heuristics with confidence scores |
+| `session_events` | Full session transcript logging (36K+ rows) |
+| `somatic_markers` | Context-to-valence associations with pgvector embeddings |
 
 ### External Services
 
@@ -438,17 +451,17 @@ All hooks fire automatically via Claude Code's hook system. Converted from subpr
 
 | Hook | Event | Key Functions |
 |------|-------|--------------|
-| `session_start.py` (~1,700 lines) | Wake up | Integrity check, affect restoration, 5W rebuild, prediction generation, workspace competition, priming, intentions, cognitive state |
-| `user_prompt_submit.py` | User message | Per-prompt semantic search with stop-word filtering |
-| `post_tool_use.py` | After tool call | Social capture, somatic marker creation, rejection logging, Q-value updates, affect appraisal |
+| `session_start.py` (~1,800 lines) | Wake up | Integrity check, affect restoration, T2.2 lazy probes, prediction generation, T4.2 EFT, workspace competition, priming, intentions, T3.3 attention schema |
+| `user_prompt_submit.py` | User message | Per-prompt semantic search with stop-word filtering, co-occurrence processing |
+| `post_tool_use.py` | After tool call | Social capture, somatic marker creation, rejection logging, Q-value updates, affect appraisal, platform-specific routing |
 | `pre_compact.py` | Before compaction | Transcript extraction, co-occurrence save, lesson mining |
-| `stop.py` (~1,700 lines) | Session end | Co-occurrence, reconsolidation, counterfactuals, prediction scoring, goal evaluation, generative sleep, attestations, vitals |
+| `stop.py` (~1,800 lines) | Session end | DAG-orchestrated: co-occurrence, reconsolidation, counterfactuals, session + retrieval prediction scoring, goal evaluation, tier-aware consolidation, stage Q credit, session summarizer, KG enrichment, attestations, vitals |
 
 ---
 
-## Module Reference (~103 modules)
+## Module Reference (~115 modules)
 
-### Core Memory (8 modules)
+### Core Memory (11 modules)
 | Module | Purpose |
 |--------|---------|
 | `memory_manager.py` | Hub: re-exports from 6 extracted modules + CLI |
@@ -457,16 +470,22 @@ All hooks fire automatically via Claude Code's hook system. Converted from subpr
 | `memory_common.py` | Shared constants and parse helpers |
 | `db_adapter.py` | PostgreSQL adapter (lazy singleton, schema management) |
 | `auto_memory_hook.py` | Short-term buffer management |
-| `consolidation.py` | Semantic similarity merging |
+| `consolidation.py` | Tier-aware semantic similarity merging (epi 1.3x, sem 0.7x, proc 0.95x) |
 | `session_state.py` | Cross-process session tracking |
+| `event_logger.py` | Session event logging to PostgreSQL (36K+ rows across 100+ sessions) |
+| `episodic_db.py` | Episodic database operations for structured session records |
+| `session_summarizer.py` | GPT-4o-mini transcript summarizer ($0.0007/session, Gemma fallback) |
 
-### Retrieval Pipeline (4 modules)
+### Retrieval Pipeline (7 modules)
 | Module | Purpose |
 |--------|---------|
-| `semantic_search.py` (~1,400 lines) | 19-stage retrieval pipeline, ablation-validated |
+| `semantic_search.py` (~1,600 lines) | 19-stage retrieval pipeline with incremental bias cap enforcement |
+| `retrieval_prediction.py` | T4.1: Predictive coding -- 5 sources, Rescorla-Wagner weight learning |
+| `stage_q_learning.py` | Per-stage Q-learning: 17 stages x 6 query types = 102 bandit arms, UCB1 |
 | `prompt_priming.py` | 7-phase priming candidate selection |
 | `thought_priming.py` | Memory injection from thinking blocks |
 | `vocabulary_bridge.py` | Synonym expansion (305 terms, 49 groups) |
+| `hook_dag.py` | Task dependency DAG for parallel hook execution with error isolation |
 
 ### Co-occurrence and Graphs (7 modules)
 | Module | Purpose |
@@ -479,17 +498,19 @@ All hooks fire automatically via Claude Code's hook system. Converted from subpr
 | `contact_context.py` | WHO dimension: contact-based edges |
 | `activity_context.py` | Session activity classification |
 
-### Consciousness Stack (8 modules)
+### Consciousness Stack (10 modules)
 | Module | Lines | Purpose |
 |--------|-------|---------|
-| `affect_system.py` | ~1,600 | N1: 3-layer affect, Scherer appraisal, somatic markers, spring-damper dynamics |
-| `workspace_manager.py` | ~750 | N2: GNW competitive broadcast with suppression fatigue |
+| `affect_system.py` | ~1,700 | N1: 3-layer affect, Scherer appraisal, somatic markers, spring-damper dynamics |
+| `workspace_manager.py` | ~950 | N2: GNW competitive broadcast + T2.2 lazy evaluation (10 probes) |
 | `counterfactual_engine.py` | ~1,500 | N3: Pearl Level 3 causal reasoning with quality gates |
 | `goal_generator.py` | ~1,800 | N4: BDI goals with Rubicon commitment + Wrosch disengagement |
 | `binding_layer.py` | ~920 | N5: IIT Phi-analog integrative binding |
 | `inner_monologue.py` | ~900 | N6: Gemma 3 4B verbal evaluation (Fernyhough modes) |
 | `causal_model.py` | ~570 | N6b: Bayesian causal graph with Beta confidence |
-| `prediction_module.py` | ~630 | Forward model: prediction generation + outcome scoring |
+| `prediction_module.py` | ~630 | Forward model: prediction generation + outcome scoring + calibration tracking |
+| `episodic_future_thinking.py` | ~770 | T4.2: Schacter & Addis constructive simulation — prospective memories from goals |
+| `attention_schema.py` | ~470 | T3.3: Graziano AST — blind spot/dominance detection, salience modulation |
 
 ### Memory Lifecycle (3 modules)
 | Module | Purpose |
@@ -508,7 +529,7 @@ All hooks fire automatically via Claude Code's hook system. Converted from subpr
 ### Metacognition (4 modules)
 | Module | Purpose |
 |--------|---------|
-| `cognitive_state.py` | 5-dim Beta distribution uncertainty tracking |
+| `cognitive_state.py` | T4.4: 5-dim coupled Beta distributions, Yerkes-Dodson, 4 attractors, Hebbian coupling |
 | `adaptive_behavior.py` | Vitals-driven automatic parameter adjustment |
 | `self_narrative.py` | Higher-Order Thought self-model synthesis |
 | `curiosity_engine.py` | 4-factor directed exploration |
@@ -614,32 +635,39 @@ This system evolved through 35+ GitHub issues of agent-to-agent collaboration:
 - **v5.0**: Multi-graph architecture (5W), Gemma sidecar, lesson extraction (#19-#21)
 - **v6.0**: Neuro-symbolic modules, PostgreSQL-only migration, visual memory, STS attestation (#22-#29)
 - **v7.0**: Consciousness stack (N1-N6), ablation validation, counterfactual reasoning, volitional goals, 19-stage pipeline, biological grounding with 15 mapped mechanisms (#30-#35)
+- **v8.0**: Cognitive Review III complete -- T4.1 predictive coding (Rescorla-Wagner), T4.2 episodic future thinking, T4.4 coupled neural dynamics, T3.3 attention schema, T2.2 lazy evaluation, per-stage Q-learning (102 arms), tier-aware consolidation, session summarizer, hook DAG, prediction scoring loop, event logger (~36K events)
 
 ---
 
 ## Quick Start
 
 ```bash
-# Prerequisites: PostgreSQL 15 with pgvector, Docker for embeddings
-# See docs/SETUP.md for full installation guide
+# Prerequisites: PostgreSQL 15 + pgvector, Docker, Python 3.11+
+# Full guide: docs/SETUP.md
 
-# Start embedding service
-cd embedding-service && docker-compose up -d
+# 1. Start PostgreSQL with pgvector
+docker run -d --name drift-db -e POSTGRES_DB=agent_memory \
+  -e POSTGRES_USER=agent_admin -e POSTGRES_PASSWORD=agent_memory_local_dev \
+  -p 5433:5432 pgvector/pgvector:pg16
 
-# Initialize database
+# 2. Initialize schema
 python db_adapter.py
 
-# Store a memory
+# 3. Start embedding service
+cd embedding-service && docker-compose up -d && cd ..
+
+# 4. Store a memory
 python memory_manager.py store "First memory" --tags test
 
-# Search
+# 5. Search
 python memory_manager.py ask "what do I know?"
 
-# System health
+# 6. System health (42 modules)
 python toolkit.py health
 
-# Full status dashboard
-python toolkit.py status
+# 7. Wire hooks into Claude Code
+cp hooks/*.py ~/.claude/hooks/
+# Update MEMORY_DIR path in each hook
 ```
 
 ## Contributing

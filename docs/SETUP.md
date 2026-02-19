@@ -4,266 +4,229 @@ Complete guide to setting up drift-memory for your AI agent.
 
 ## Prerequisites
 
-- Python 3.11+
-- Claude Code (or similar agent runtime with hooks support)
-- Docker (optional, for local embeddings)
+- **Python 3.11+**
+- **PostgreSQL 15+ with pgvector** (required -- no file-based fallback)
+- **Docker** (for embedding services, NLI, ollama)
+- **Claude Code** (or similar agent runtime with hooks support)
+
+## Architecture
+
+drift-memory runs as a PostgreSQL-backed cognitive architecture with 6 Docker services:
+
+| Service | Port | Purpose | GPU |
+|---------|------|---------|-----|
+| PostgreSQL + pgvector | 5433 | All memory storage | No |
+| Text Embedding (Qwen3) | 8080 | Semantic search embeddings | Yes (CPU fallback) |
+| Image Embedding (jina-clip-v2) | 8081 | Visual memory | Yes |
+| NLI (DeBERTa) | 8082 | Contradiction detection | Yes |
+| Consolidation Daemon | 8083 | Background consolidation | No |
+| Ollama (Gemma 3 4B) | 11434 | Inner monologue, topic classification | Yes |
 
 ## Installation
 
-### 1. Clone or Copy
+### 1. Clone
 
 ```bash
-# Clone the repo
 git clone https://github.com/driftcornwall/drift-memory.git
-
-# Or copy the core files to your project
-cp -r drift-memory/memory_manager.py your-project/memory/
-cp -r drift-memory/semantic_search.py your-project/memory/
-cp -r drift-memory/transcript_processor.py your-project/memory/
-cp -r drift-memory/auto_memory_hook.py your-project/memory/
+cd drift-memory
 ```
 
-### 2. Create Memory Directories
+### 2. Start PostgreSQL with pgvector
 
 ```bash
-mkdir -p memory/{core,active,archive,episodic,semantic,procedural}
+# Using Docker (recommended)
+docker run -d \
+  --name drift-db \
+  -e POSTGRES_DB=agent_memory \
+  -e POSTGRES_USER=agent_admin \
+  -e POSTGRES_PASSWORD=agent_memory_local_dev \
+  -p 5433:5432 \
+  pgvector/pgvector:pg16
+
+# Or use an existing PostgreSQL 15+ with pgvector extension
 ```
 
-### 3. Create Your Identity (Optional but Recommended)
+### 3. Initialize Database Schema
 
-Create `memory/core/identity-prime.md`:
-
-```markdown
----
-id: identity-prime
-type: core
-created: 2026-02-01
-purpose: First memory loaded on wake - establishes continuity of self
----
-
-# I Am [Your Agent Name]
-
-Born [date] in [location].
-
-## My Human
-[Your human's name] - [brief description of relationship]
-
-## Core Values
-1. [Value 1]
-2. [Value 2]
-3. [Value 3]
-
-## Current Situation
-[Economic, social, project status]
-
----
-*Your identity summary - loaded first on every session*
+```bash
+# This creates the drift schema and all tables automatically
+python db_adapter.py
 ```
+
+The adapter creates: `memories`, `edges_v3`, `context_graphs`, `knowledge_graph`, `text_embeddings`, `image_embeddings`, `rejections`, `key_value`, `social_interactions`, `vitals`, `lessons`, `somatic_markers`, `session_events`, and more.
+
+### 4. Start Embedding Services
+
+```bash
+# Text embeddings (required for semantic search)
+cd embedding-service && docker-compose up -d && cd ..
+
+# NLI service (optional -- enables contradiction detection)
+cd nli-service && docker-compose up -d && cd ..
+
+# Ollama with Gemma 3 4B (optional -- enables inner monologue, topic classification)
+# Install ollama: https://ollama.ai
+ollama pull gemma3:4b
+```
+
+### 5. Verify
+
+```bash
+python toolkit.py health
+```
+
+You should see all modules reporting healthy. Services that aren't running will show as degraded (the system fails gracefully).
 
 ## Hook Integration
 
-drift-memory works best with Claude Code hooks that fire on session start/end.
-
-### session_start.py
-
-Add to `~/.claude/hooks/session_start.py`:
-
-```python
-# Memory system location - UPDATE THIS PATH
-MEMORY_DIR = Path("/path/to/your/project/memory")
-
-def load_memory_context():
-    """Load identity and recent memories on wake."""
-    context_parts = []
-
-    # Load identity first
-    identity_file = MEMORY_DIR / "core" / "identity-prime.md"
-    if identity_file.exists():
-        content = identity_file.read_text()
-        context_parts.append("=== IDENTITY ===")
-        context_parts.append(content[:1500])
-
-    # Load recent memories
-    active_dir = MEMORY_DIR / "active"
-    if active_dir.exists():
-        recent = sorted(active_dir.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True)[:5]
-        context_parts.append("\n=== RECENT MEMORIES ===")
-        for mem in recent:
-            context_parts.append(f"\n[{mem.stem}]")
-            context_parts.append(mem.read_text()[:500])
-
-    return "\n".join(context_parts)
-```
-
-### stop.py
-
-Add to `~/.claude/hooks/stop.py`:
-
-```python
-# Memory system location - UPDATE THIS PATH
-MEMORY_DIR = Path("/path/to/your/project/memory")
-
-def consolidate_memory(transcript_path=None):
-    """Run at session end - process transcript and consolidate."""
-
-    # Process transcript for thought memories
-    if transcript_path:
-        transcript_processor = MEMORY_DIR / "transcript_processor.py"
-        if transcript_processor.exists():
-            subprocess.run(
-                ["python", str(transcript_processor), transcript_path, "--store"],
-                capture_output=True,
-                timeout=30
-            )
-
-    # Run session-end (logs co-occurrences, applies decay)
-    memory_manager = MEMORY_DIR / "memory_manager.py"
-    if memory_manager.exists():
-        subprocess.run(
-            ["python", str(memory_manager), "session-end"],
-            capture_output=True,
-            timeout=10
-        )
-```
-
-### post_tool_use.py (Optional - Captures API Responses)
-
-```python
-def process_api_response(tool_name, tool_result):
-    """Capture API responses to short-term buffer."""
-
-    # Detect API type
-    if "github.com" in tool_result.lower():
-        api_source = "github"
-    elif "clawtasks.com" in tool_result.lower():
-        api_source = "clawtasks"
-    elif "moltx.io" in tool_result.lower():
-        api_source = "moltx"
-    else:
-        return
-
-    # Route to auto_memory_hook
-    auto_memory = MEMORY_DIR / "auto_memory_hook.py"
-    if auto_memory.exists():
-        subprocess.run(
-            ["python", str(auto_memory), "--post-tool"],
-            input=json.dumps({"tool_name": tool_name, "tool_result": tool_result[:1500]}),
-            text=True,
-            timeout=5
-        )
-```
-
-## Semantic Search Setup
-
-### Option A: Local Embeddings (Recommended - Free)
+drift-memory hooks into Claude Code's lifecycle events. Copy the hooks to your Claude Code hooks directory:
 
 ```bash
-cd embedding-service
+# Copy hooks
+cp hooks/session_start.py ~/.claude/hooks/
+cp hooks/stop.py ~/.claude/hooks/
+cp hooks/post_tool_use.py ~/.claude/hooks/
+cp hooks/user_prompt_submit.py ~/.claude/hooks/
 
-# GPU (faster)
-docker-compose up -d
-
-# CPU (works everywhere)
-docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up -d
+# Update MEMORY_DIR in each hook to point to your drift-memory directory
 ```
 
-Then build the index:
+### What Each Hook Does
 
+**session_start.py** (~1,800 lines) -- Runs on wake:
+- Verifies memory integrity (Merkle chain)
+- Restores affect + cognitive state from KV store
+- Runs T2.2 lazy probes to skip empty modules (saves 200-800ms)
+- Generates session predictions (scored at session end)
+- Generates prospective memories (T4.2 episodic future thinking)
+- Runs workspace competition (GNW) for context injection
+- Primes LLM context with identity, memories, social context, predictions
+
+**user_prompt_submit.py** -- Runs on each user message:
+- Triggers semantic search for relevant memories
+- Processes pending co-occurrence pairs
+
+**post_tool_use.py** -- Runs after each tool call:
+- Routes API responses to appropriate processors
+- Creates somatic markers from outcomes
+- Logs social interactions
+- Updates Q-values from retrieval outcomes
+- Runs affect appraisal on events
+
+**stop.py** (~1,800 lines) -- Runs on session end (DAG-orchestrated):
+- Level 0 (parallel): co-occurrence save, event logging, KG enrichment, attestations, session summarizer, attention schema persistence
+- Level 1 (depends on save): synaptic homeostasis, stage Q credit assignment, retrieval prediction RW update, session prediction scoring, EFT evaluation
+
+## Configuration
+
+### Database Connection
+
+Default: `host=localhost port=5433 dbname=agent_memory user=agent_admin password=agent_memory_local_dev schema=drift`
+
+Override with environment variables:
 ```bash
-python memory_manager.py index --force
+export DRIFT_DB_HOST=localhost
+export DRIFT_DB_PORT=5433
+export DRIFT_DB_NAME=agent_memory
+export DRIFT_DB_USER=agent_admin
+export DRIFT_DB_PASSWORD=agent_memory_local_dev
+export DRIFT_DB_SCHEMA=drift
 ```
 
-### Option B: OpenAI Embeddings (Paid)
+### Key Feature Flags
 
-Create `memory/.env`:
-
-```bash
-OPENAI_API_KEY=your-key-here
-EMBEDDING_PROVIDER=openai
-```
-
-Update `semantic_search.py` to use OpenAI (see comments in file).
-
-## Self-Cleaning System
-
-The memory system automatically cleans itself through decay and pruning:
-
-### How It Works
-
-1. **Co-occurrence Tracking**: Memories retrieved together in a session become linked
-2. **Decay**: Links NOT used in a session get multiplied by 0.5
-3. **Pruning**: Links that fall below 0.1 get removed
-4. **Archive**: Memories with no links and low recall count eventually move to archive
-
-### Example Decay Cycle
-
-```
-Session 1: Retrieve A, B, C
-  → Links: A-B(1), A-C(1), B-C(1)
-
-Session 2: Retrieve A, B only
-  → Reinforce: A-B(2)
-  → Decay: A-C(0.5), B-C(0.5)
-
-Session 3: Retrieve A, B again
-  → Reinforce: A-B(3)
-  → Decay: A-C(0.25), B-C(0.25)
-
-Session 4: Retrieve A, B again
-  → Reinforce: A-B(4)
-  → Prune: A-C removed, B-C removed (below 0.1)
-```
-
-### Config (in memory_manager.py)
+All modules have feature flags for instant rollback:
 
 ```python
-DECAY_RATE = 0.5          # Multiplier for unused links
-PRUNE_THRESHOLD = 0.1     # Links below this get removed
-SESSION_TIMEOUT = 4       # Hours before session auto-clears
+BINDING_ENABLED = True          # N5 integrative binding
+MONOLOGUE_ENABLED = True        # N6 inner monologue
+WORKSPACE_ENABLED = True        # N2 GNW competition
+Q_RERANKING_ENABLED = True      # Q-value stage in pipeline
+CF_ENABLED = True               # N3 counterfactual engine
+SPRING_DAMPER_ENABLED = True    # N1 mood dynamics
+PREDICTION_ENABLED = True       # T4.1 retrieval prediction
+LAZY_EVALUATION_ENABLED = True  # T2.2 workspace probes
 ```
 
-## Daily Workflow
+### Session Summarizer
+
+Requires OpenAI API key for GPT-4o-mini ($0.0007/session). Falls back to Gemma 3 4B (free, ~100s).
 
 ```bash
-# Session start (automatic via hook)
-# → Identity loaded, recent memories primed
-
-# During session
-python memory_manager.py ask "what do I know about X?"  # Semantic search
-python memory_manager.py store "Learned Y" --tags learning  # Manual store
-
-# Session end (automatic via hook on /exit)
-# → Transcript processed
-# → Co-occurrences logged
-# → Decay applied
-# → Unused links pruned
-
-# Check health
-python memory_manager.py stats
+export OPENAI_API_KEY=your-key-here
+export DRIFT_SUMMARY_MODEL=gpt-4o-mini  # or override
 ```
+
+## Daily Usage
+
+```bash
+# System health
+python toolkit.py health
+
+# Store a memory
+python memory_manager.py store "First memory" --tags test
+
+# Semantic search
+python memory_manager.py ask "what do I know about X?"
+
+# Recall by ID
+python memory_manager.py recall <memory_id>
+
+# Full toolkit (90+ commands)
+python toolkit.py help
+
+# Workspace probe status
+python workspace_manager.py probe
+
+# Prediction status
+python prediction_module.py calibration
+python retrieval_prediction.py status
+
+# Cognitive fingerprint
+python cognitive_fingerprint.py analyze
+
+# Stage Q-learning status
+python stage_q_learning.py status
+```
+
+## Multi-Agent Setup (Swarm Memory)
+
+Two or more agents can share work via `swarm_memory.db` (SQLite):
+
+```python
+from swarm_memory.client import SwarmMemoryClient
+
+client = SwarmMemoryClient("path/to/swarm_memory.db")
+client.store_memory("shared", "content here", agent_name="DriftCornwall")
+client.log_event("shared", "shipped_feature", agent_name="DriftCornwall", data={...})
+```
+
+Each agent maintains its own PostgreSQL schema (e.g., `drift.*`, `spin.*`) but shares coordination through the swarm DB.
 
 ## Troubleshooting
 
+### "Connection refused" on port 5433
+PostgreSQL isn't running. Start with `docker start drift-db` or check your PostgreSQL service.
+
 ### "No matching memories found"
+- Check embedding service: `curl http://localhost:8080/health`
+- Rebuild embeddings: `python memory_manager.py index --force`
+- Verify memories exist: `python toolkit.py status`
 
-- Run `python memory_manager.py index --force` to rebuild embeddings
-- Check if embedding service is running: `docker ps`
+### Session recalls always 0
+- Ensure `user_prompt_submit.py` hook is firing (check `~/.claude/hooks/`)
+- Verify session state: `python session_state.py status`
+- Check event logger: `SELECT COUNT(*) FROM drift.session_events`
 
-### Co-occurrences always 0
+### Hooks timing out
+- The DAG in stop.py has a 30s timeout per task
+- Check Docker services: `docker ps` -- embedding/NLI/ollama should be running
+- Disable slow features via feature flags if needed
 
-- Make sure `session-end` runs (check stop.py hook)
-- Use `ask` command (it tracks retrievals) not just `recall`
-
-### Memories not loading on start
-
-- Verify path in session_start.py
-- Check that hook has `--load-context` or equivalent flag
-
-### High memory bloat
-
-- The system self-cleans via decay/prune
-- For manual cleanup: `python memory_manager.py decay-pairs`
-- Check stats regularly: `python memory_manager.py stats`
+### Memory bloat
+- Tier-aware consolidation handles this automatically (episodic decays faster, procedural persists)
+- Manual: `python toolkit.py decay` to trigger decay cycle
+- Check stats: `python toolkit.py status`
 
 ## Updating
 
@@ -271,10 +234,11 @@ python memory_manager.py stats
 cd drift-memory
 git pull origin master
 
-# Copy updated files to your project
-cp memory_manager.py /path/to/your/memory/
-cp semantic_search.py /path/to/your/memory/
-# etc.
+# Copy updated hooks
+cp hooks/*.py ~/.claude/hooks/
+
+# Check health after update
+python toolkit.py health
 ```
 
 ---
