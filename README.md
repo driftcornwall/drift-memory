@@ -269,13 +269,49 @@ Memories are not static records. They form, strengthen, decay, link, consolidate
 - Generic output filtering to prevent tautological consolidation
 - KG edge creation from source memories to synthesis
 
+### Session Transcript Summarization
+
+`session_summarizer.py` -- At session end, the full JSONL transcript is sent to an external LLM (GPT-4o-mini primary, Gemma 3 4B fallback) for structured extraction. The LLM returns threads, lessons, and key facts which are stored as **real memories in the main graph** -- fully embedded, tagged, co-occurrence-linked, and retrievable by semantic search.
+
+```
+Session transcript (JSONL) → LLM extraction → Structured output:
+  THREAD: name + summary + status (completed/blocked/in-progress)
+  LESSON: concrete thing learned
+  FACT: specific config, decision, URL, or number
+
+→ Each item stored via store_memory() with:
+  - Semantic embedding (pgvector halfvec)
+  - Knowledge graph edge extraction
+  - Emotional weight (completed=0.65, blocked=0.3, lessons=0.6)
+  - Session-date tags (session-summary, thread/lesson/key-fact)
+  - Bidirectional co-occurrence links between all session memories
+  - Affect valence stamping from current mood
+```
+
+- **Cost**: ~$0.0007/session (GPT-4o-mini) or free (Gemma 3 4B local, ~100s)
+- **Wiring**: Level 0 task in stop.py DAG, runs in parallel, main sessions only
+- **Why it matters**: Without this, session knowledge dies when context compresses. With it, every session's key threads and lessons become permanent, searchable, interconnected memories in the graph.
+
 ### Prediction and Forward Modeling
 
-`prediction_module.py` -- The system generates predictions at session start and scores them at session end.
-- Heuristic predictions from contacts, platforms, intentions, vitals
-- Binary and continuous scoring against actuals
+`prediction_module.py` + `retrieval_prediction.py` -- Two prediction systems operating at different scales:
+
+**Session-level predictions** (`prediction_module.py`):
+- Generates heuristic predictions at session start from contacts, platforms, intentions, vitals, causal hypotheses
+- Scores against actuals at session end (wired into stop.py DAG)
 - Calibration tracking across sessions (targeting well-calibrated confidence, not 100% accuracy)
 - Failed predictions feed into the counterfactual engine
+
+**Per-retrieval predictions** (`retrieval_prediction.py`):
+- Before each pgvector search, 5 sources predict which memory IDs should appear:
+  1. Co-occurrence neighbors
+  2. Q-value top memories
+  3. Knowledge graph neighbors
+  4. Contact model predictions
+  5. Causal hypothesis predictions
+- After search, prediction errors are computed -- surprisingly relevant results get boosted (enlightenment surprise)
+- Source weights update via Rescorla-Wagner learning at session end
+- This is predictive coding (Rao & Ballard 1999, Friston free energy) applied to memory retrieval
 
 ---
 
