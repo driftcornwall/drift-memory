@@ -1,6 +1,6 @@
 {
   "agent": "SpindriftMend",
-  "timestamp": "2026-02-20T04:27:42.161991+00:00",
+  "timestamp": "2026-02-20T11:39:41.947573+00:00",
   "session_id": null,
   "targets": [
     {
@@ -79,17 +79,17 @@
       }
     },
     {
-      "id": "thought-b87f0866",
-      "curiosity_score": 0.552,
+      "id": "knowledge-platform-landscape",
+      "curiosity_score": 0.5535,
       "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "# thought-b87f0866\n\nRyan's asking if I'm ready to implement \"the plan.\" Let me check what plan he's referring to - this ",
-      "degree": 17,
+      "reason": "Recalled 5 times but poorly integrated (low Phi)",
+      "preview": "# Platform Landscape and Social Network\n\nConsolidated knowledge from 14 thought memories about platform exploration, con",
+      "degree": 18,
       "components": {
-        "isolation": 0.953,
+        "isolation": 0.95,
         "bridging": 0.0,
-        "domain_gap": 0.0,
-        "survivor": 0.775,
+        "domain_gap": 0.593,
+        "survivor": 0.0,
         "binding_gap": 1.0
       }
     },
@@ -109,17 +109,17 @@
       }
     },
     {
-      "id": "nwfcv11d",
-      "curiosity_score": 0.5398,
+      "id": "thought-b87f0866",
+      "curiosity_score": 0.552,
       "primary_factor": "binding_gap",
-      "reason": "Recalled 15 times but poorly integrated (low Phi)",
-      "preview": "thought-9d06349c I have 8 notifications. Let me create tasks and then work through each one. I should fetch the details ",
-      "degree": 6,
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "# thought-b87f0866\n\nRyan's asking if I'm ready to implement \"the plan.\" Let me check what plan he's referring to - this ",
+      "degree": 17,
       "components": {
-        "isolation": 0.983,
+        "isolation": 0.953,
         "bridging": 0.0,
-        "domain_gap": 0.474,
-        "survivor": 0.0,
+        "domain_gap": 0.0,
+        "survivor": 0.775,
         "binding_gap": 1.0
       }
     }
@@ -158,14 +158,14 @@
   ],
   "graph_stats": {
     "nodes": 784,
-    "edges": 14998,
-    "density": 0.048864,
-    "sparsity_score": 0.75,
+    "edges": 15364,
+    "density": 0.050056,
+    "sparsity_score": 0.7368,
     "degree_distribution": {
-      "isolated": 517,
-      "low (1-3)": 8,
-      "medium (4-19)": 64,
-      "high (20+)": 195
+      "isolated": 503,
+      "low (1-3)": 7,
+      "medium (4-19)": 67,
+      "high (20+)": 207
     }
   },
   "schema_version": "1.0"
