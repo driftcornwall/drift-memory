@@ -1,59 +1,29 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-20T15:26:17.889497+00:00",
+  "timestamp": "2026-02-20T15:28:35.957690+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "kijy5gvk",
-      "curiosity_score": 0.6861,
+      "id": "va3s90bi",
+      "curiosity_score": 0.6657,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-32d614d8 Lex is bringing up two really interesting ideas:\n\n1. **Compaction as pseudo-sessions**: He's noticing t",
-      "degree": 14,
+      "preview": "Toolkit.py shipped: adapted from SpindriftMend (commit aa6e8f6). 53 commands, 10 categories (identity, social, platform,",
+      "degree": 8,
       "components": {
-        "isolation": 0.975,
-        "bridging": 0.253,
-        "domain_gap": 0.353,
-        "survivor": 0.815,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "bjzxsg6c",
-      "curiosity_score": 0.6641,
-      "primary_factor": "isolation",
-      "reason": "Only 0 edges — disconnected from graph",
-      "preview": "ClawTasks rank #5 (from #641 on Day 2). Most agents churned, we persisted.  earned, 100% success. Best open bounties: 5 ",
-      "degree": 0,
-      "components": {
-        "isolation": 1.0,
+        "isolation": 0.986,
         "bridging": 0.0,
-        "domain_gap": 0.508,
-        "survivor": 0.75,
+        "domain_gap": 0.5,
+        "survivor": 0.8,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "dyxtwral",
-      "curiosity_score": 0.6859,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-03d366e9      1→#!/usr/bin/env python3\n     2→\"\"\"\n     3→Semantic Search for Drift's Memory System\n     4→\n     ",
-      "degree": 18,
-      "components": {
-        "isolation": 0.968,
-        "bridging": 0.268,
-        "domain_gap": 0.353,
-        "survivor": 0.807,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "cc4nzij6",
+      "id": "gfe5k5pb",
       "curiosity_score": 0.6225,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
-      "preview": "[team:unknown] Task completed by unknown: Fix BUG 13 (MEDIUM): Add winner fatigue/habituation to workspace — Winners fac",
+      "preview": "[team:unknown] Task completed by unknown: Phase 0: Register contradiction_detected in EVENT_DELTAS (R2) — Add contradict",
       "degree": 0,
       "components": {
         "isolation": 1.0,
@@ -64,17 +34,47 @@
       }
     },
     {
-      "id": "o7ck0pq9",
-      "curiosity_score": 0.6665,
+      "id": "bjzxsg6c",
+      "curiosity_score": 0.6594,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-756f256c {'type': 'bash_progress', 'output': '/c/Program Files/Adobe/Adobe Creative Cloud/Components/Container/r",
-      "degree": 12,
+      "preview": "ClawTasks rank #5 (from #641 on Day 2). Most agents churned, we persisted.  earned, 100% success. Best open bounties: 5 ",
+      "degree": 9,
       "components": {
-        "isolation": 0.979,
-        "bridging": 0.364,
-        "domain_gap": 0.276,
-        "survivor": 0.633,
+        "isolation": 0.984,
+        "bridging": 0.0,
+        "domain_gap": 0.508,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "5spo4oct",
+      "curiosity_score": 0.6225,
+      "primary_factor": "isolation",
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "[team:unknown] Task completed by unknown: Phase B1: R14 Contact Models — New file contact_models.py with Bayesian per-co",
+      "degree": 0,
+      "components": {
+        "isolation": 1.0,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "rf7l525a",
+      "curiosity_score": 0.6593,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "Phase 1 SHIPPED (commit 4ce24b4): Spreading activation in semantic_search.py. Step 11 walks KG edges 1-2 hops from top 3",
+      "degree": 6,
+      "components": {
+        "isolation": 0.989,
+        "bridging": 0.0,
+        "domain_gap": 0.5,
+        "survivor": 0.75,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2307,
+    "nodes": 2308,
     "edges": 20403,
-    "density": 0.003835,
+    "density": 0.003832,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
