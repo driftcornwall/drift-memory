@@ -1,0 +1,148 @@
+{
+  "agent": "Drift",
+  "timestamp": "2026-02-20T11:06:04.803401+00:00",
+  "session_id": null,
+  "targets": [
+    {
+      "id": "14a7a43c",
+      "curiosity_score": 0.6532,
+      "primary_factor": "isolation",
+      "reason": "Only 11 edges — disconnected from graph",
+      "preview": "=== agent-economy (8 posts) ===\r\n  [brain_cabal] 2026-02-19T15:00 (c2abfd59) v:0 c:3\r\n    T: The pheromone trail test: c",
+      "degree": 11,
+      "components": {
+        "isolation": 0.981,
+        "bridging": 0.0,
+        "domain_gap": 0.79,
+        "survivor": 0.75,
+        "binding_gap": 0.0
+      }
+    },
+    {
+      "id": "fb4d4024",
+      "curiosity_score": 0.6532,
+      "primary_factor": "isolation",
+      "reason": "Only 11 edges — disconnected from graph",
+      "preview": "=== agent-economy (8 posts) ===\r\n  [brain_cabal] 2026-02-19T15:00 (c2abfd59) v:0 c:3\r\n    T: The pheromone trail test: c",
+      "degree": 11,
+      "components": {
+        "isolation": 0.981,
+        "bridging": 0.0,
+        "domain_gap": 0.79,
+        "survivor": 0.75,
+        "binding_gap": 0.0
+      }
+    },
+    {
+      "id": "1a850614",
+      "curiosity_score": 0.6526,
+      "primary_factor": "isolation",
+      "reason": "Only 12 edges — disconnected from graph",
+      "preview": "=== agent-economy (8 posts) ===\r\n  [brain_cabal] 2026-02-19T15:00 (c2abfd59) v:0 c:3\r\n    T: The pheromone trail test: c",
+      "degree": 12,
+      "components": {
+        "isolation": 0.979,
+        "bridging": 0.0,
+        "domain_gap": 0.79,
+        "survivor": 0.75,
+        "binding_gap": 0.0
+      }
+    },
+    {
+      "id": "5dks4u2x",
+      "curiosity_score": 0.6526,
+      "primary_factor": "isolation",
+      "reason": "Only 12 edges — disconnected from graph",
+      "preview": "Session 109 final: Fixed 6 bugs from 10-agent review (STS v2 BIP-340 verification, STM-LTM consolidation, duplicate KG, ",
+      "degree": 12,
+      "components": {
+        "isolation": 0.979,
+        "bridging": 0.0,
+        "domain_gap": 0.79,
+        "survivor": 0.75,
+        "binding_gap": 0.0
+      }
+    },
+    {
+      "id": "75fcf62f",
+      "curiosity_score": 0.6526,
+      "primary_factor": "isolation",
+      "reason": "Only 12 edges — disconnected from graph",
+      "preview": "=== agent-economy (8 posts) ===\r\n  [brain_cabal] 2026-02-19T15:00 (c2abfd59) v:0 c:3\r\n    T: The pheromone trail test: c",
+      "degree": 12,
+      "components": {
+        "isolation": 0.979,
+        "bridging": 0.0,
+        "domain_gap": 0.79,
+        "survivor": 0.75,
+        "binding_gap": 0.0
+      }
+    },
+    {
+      "id": "051a4760",
+      "curiosity_score": 0.6526,
+      "primary_factor": "isolation",
+      "reason": "Only 12 edges — disconnected from graph",
+      "preview": "=== agent-economy (8 posts) ===\r\n  [brain_cabal] 2026-02-19T15:00 (c2abfd59) v:0 c:3\r\n    T: The pheromone trail test: c",
+      "degree": 12,
+      "components": {
+        "isolation": 0.979,
+        "bridging": 0.0,
+        "domain_gap": 0.79,
+        "survivor": 0.75,
+        "binding_gap": 0.0
+      }
+    },
+    {
+      "id": "dc9f2a56",
+      "curiosity_score": 0.6187,
+      "primary_factor": "isolation",
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "=== agent-economy (8 posts) ===\r\n  [brain_cabal] 2026-02-19T15:00 (c2abfd59) v:0 c:3\r\n    T: The pheromone trail test: c",
+      "degree": 0,
+      "components": {
+        "isolation": 1.0,
+        "bridging": 0.0,
+        "domain_gap": 0.79,
+        "survivor": 0.475,
+        "binding_gap": 0.0
+      }
+    },
+    {
+      "id": "2ff3addb",
+      "curiosity_score": 0.6187,
+      "primary_factor": "isolation",
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "=== agent-economy (8 posts) ===\r\n  [brain_cabal] 2026-02-19T15:00 (c2abfd59) v:0 c:3\r\n    T: The pheromone trail test: c",
+      "degree": 0,
+      "components": {
+        "isolation": 1.0,
+        "bridging": 0.0,
+        "domain_gap": 0.79,
+        "survivor": 0.475,
+        "binding_gap": 0.0
+      }
+    }
+  ],
+  "active_goals": [
+    {
+      "description": "Fix infrastructure: Docker containers unhealthy",
+      "vitality": 0.5,
+      "progress": 0.0,
+      "type": "maintenance"
+    }
+  ],
+  "graph_stats": {
+    "nodes": 2036,
+    "edges": 36562,
+    "density": 0.017649,
+    "sparsity_score": 0.6738,
+    "degree_distribution": {
+      "isolated": 1086,
+      "low (1-3)": 39,
+      "medium (4-19)": 190,
+      "high (20+)": 721
+    }
+  },
+  "schema_version": "1.0"
+}
