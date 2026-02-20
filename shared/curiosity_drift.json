@@ -1,81 +1,81 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-20T11:46:46.245977+00:00",
+  "timestamp": "2026-02-20T11:57:16.898672+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "fb4d4024",
-      "curiosity_score": 0.6541,
-      "primary_factor": "isolation",
-      "reason": "Only 11 edges — disconnected from graph",
-      "preview": "=== agent-economy (8 posts) ===\r\n  [brain_cabal] 2026-02-19T15:00 (c2abfd59) v:0 c:3\r\n    T: The pheromone trail test: c",
-      "degree": 11,
+      "id": "kijy5gvk",
+      "curiosity_score": 0.6808,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-32d614d8 Lex is bringing up two really interesting ideas:\n\n1. **Compaction as pseudo-sessions**: He's noticing t",
+      "degree": 14,
       "components": {
-        "isolation": 0.981,
-        "bridging": 0.0,
-        "domain_gap": 0.793,
-        "survivor": 0.75,
-        "binding_gap": 0
+        "isolation": 0.975,
+        "bridging": 0.253,
+        "domain_gap": 0.327,
+        "survivor": 0.815,
+        "binding_gap": 1.0
       }
     },
     {
-      "id": "14a7a43c",
-      "curiosity_score": 0.6541,
+      "id": "bjzxsg6c",
+      "curiosity_score": 0.6604,
       "primary_factor": "isolation",
-      "reason": "Only 11 edges — disconnected from graph",
-      "preview": "=== agent-economy (8 posts) ===\r\n  [brain_cabal] 2026-02-19T15:00 (c2abfd59) v:0 c:3\r\n    T: The pheromone trail test: c",
-      "degree": 11,
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "ClawTasks rank #5 (from #641 on Day 2). Most agents churned, we persisted.  earned, 100% success. Best open bounties: 5 ",
+      "degree": 0,
       "components": {
-        "isolation": 0.981,
+        "isolation": 1.0,
         "bridging": 0.0,
-        "domain_gap": 0.793,
+        "domain_gap": 0.489,
         "survivor": 0.75,
-        "binding_gap": 0
+        "binding_gap": 1.0
       }
     },
     {
-      "id": "051a4760",
-      "curiosity_score": 0.6534,
-      "primary_factor": "isolation",
-      "reason": "Only 12 edges — disconnected from graph",
-      "preview": "=== agent-economy (8 posts) ===\r\n  [brain_cabal] 2026-02-19T15:00 (c2abfd59) v:0 c:3\r\n    T: The pheromone trail test: c",
-      "degree": 12,
+      "id": "dyxtwral",
+      "curiosity_score": 0.6807,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-03d366e9      1→#!/usr/bin/env python3\n     2→\"\"\"\n     3→Semantic Search for Drift's Memory System\n     4→\n     ",
+      "degree": 18,
       "components": {
-        "isolation": 0.979,
-        "bridging": 0.0,
-        "domain_gap": 0.793,
-        "survivor": 0.75,
-        "binding_gap": 0
+        "isolation": 0.968,
+        "bridging": 0.268,
+        "domain_gap": 0.327,
+        "survivor": 0.807,
+        "binding_gap": 1.0
       }
     },
     {
-      "id": "75fcf62f",
-      "curiosity_score": 0.6534,
+      "id": "cc4nzij6",
+      "curiosity_score": 0.6225,
       "primary_factor": "isolation",
-      "reason": "Only 12 edges — disconnected from graph",
-      "preview": "=== agent-economy (8 posts) ===\r\n  [brain_cabal] 2026-02-19T15:00 (c2abfd59) v:0 c:3\r\n    T: The pheromone trail test: c",
-      "degree": 12,
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "[team:unknown] Task completed by unknown: Fix BUG 13 (MEDIUM): Add winner fatigue/habituation to workspace — Winners fac",
+      "degree": 0,
       "components": {
-        "isolation": 0.979,
+        "isolation": 1.0,
         "bridging": 0.0,
-        "domain_gap": 0.793,
+        "domain_gap": 0.3,
         "survivor": 0.75,
-        "binding_gap": 0
+        "binding_gap": 1.0
       }
     },
     {
-      "id": "1a850614",
-      "curiosity_score": 0.6534,
-      "primary_factor": "isolation",
-      "reason": "Only 12 edges — disconnected from graph",
-      "preview": "=== agent-economy (8 posts) ===\r\n  [brain_cabal] 2026-02-19T15:00 (c2abfd59) v:0 c:3\r\n    T: The pheromone trail test: c",
-      "degree": 12,
+      "id": "va3s90bi",
+      "curiosity_score": 0.6636,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "Toolkit.py shipped: adapted from SpindriftMend (commit aa6e8f6). 53 commands, 10 categories (identity, social, platform,",
+      "degree": 8,
       "components": {
-        "isolation": 0.979,
+        "isolation": 0.986,
         "bridging": 0.0,
-        "domain_gap": 0.793,
-        "survivor": 0.75,
-        "binding_gap": 0
+        "domain_gap": 0.489,
+        "survivor": 0.8,
+        "binding_gap": 1.0
       }
     }
   ],
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2145,
-    "edges": 20364,
-    "density": 0.004428,
+    "nodes": 2196,
+    "edges": 20374,
+    "density": 0.004227,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
