@@ -1,8 +1,38 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-20T16:01:23.377668+00:00",
+  "timestamp": "2026-02-20T16:02:23.212946+00:00",
   "session_id": null,
   "targets": [
+    {
+      "id": "ko7vo353",
+      "curiosity_score": 0.6685,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-7bb65976 There's the issue:\n\n| Category | Count | % |\n|----------|-------|---|\n| Total memories on disk | 639 | ",
+      "degree": 14,
+      "components": {
+        "isolation": 0.975,
+        "bridging": 0.231,
+        "domain_gap": 0.353,
+        "survivor": 0.727,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "gfe5k5pb",
+      "curiosity_score": 0.6225,
+      "primary_factor": "isolation",
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "[team:unknown] Task completed by unknown: Phase 0: Register contradiction_detected in EVENT_DELTAS (R2) — Add contradict",
+      "degree": 0,
+      "components": {
+        "isolation": 1.0,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
     {
       "id": "va3s90bi",
       "curiosity_score": 0.6657,
@@ -24,36 +54,6 @@
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
       "preview": "[team:unknown] Task completed by unknown: Phase B1: R14 Contact Models — New file contact_models.py with Bayesian per-co",
-      "degree": 0,
-      "components": {
-        "isolation": 1.0,
-        "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "ko7vo353",
-      "curiosity_score": 0.6645,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-7bb65976 There's the issue:\n\n| Category | Count | % |\n|----------|-------|---|\n| Total memories on disk | 639 | ",
-      "degree": 14,
-      "components": {
-        "isolation": 0.975,
-        "bridging": 0.231,
-        "domain_gap": 0.353,
-        "survivor": 0.7,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "gfe5k5pb",
-      "curiosity_score": 0.6225,
-      "primary_factor": "isolation",
-      "reason": "Only 0 edges — disconnected from graph",
-      "preview": "[team:unknown] Task completed by unknown: Phase 0: Register contradiction_detected in EVENT_DELTAS (R2) — Add contradict",
       "degree": 0,
       "components": {
         "isolation": 1.0,
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2321,
+    "nodes": 2322,
     "edges": 20403,
-    "density": 0.003789,
+    "density": 0.003786,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
