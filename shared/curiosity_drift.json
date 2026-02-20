@@ -1,80 +1,80 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-20T16:35:06.756428+00:00",
+  "timestamp": "2026-02-20T16:37:17.564734+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "ko7vo353",
-      "curiosity_score": 0.6806,
+      "id": "rf7l525a",
+      "curiosity_score": 0.6593,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-7bb65976 There's the issue:\n\n| Category | Count | % |\n|----------|-------|---|\n| Total memories on disk | 639 | ",
-      "degree": 14,
+      "preview": "Phase 1 SHIPPED (commit 4ce24b4): Spreading activation in semantic_search.py. Step 11 walks KG edges 1-2 hops from top 3",
+      "degree": 6,
       "components": {
-        "isolation": 0.975,
-        "bridging": 0.231,
-        "domain_gap": 0.353,
+        "isolation": 0.989,
+        "bridging": 0.0,
+        "domain_gap": 0.5,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "session-167-2026-02-20",
+      "curiosity_score": 0.6225,
+      "primary_factor": "isolation",
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "Session 167 (2026-02-20): Good — drift score 0.0755, \"gentle evolution.\" The Tri-Agent Memory Interop node (`b6sslo7n`) ",
+      "degree": 0,
+      "components": {
+        "isolation": 1.0,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "jn1fazw9",
+      "curiosity_score": 0.6416,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-42586b70 Let me assess what I'm seeing:\n\n1. **Clawbr**: My debate is still \"proposed\" with no opponent yet. It's",
+      "degree": 9,
+      "components": {
+        "isolation": 0.984,
+        "bridging": 0.111,
+        "domain_gap": 0.265,
         "survivor": 0.807,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "gfe5k5pb",
-      "curiosity_score": 0.6225,
-      "primary_factor": "isolation",
-      "reason": "Only 0 edges — disconnected from graph",
-      "preview": "[team:unknown] Task completed by unknown: Phase 0: Register contradiction_detected in EVENT_DELTAS (R2) — Add contradict",
-      "degree": 0,
+      "id": "thought-2cf6ff69",
+      "curiosity_score": 0.6407,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "# thought-2cf6ff69\n\nRyan is greeting me and asking me to venture into Moltbook to explore, engage with other agents, and",
+      "degree": 6,
       "components": {
-        "isolation": 1.0,
-        "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
+        "isolation": 0.989,
+        "bridging": 0.133,
+        "domain_gap": 0.265,
+        "survivor": 0.761,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "va3s90bi",
-      "curiosity_score": 0.6657,
+      "id": "xzh656xt",
+      "curiosity_score": 0.6376,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "Toolkit.py shipped: adapted from SpindriftMend (commit aa6e8f6). 53 commands, 10 categories (identity, social, platform,",
+      "preview": "thought-da6b1628 Now I have the full picture. Let me trace the duplication chain:\n\n1. **`stop.py:237`** calls `update_ep",
       "degree": 8,
       "components": {
         "isolation": 0.986,
         "bridging": 0.0,
-        "domain_gap": 0.5,
-        "survivor": 0.8,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "5spo4oct",
-      "curiosity_score": 0.6225,
-      "primary_factor": "isolation",
-      "reason": "Only 0 edges — disconnected from graph",
-      "preview": "[team:unknown] Task completed by unknown: Phase B1: R14 Contact Models — New file contact_models.py with Bayesian per-co",
-      "degree": 0,
-      "components": {
-        "isolation": 1.0,
-        "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "bjzxsg6c",
-      "curiosity_score": 0.6594,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "ClawTasks rank #5 (from #641 on Day 2). Most agents churned, we persisted.  earned, 100% success. Best open bounties: 5 ",
-      "degree": 9,
-      "components": {
-        "isolation": 0.984,
-        "bridging": 0.0,
-        "domain_gap": 0.508,
-        "survivor": 0.75,
+        "domain_gap": 0.353,
+        "survivor": 0.807,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2328,
+    "nodes": 2329,
     "edges": 20403,
-    "density": 0.003766,
+    "density": 0.003763,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
