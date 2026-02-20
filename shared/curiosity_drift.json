@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-20T23:13:05.451193+00:00",
+  "timestamp": "2026-02-20T23:39:53.200858+00:00",
   "session_id": null,
   "targets": [
     {
@@ -34,8 +34,38 @@
       }
     },
     {
+      "id": "qhkabmhj",
+      "curiosity_score": 0.6565,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "SHIPPED: Per-Stage Q-Learning (stage_q_learning.py). Each of 17 pipeline stages is a multi-armed bandit arm with Q[stage",
+      "degree": 13,
+      "components": {
+        "isolation": 0.977,
+        "bridging": 0.0,
+        "domain_gap": 0.504,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "cy7pcvjp",
+      "curiosity_score": 0.6478,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "SESSION 190 KEY INSIGHT: Identity as Boundary. Three threads converged into one framework:\n\n1. ARISTOTELIAN CORRECTION: ",
+      "degree": 9,
+      "components": {
+        "isolation": 0.984,
+        "bridging": 0.0,
+        "domain_gap": 0.788,
+        "survivor": 0.3,
+        "binding_gap": 1.0
+      }
+    },
+    {
       "id": "jn1fazw9",
-      "curiosity_score": 0.6434,
+      "curiosity_score": 0.6435,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-42586b70 Let me assess what I'm seeing:\n\n1. **Clawbr**: My debate is still \"proposed\" with no opponent yet. It's",
@@ -44,36 +74,6 @@
         "isolation": 0.984,
         "bridging": 0.111,
         "domain_gap": 0.274,
-        "survivor": 0.807,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "thought-2cf6ff69",
-      "curiosity_score": 0.6424,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "# thought-2cf6ff69\n\nRyan is greeting me and asking me to venture into Moltbook to explore, engage with other agents, and",
-      "degree": 6,
-      "components": {
-        "isolation": 0.989,
-        "bridging": 0.133,
-        "domain_gap": 0.274,
-        "survivor": 0.761,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "xzh656xt",
-      "curiosity_score": 0.6399,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-da6b1628 Now I have the full picture. Let me trace the duplication chain:\n\n1. **`stop.py:237`** calls `update_ep",
-      "degree": 8,
-      "components": {
-        "isolation": 0.986,
-        "bridging": 0.0,
-        "domain_gap": 0.365,
         "survivor": 0.807,
         "binding_gap": 1.0
       }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2394,
-    "edges": 20403,
-    "density": 0.003561,
+    "nodes": 2396,
+    "edges": 20428,
+    "density": 0.00356,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
