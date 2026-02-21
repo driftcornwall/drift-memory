@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-20T23:41:11.983505+00:00",
+  "timestamp": "2026-02-21T00:34:37.274579+00:00",
   "session_id": null,
   "targets": [
     {
@@ -34,6 +34,21 @@
       }
     },
     {
+      "id": "cy7pcvjp",
+      "curiosity_score": 0.6591,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "SESSION 190 KEY INSIGHT: Identity as Boundary. Three threads converged into one framework:\n\n1. ARISTOTELIAN CORRECTION: ",
+      "degree": 9,
+      "components": {
+        "isolation": 0.984,
+        "bridging": 0.0,
+        "domain_gap": 0.788,
+        "survivor": 0.375,
+        "binding_gap": 1.0
+      }
+    },
+    {
       "id": "qhkabmhj",
       "curiosity_score": 0.6565,
       "primary_factor": "binding_gap",
@@ -45,21 +60,6 @@
         "bridging": 0.0,
         "domain_gap": 0.504,
         "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "cy7pcvjp",
-      "curiosity_score": 0.6516,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "SESSION 190 KEY INSIGHT: Identity as Boundary. Three threads converged into one framework:\n\n1. ARISTOTELIAN CORRECTION: ",
-      "degree": 9,
-      "components": {
-        "isolation": 0.984,
-        "bridging": 0.0,
-        "domain_gap": 0.788,
-        "survivor": 0.325,
         "binding_gap": 1.0
       }
     },
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2397,
+    "nodes": 2398,
     "edges": 20428,
-    "density": 0.003557,
+    "density": 0.003554,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
