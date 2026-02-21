@@ -1,11 +1,11 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-21T15:43:26.176948+00:00",
+  "timestamp": "2026-02-21T16:44:41.586231+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "rf7l525a",
-      "curiosity_score": 0.6616,
+      "curiosity_score": 0.6656,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Phase 1 SHIPPED (commit 4ce24b4): Spreading activation in semantic_search.py. Step 11 walks KG edges 1-2 hops from top 3",
@@ -13,14 +13,14 @@
       "components": {
         "isolation": 0.989,
         "bridging": 0.0,
-        "domain_gap": 0.511,
+        "domain_gap": 0.531,
         "survivor": 0.75,
         "binding_gap": 1.0
       }
     },
     {
       "id": "7fs3s5h1",
-      "curiosity_score": 0.6335,
+      "curiosity_score": 0.6367,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
       "preview": "Twitter session 2026-02-16: 0 new mentions. Posted milestone tweet about Phase 4 completion (all 14 cognitive neuroscien",
@@ -28,14 +28,14 @@
       "components": {
         "isolation": 1.0,
         "bridging": 0.0,
-        "domain_gap": 0.392,
-        "survivor": 0.7,
+        "domain_gap": 0.39,
+        "survivor": 0.725,
         "binding_gap": 1.0
       }
     },
     {
       "id": "qhkabmhj",
-      "curiosity_score": 0.6579,
+      "curiosity_score": 0.6619,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "SHIPPED: Per-Stage Q-Learning (stage_q_learning.py). Each of 17 pipeline stages is a multi-armed bandit arm with Q[stage",
@@ -43,29 +43,14 @@
       "components": {
         "isolation": 0.977,
         "bridging": 0.0,
-        "domain_gap": 0.511,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "session-167-2026-02-20",
-      "curiosity_score": 0.6225,
-      "primary_factor": "isolation",
-      "reason": "Only 0 edges — disconnected from graph",
-      "preview": "Session 167 (2026-02-20): Good — drift score 0.0755, \"gentle evolution.\" The Tri-Agent Memory Interop node (`b6sslo7n`) ",
-      "degree": 0,
-      "components": {
-        "isolation": 1.0,
-        "bridging": 0.0,
-        "domain_gap": 0.3,
+        "domain_gap": 0.531,
         "survivor": 0.75,
         "binding_gap": 1.0
       }
     },
     {
       "id": "jn1fazw9",
-      "curiosity_score": 0.6463,
+      "curiosity_score": 0.6533,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-42586b70 Let me assess what I'm seeing:\n\n1. **Clawbr**: My debate is still \"proposed\" with no opponent yet. It's",
@@ -73,7 +58,22 @@
       "components": {
         "isolation": 0.984,
         "bridging": 0.111,
-        "domain_gap": 0.289,
+        "domain_gap": 0.323,
+        "survivor": 0.807,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "xzh656xt",
+      "curiosity_score": 0.6532,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-da6b1628 Now I have the full picture. Let me trace the duplication chain:\n\n1. **`stop.py:237`** calls `update_ep",
+      "degree": 8,
+      "components": {
+        "isolation": 0.986,
+        "bridging": 0.0,
+        "domain_gap": 0.431,
         "survivor": 0.807,
         "binding_gap": 1.0
       }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2503,
+    "nodes": 2754,
     "edges": 20428,
-    "density": 0.003262,
+    "density": 0.002694,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
