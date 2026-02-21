@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-21T16:44:41.586231+00:00",
+  "timestamp": "2026-02-21T16:59:14.180742+00:00",
   "session_id": null,
   "targets": [
     {
@@ -20,7 +20,7 @@
     },
     {
       "id": "7fs3s5h1",
-      "curiosity_score": 0.6367,
+      "curiosity_score": 0.6404,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
       "preview": "Twitter session 2026-02-16: 0 new mentions. Posted milestone tweet about Phase 4 completion (all 14 cognitive neuroscien",
@@ -29,7 +29,7 @@
         "isolation": 1.0,
         "bridging": 0.0,
         "domain_gap": 0.39,
-        "survivor": 0.725,
+        "survivor": 0.75,
         "binding_gap": 1.0
       }
     },
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2754,
+    "nodes": 2755,
     "edges": 20428,
-    "density": 0.002694,
+    "density": 0.002692,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
