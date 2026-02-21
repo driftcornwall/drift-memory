@@ -1,20 +1,20 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-21T00:34:37.274579+00:00",
+  "timestamp": "2026-02-21T00:38:05.910062+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "rf7l525a",
-      "curiosity_score": 0.6602,
+      "id": "cy7pcvjp",
+      "curiosity_score": 0.6628,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "Phase 1 SHIPPED (commit 4ce24b4): Spreading activation in semantic_search.py. Step 11 walks KG edges 1-2 hops from top 3",
-      "degree": 6,
+      "preview": "SESSION 190 KEY INSIGHT: Identity as Boundary. Three threads converged into one framework:\n\n1. ARISTOTELIAN CORRECTION: ",
+      "degree": 9,
       "components": {
-        "isolation": 0.989,
+        "isolation": 0.984,
         "bridging": 0.0,
-        "domain_gap": 0.504,
-        "survivor": 0.75,
+        "domain_gap": 0.788,
+        "survivor": 0.4,
         "binding_gap": 1.0
       }
     },
@@ -34,17 +34,17 @@
       }
     },
     {
-      "id": "cy7pcvjp",
-      "curiosity_score": 0.6591,
+      "id": "rf7l525a",
+      "curiosity_score": 0.6602,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "SESSION 190 KEY INSIGHT: Identity as Boundary. Three threads converged into one framework:\n\n1. ARISTOTELIAN CORRECTION: ",
-      "degree": 9,
+      "preview": "Phase 1 SHIPPED (commit 4ce24b4): Spreading activation in semantic_search.py. Step 11 walks KG edges 1-2 hops from top 3",
+      "degree": 6,
       "components": {
-        "isolation": 0.984,
+        "isolation": 0.989,
         "bridging": 0.0,
-        "domain_gap": 0.788,
-        "survivor": 0.375,
+        "domain_gap": 0.504,
+        "survivor": 0.75,
         "binding_gap": 1.0
       }
     },
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2398,
+    "nodes": 2399,
     "edges": 20428,
-    "density": 0.003554,
+    "density": 0.003551,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
