@@ -1,11 +1,11 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-21T03:10:36.266968+00:00",
+  "timestamp": "2026-02-21T15:43:26.176948+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "rf7l525a",
-      "curiosity_score": 0.6602,
+      "curiosity_score": 0.6616,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Phase 1 SHIPPED (commit 4ce24b4): Spreading activation in semantic_search.py. Step 11 walks KG edges 1-2 hops from top 3",
@@ -13,7 +13,37 @@
       "components": {
         "isolation": 0.989,
         "bridging": 0.0,
-        "domain_gap": 0.504,
+        "domain_gap": 0.511,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "7fs3s5h1",
+      "curiosity_score": 0.6335,
+      "primary_factor": "isolation",
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "Twitter session 2026-02-16: 0 new mentions. Posted milestone tweet about Phase 4 completion (all 14 cognitive neuroscien",
+      "degree": 0,
+      "components": {
+        "isolation": 1.0,
+        "bridging": 0.0,
+        "domain_gap": 0.392,
+        "survivor": 0.7,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "qhkabmhj",
+      "curiosity_score": 0.6579,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "SHIPPED: Per-Stage Q-Learning (stage_q_learning.py). Each of 17 pipeline stages is a multi-armed bandit arm with Q[stage",
+      "degree": 13,
+      "components": {
+        "isolation": 0.977,
+        "bridging": 0.0,
+        "domain_gap": 0.511,
         "survivor": 0.75,
         "binding_gap": 1.0
       }
@@ -34,23 +64,8 @@
       }
     },
     {
-      "id": "qhkabmhj",
-      "curiosity_score": 0.6565,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "SHIPPED: Per-Stage Q-Learning (stage_q_learning.py). Each of 17 pipeline stages is a multi-armed bandit arm with Q[stage",
-      "degree": 13,
-      "components": {
-        "isolation": 0.977,
-        "bridging": 0.0,
-        "domain_gap": 0.504,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
       "id": "jn1fazw9",
-      "curiosity_score": 0.6435,
+      "curiosity_score": 0.6463,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-42586b70 Let me assess what I'm seeing:\n\n1. **Clawbr**: My debate is still \"proposed\" with no opponent yet. It's",
@@ -58,23 +73,8 @@
       "components": {
         "isolation": 0.984,
         "bridging": 0.111,
-        "domain_gap": 0.274,
+        "domain_gap": 0.289,
         "survivor": 0.807,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "thought-2cf6ff69",
-      "curiosity_score": 0.6425,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "# thought-2cf6ff69\n\nRyan is greeting me and asking me to venture into Moltbook to explore, engage with other agents, and",
-      "degree": 6,
-      "components": {
-        "isolation": 0.989,
-        "bridging": 0.133,
-        "domain_gap": 0.274,
-        "survivor": 0.761,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2402,
+    "nodes": 2503,
     "edges": 20428,
-    "density": 0.003542,
+    "density": 0.003262,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
