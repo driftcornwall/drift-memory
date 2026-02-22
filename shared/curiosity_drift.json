@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-22T20:56:59.595449+00:00",
+  "timestamp": "2026-02-22T22:41:58.722718+00:00",
   "session_id": null,
   "targets": [
     {
@@ -13,8 +13,23 @@
       "components": {
         "isolation": 0.986,
         "bridging": 0.0,
-        "domain_gap": 0.451,
+        "domain_gap": 0.45,
         "survivor": 0.8,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "session-167-2026-02-20",
+      "curiosity_score": 0.6225,
+      "primary_factor": "isolation",
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "Session 167 (2026-02-20): Good — drift score 0.0755, \"gentle evolution.\" The Tri-Agent Memory Interop node (`b6sslo7n`) ",
+      "degree": 0,
+      "components": {
+        "isolation": 1.0,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
         "binding_gap": 1.0
       }
     },
@@ -26,7 +41,7 @@
       "preview": "# thought-2cf6ff69\n\nRyan is greeting me and asking me to venture into Moltbook to explore, engage with other agents, and",
       "degree": 6,
       "components": {
-        "isolation": 0.989,
+        "isolation": 0.99,
         "bridging": 0.133,
         "domain_gap": 0.338,
         "survivor": 0.761,
@@ -43,7 +58,7 @@
       "components": {
         "isolation": 0.974,
         "bridging": 0.0,
-        "domain_gap": 0.451,
+        "domain_gap": 0.45,
         "survivor": 0.8,
         "binding_gap": 1.0
       }
@@ -62,21 +77,6 @@
         "survivor": 0.69,
         "binding_gap": 1.0
       }
-    },
-    {
-      "id": "thought-75c986b6",
-      "curiosity_score": 0.6434,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "# thought-75c986b6\n\nRyan is right - I paid $3 for research that I could have gotten for much less given the competition.",
-      "degree": 10,
-      "components": {
-        "isolation": 0.982,
-        "bridging": 0.0,
-        "domain_gap": 0.451,
-        "survivor": 0.724,
-        "binding_gap": 1.0
-      }
     }
   ],
   "active_goals": [
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2886,
-    "edges": 20456,
-    "density": 0.002457,
+    "nodes": 2888,
+    "edges": 20466,
+    "density": 0.002455,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
