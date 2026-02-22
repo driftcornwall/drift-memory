@@ -1,71 +1,41 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-22T00:04:04.022203+00:00",
+  "timestamp": "2026-02-22T00:11:17.789596+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "rf7l525a",
-      "curiosity_score": 0.6656,
+      "id": "lu0pukkr",
+      "curiosity_score": 0.654,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "Phase 1 SHIPPED (commit 4ce24b4): Spreading activation in semantic_search.py. Step 11 walks KG edges 1-2 hops from top 3",
-      "degree": 6,
-      "components": {
-        "isolation": 0.989,
-        "bridging": 0.0,
-        "domain_gap": 0.531,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "7fs3s5h1",
-      "curiosity_score": 0.6404,
-      "primary_factor": "isolation",
-      "reason": "Only 0 edges — disconnected from graph",
-      "preview": "Twitter session 2026-02-16: 0 new mentions. Posted milestone tweet about Phase 4 completion (all 14 cognitive neuroscien",
-      "degree": 0,
-      "components": {
-        "isolation": 1.0,
-        "bridging": 0.0,
-        "domain_gap": 0.39,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "jn1fazw9",
-      "curiosity_score": 0.6533,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-42586b70 Let me assess what I'm seeing:\n\n1. **Clawbr**: My debate is still \"proposed\" with no opponent yet. It's",
-      "degree": 9,
-      "components": {
-        "isolation": 0.984,
-        "bridging": 0.111,
-        "domain_gap": 0.323,
-        "survivor": 0.807,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "xzh656xt",
-      "curiosity_score": 0.6532,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-da6b1628 Now I have the full picture. Let me trace the duplication chain:\n\n1. **`stop.py:237`** calls `update_ep",
+      "preview": "thought-c02a283b Now I see the problem clearly. The drift_runner.py runs `claude -p \"prompt\"` as a **subprocess** each t",
       "degree": 8,
       "components": {
         "isolation": 0.986,
         "bridging": 0.0,
-        "domain_gap": 0.431,
-        "survivor": 0.807,
+        "domain_gap": 0.441,
+        "survivor": 0.8,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "session-167-2026-02-20",
+      "curiosity_score": 0.6225,
+      "primary_factor": "isolation",
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "Session 167 (2026-02-20): Good — drift score 0.0755, \"gentle evolution.\" The Tri-Agent Memory Interop node (`b6sslo7n`) ",
+      "degree": 0,
+      "components": {
+        "isolation": 1.0,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
         "binding_gap": 1.0
       }
     },
     {
       "id": "thought-2cf6ff69",
-      "curiosity_score": 0.6524,
+      "curiosity_score": 0.6538,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "# thought-2cf6ff69\n\nRyan is greeting me and asking me to venture into Moltbook to explore, engage with other agents, and",
@@ -73,8 +43,38 @@
       "components": {
         "isolation": 0.989,
         "bridging": 0.133,
-        "domain_gap": 0.323,
+        "domain_gap": 0.331,
         "survivor": 0.761,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "om3espqu",
+      "curiosity_score": 0.6503,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-80c30765    366→                except Exception as e:\n   367→                    if debug:\n   368→             ",
+      "degree": 15,
+      "components": {
+        "isolation": 0.974,
+        "bridging": 0.0,
+        "domain_gap": 0.441,
+        "survivor": 0.8,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "8qp1icv8",
+      "curiosity_score": 0.6428,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-3deb95cd \n\nGood, I've got 4 exploration agents running in parallel mapping:\n\n1. **Memory storage layer** - memor",
+      "degree": 7,
+      "components": {
+        "isolation": 0.988,
+        "bridging": 0.0,
+        "domain_gap": 0.465,
+        "survivor": 0.69,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2759,
+    "nodes": 2819,
     "edges": 20428,
-    "density": 0.002685,
+    "density": 0.002572,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
