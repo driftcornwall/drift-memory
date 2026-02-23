@@ -1,13 +1,13 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-23T16:10:32.832613+00:00",
+  "timestamp": "2026-02-23T18:32:40.018005+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "cy7pcvjp",
-      "curiosity_score": 0.6763,
+      "curiosity_score": 0.6762,
       "primary_factor": "binding_gap",
-      "reason": "Recalled 11 times but poorly integrated (low Phi)",
+      "reason": "Recalled 12 times but poorly integrated (low Phi)",
       "preview": "SESSION 190 KEY INSIGHT: Identity as Boundary. Three threads converged into one framework:\n\n1. ARISTOTELIAN CORRECTION: ",
       "degree": 15,
       "components": {
@@ -15,6 +15,21 @@
         "bridging": 0.39,
         "domain_gap": 0.78,
         "survivor": 0.0,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "lu0pukkr",
+      "curiosity_score": 0.6575,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-c02a283b Now I see the problem clearly. The drift_runner.py runs `claude -p \"prompt\"` as a **subprocess** each t",
+      "degree": 8,
+      "components": {
+        "isolation": 0.986,
+        "bridging": 0.0,
+        "domain_gap": 0.458,
+        "survivor": 0.8,
         "binding_gap": 1.0
       }
     },
@@ -34,23 +49,8 @@
       }
     },
     {
-      "id": "lu0pukkr",
-      "curiosity_score": 0.6558,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-c02a283b Now I see the problem clearly. The drift_runner.py runs `claude -p \"prompt\"` as a **subprocess** each t",
-      "degree": 8,
-      "components": {
-        "isolation": 0.986,
-        "bridging": 0.0,
-        "domain_gap": 0.45,
-        "survivor": 0.8,
-        "binding_gap": 1.0
-      }
-    },
-    {
       "id": "thought-2cf6ff69",
-      "curiosity_score": 0.6552,
+      "curiosity_score": 0.6564,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "# thought-2cf6ff69\n\nRyan is greeting me and asking me to venture into Moltbook to explore, engage with other agents, and",
@@ -58,14 +58,14 @@
       "components": {
         "isolation": 0.99,
         "bridging": 0.133,
-        "domain_gap": 0.338,
+        "domain_gap": 0.344,
         "survivor": 0.761,
         "binding_gap": 1.0
       }
     },
     {
       "id": "om3espqu",
-      "curiosity_score": 0.6522,
+      "curiosity_score": 0.6538,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-80c30765    366→                except Exception as e:\n   367→                    if debug:\n   368→             ",
@@ -73,7 +73,7 @@
       "components": {
         "isolation": 0.974,
         "bridging": 0.0,
-        "domain_gap": 0.45,
+        "domain_gap": 0.458,
         "survivor": 0.8,
         "binding_gap": 1.0
       }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2931,
+    "nodes": 2982,
     "edges": 20572,
-    "density": 0.002395,
+    "density": 0.002314,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
