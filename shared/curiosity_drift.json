@@ -1,13 +1,13 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-23T16:06:21.569201+00:00",
+  "timestamp": "2026-02-23T16:07:23.849421+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "cy7pcvjp",
       "curiosity_score": 0.6762,
       "primary_factor": "binding_gap",
-      "reason": "Recalled 9 times but poorly integrated (low Phi)",
+      "reason": "Recalled 11 times but poorly integrated (low Phi)",
       "preview": "SESSION 190 KEY INSIGHT: Identity as Boundary. Three threads converged into one framework:\n\n1. ARISTOTELIAN CORRECTION: ",
       "degree": 15,
       "components": {
@@ -65,7 +65,7 @@
     },
     {
       "id": "session-248-2026-02-22",
-      "curiosity_score": 0.6458,
+      "curiosity_score": 0.6496,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Session 248 (2026-02-22): Building — 91/553 crates compiled. This first build will take a few minutes with all the nativ",
@@ -74,7 +74,7 @@
         "isolation": 0.986,
         "bridging": 0.25,
         "domain_gap": 0.3,
-        "survivor": 0.6,
+        "survivor": 0.625,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2923,
+    "nodes": 2924,
     "edges": 20555,
-    "density": 0.002407,
+    "density": 0.002405,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
