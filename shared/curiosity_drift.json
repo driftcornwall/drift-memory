@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-23T21:52:02.282397+00:00",
+  "timestamp": "2026-02-23T22:00:13.581492+00:00",
   "session_id": null,
   "targets": [
     {
@@ -49,6 +49,21 @@
       }
     },
     {
+      "id": "session-158-2026-02-19",
+      "curiosity_score": 0.6225,
+      "primary_factor": "isolation",
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "Session 158 (2026-02-19): Good. Rejection #239. That wraps the autonomous round. Here's the final tally:\n\n---\n\n**Session",
+      "degree": 0,
+      "components": {
+        "isolation": 1.0,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
       "id": "session-248-2026-02-22",
       "curiosity_score": 0.6924,
       "primary_factor": "binding_gap",
@@ -62,21 +77,6 @@
         "survivor": 0.75,
         "binding_gap": 1.0
       }
-    },
-    {
-      "id": "8qp1icv8",
-      "curiosity_score": 0.6478,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-3deb95cd \n\nGood, I've got 4 exploration agents running in parallel mapping:\n\n1. **Memory storage layer** - memor",
-      "degree": 7,
-      "components": {
-        "isolation": 0.988,
-        "bridging": 0.0,
-        "domain_gap": 0.49,
-        "survivor": 0.69,
-        "binding_gap": 1.0
-      }
     }
   ],
   "active_goals": [
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3008,
+    "nodes": 3009,
     "edges": 20582,
-    "density": 0.002275,
+    "density": 0.002274,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
