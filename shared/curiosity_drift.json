@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-23T16:09:12.115139+00:00",
+  "timestamp": "2026-02-23T16:09:37.266152+00:00",
   "session_id": null,
   "targets": [
     {
@@ -15,6 +15,21 @@
         "bridging": 0.39,
         "domain_gap": 0.78,
         "survivor": 0.0,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "session-248-2026-02-22",
+      "curiosity_score": 0.6571,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "Session 248 (2026-02-22): Building — 91/553 crates compiled. This first build will take a few minutes with all the nativ",
+      "degree": 8,
+      "components": {
+        "isolation": 0.986,
+        "bridging": 0.25,
+        "domain_gap": 0.3,
+        "survivor": 0.675,
         "binding_gap": 1.0
       }
     },
@@ -49,21 +64,6 @@
       }
     },
     {
-      "id": "session-248-2026-02-22",
-      "curiosity_score": 0.6533,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "Session 248 (2026-02-22): Building — 91/553 crates compiled. This first build will take a few minutes with all the nativ",
-      "degree": 8,
-      "components": {
-        "isolation": 0.986,
-        "bridging": 0.25,
-        "domain_gap": 0.3,
-        "survivor": 0.65,
-        "binding_gap": 1.0
-      }
-    },
-    {
       "id": "om3espqu",
       "curiosity_score": 0.6521,
       "primary_factor": "binding_gap",
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2928,
+    "nodes": 2929,
     "edges": 20555,
-    "density": 0.002398,
+    "density": 0.002397,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
