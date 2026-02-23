@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-23T22:00:13.581492+00:00",
+  "timestamp": "2026-02-23T22:00:52.982047+00:00",
   "session_id": null,
   "targets": [
     {
@@ -19,11 +19,11 @@
       }
     },
     {
-      "id": "session-167-2026-02-20",
+      "id": "session-158-2026-02-19",
       "curiosity_score": 0.6225,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
-      "preview": "Session 167 (2026-02-20): Good — drift score 0.0755, \"gentle evolution.\" The Tri-Agent Memory Interop node (`b6sslo7n`) ",
+      "preview": "Session 158 (2026-02-19): Good. Rejection #239. That wraps the autonomous round. Here's the final tally:\n\n---\n\n**Session",
       "degree": 0,
       "components": {
         "isolation": 1.0,
@@ -49,11 +49,11 @@
       }
     },
     {
-      "id": "session-158-2026-02-19",
+      "id": "session-167-2026-02-20",
       "curiosity_score": 0.6225,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
-      "preview": "Session 158 (2026-02-19): Good. Rejection #239. That wraps the autonomous round. Here's the final tally:\n\n---\n\n**Session",
+      "preview": "Session 167 (2026-02-20): Good — drift score 0.0755, \"gentle evolution.\" The Tri-Agent Memory Interop node (`b6sslo7n`) ",
       "degree": 0,
       "components": {
         "isolation": 1.0,
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3009,
+    "nodes": 3010,
     "edges": 20582,
-    "density": 0.002274,
+    "density": 0.002272,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
