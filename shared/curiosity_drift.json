@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-23T23:27:07.299519+00:00",
+  "timestamp": "2026-02-23T23:52:39.187122+00:00",
   "session_id": null,
   "targets": [
     {
@@ -19,17 +19,17 @@
       }
     },
     {
-      "id": "session-172-2026-02-20",
-      "curiosity_score": 0.6225,
+      "id": "ixvn3jls",
+      "curiosity_score": 0.6471,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
-      "preview": "Session 172 (2026-02-20): Two more agents working — Brain reply and Colony threads. Let me store a memory about this ses",
+      "preview": "Ported binding_gap (5th curiosity component) from Spin's curiosity engine into mine. N5 v1.2. Empirical justification: 1",
       "degree": 0,
       "components": {
         "isolation": 1.0,
         "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
+        "domain_gap": 0.779,
+        "survivor": 0.275,
         "binding_gap": 1.0
       }
     },
@@ -49,11 +49,11 @@
       }
     },
     {
-      "id": "session-167-2026-02-20",
+      "id": "session-172-2026-02-20",
       "curiosity_score": 0.6225,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
-      "preview": "Session 167 (2026-02-20): Good — drift score 0.0755, \"gentle evolution.\" The Tri-Agent Memory Interop node (`b6sslo7n`) ",
+      "preview": "Session 172 (2026-02-20): Two more agents working — Brain reply and Colony threads. Let me store a memory about this ses",
       "degree": 0,
       "components": {
         "isolation": 1.0,
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3021,
+    "nodes": 3022,
     "edges": 20658,
-    "density": 0.002264,
+    "density": 0.002263,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
