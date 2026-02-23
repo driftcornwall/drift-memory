@@ -1,11 +1,11 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-23T01:18:42.422620+00:00",
+  "timestamp": "2026-02-23T01:19:26.316541+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "cy7pcvjp",
-      "curiosity_score": 0.6583,
+      "curiosity_score": 0.6582,
       "primary_factor": "binding_gap",
       "reason": "Recalled 8 times but poorly integrated (low Phi)",
       "preview": "SESSION 190 KEY INSIGHT: Identity as Boundary. Three threads converged into one framework:\n\n1. ARISTOTELIAN CORRECTION: ",
@@ -13,7 +13,7 @@
       "components": {
         "isolation": 0.977,
         "bridging": 0.295,
-        "domain_gap": 0.781,
+        "domain_gap": 0.78,
         "survivor": 0.0,
         "binding_gap": 1.0
       }
@@ -88,8 +88,8 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2913,
-    "edges": 20520,
+    "nodes": 2915,
+    "edges": 20545,
     "density": 0.002419,
     "sparsity_score": 0.0,
     "degree_distribution": {
