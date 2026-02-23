@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-23T19:23:57.769366+00:00",
+  "timestamp": "2026-02-23T21:04:08.966593+00:00",
   "session_id": null,
   "targets": [
     {
@@ -65,7 +65,7 @@
     },
     {
       "id": "hyb0un19",
-      "curiosity_score": 0.6526,
+      "curiosity_score": 0.6601,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-69f23862 === GITHUB NOTIFICATIONS ===\n\n  [mention] Experiment #2: Design Proposal (driftcornwall/drift-memory)\n\n",
@@ -74,7 +74,7 @@
         "isolation": 0.969,
         "bridging": 0.34,
         "domain_gap": 0.344,
-        "survivor": 0.502,
+        "survivor": 0.552,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 2984,
-    "edges": 20572,
-    "density": 0.002311,
+    "nodes": 2987,
+    "edges": 20582,
+    "density": 0.002308,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
