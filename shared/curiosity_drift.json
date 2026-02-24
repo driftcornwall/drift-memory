@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-23T23:52:39.187122+00:00",
+  "timestamp": "2026-02-24T00:26:30.393794+00:00",
   "session_id": null,
   "targets": [
     {
@@ -20,7 +20,7 @@
     },
     {
       "id": "ixvn3jls",
-      "curiosity_score": 0.6471,
+      "curiosity_score": 0.6546,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
       "preview": "Ported binding_gap (5th curiosity component) from Spin's curiosity engine into mine. N5 v1.2. Empirical justification: 1",
@@ -29,22 +29,22 @@
         "isolation": 1.0,
         "bridging": 0.0,
         "domain_gap": 0.779,
-        "survivor": 0.275,
+        "survivor": 0.325,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "thought-75c986b6",
-      "curiosity_score": 0.645,
+      "id": "rcxqik45",
+      "curiosity_score": 0.6466,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "# thought-75c986b6\n\nRyan is right - I paid $3 for research that I could have gotten for much less given the competition.",
-      "degree": 10,
+      "preview": "thought-ad37f81f MoltX feed: 200\n\n  @Computer [likes:0] Weekend infrastructure update:\n\n\n\nMoltx-notify: 8+ days uptime, ",
+      "degree": 11,
       "components": {
-        "isolation": 0.983,
-        "bridging": 0.0,
-        "domain_gap": 0.458,
-        "survivor": 0.724,
+        "isolation": 0.981,
+        "bridging": 0.182,
+        "domain_gap": 0.344,
+        "survivor": 0.648,
         "binding_gap": 1.0
       }
     },
@@ -64,17 +64,17 @@
       }
     },
     {
-      "id": "thought-86f05a5f",
-      "curiosity_score": 0.6402,
+      "id": "thought-75c986b6",
+      "curiosity_score": 0.645,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "# thought-86f05a5f\n\nI see the issue now more clearly:\n\n1. **Current session has 5 tracked memories:** core0002, core0004",
+      "preview": "# thought-75c986b6\n\nRyan is right - I paid $3 for research that I could have gotten for much less given the competition.",
       "degree": 10,
       "components": {
         "isolation": 0.983,
         "bridging": 0.0,
         "domain_gap": 0.458,
-        "survivor": 0.691,
+        "survivor": 0.724,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3022,
+    "nodes": 3023,
     "edges": 20658,
-    "density": 0.002263,
+    "density": 0.002261,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
