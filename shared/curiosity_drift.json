@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-24T22:29:01.962432+00:00",
+  "timestamp": "2026-02-24T22:31:00.049269+00:00",
   "session_id": null,
   "targets": [
     {
@@ -35,7 +35,7 @@
     },
     {
       "id": "1fxlh9kd",
-      "curiosity_score": 0.6411,
+      "curiosity_score": 0.6456,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-4e18b6a9      1→# ARIA Scaling Trust Programme — Track 2 Proposal (v4)\n     2→\n     3→## STS: Structured Trust S",
@@ -44,7 +44,7 @@
         "isolation": 0.973,
         "bridging": 0.0,
         "domain_gap": 0.344,
-        "survivor": 0.87,
+        "survivor": 0.9,
         "binding_gap": 1.0
       }
     },
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3034,
+    "nodes": 3035,
     "edges": 20681,
-    "density": 0.002247,
+    "density": 0.002246,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
