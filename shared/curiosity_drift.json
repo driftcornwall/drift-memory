@@ -1,11 +1,11 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-24T18:48:16.564926+00:00",
+  "timestamp": "2026-02-24T20:20:11.745920+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "ixvn3jls",
-      "curiosity_score": 0.6732,
+      "curiosity_score": 0.7107,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Ported binding_gap (5th curiosity component) from Spin's curiosity engine into mine. N5 v1.2. Empirical justification: 1",
@@ -14,7 +14,7 @@
         "isolation": 0.974,
         "bridging": 0.0,
         "domain_gap": 0.779,
-        "survivor": 0.5,
+        "survivor": 0.75,
         "binding_gap": 1.0
       }
     },
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3028,
+    "nodes": 3033,
     "edges": 20681,
-    "density": 0.002256,
+    "density": 0.002249,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
