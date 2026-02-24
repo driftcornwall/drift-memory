@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-24T20:20:11.745920+00:00",
+  "timestamp": "2026-02-24T22:29:01.962432+00:00",
   "session_id": null,
   "targets": [
     {
@@ -34,6 +34,21 @@
       }
     },
     {
+      "id": "1fxlh9kd",
+      "curiosity_score": 0.6411,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-4e18b6a9      1→# ARIA Scaling Trust Programme — Track 2 Proposal (v4)\n     2→\n     3→## STS: Structured Trust S",
+      "degree": 16,
+      "components": {
+        "isolation": 0.973,
+        "bridging": 0.0,
+        "domain_gap": 0.344,
+        "survivor": 0.87,
+        "binding_gap": 1.0
+      }
+    },
+    {
       "id": "thought-86f05a5f",
       "curiosity_score": 0.6402,
       "primary_factor": "binding_gap",
@@ -62,21 +77,6 @@
         "survivor": 0.81,
         "binding_gap": 1.0
       }
-    },
-    {
-      "id": "7fs3s5h1",
-      "curiosity_score": 0.6333,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "Twitter session 2026-02-16: 0 new mentions. Posted milestone tweet about Phase 4 completion (all 14 cognitive neuroscien",
-      "degree": 14,
-      "components": {
-        "isolation": 0.976,
-        "bridging": 0.0,
-        "domain_gap": 0.39,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
     }
   ],
   "active_goals": [
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3033,
+    "nodes": 3034,
     "edges": 20681,
-    "density": 0.002249,
+    "density": 0.002247,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
