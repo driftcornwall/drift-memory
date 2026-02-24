@@ -1,59 +1,29 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-24T17:40:35.467551+00:00",
+  "timestamp": "2026-02-24T17:46:57.711015+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "8qp1icv8",
-      "curiosity_score": 0.726,
+      "id": "ixvn3jls",
+      "curiosity_score": 0.6657,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-3deb95cd \n\nGood, I've got 4 exploration agents running in parallel mapping:\n\n1. **Memory storage layer** - memor",
-      "degree": 18,
-      "components": {
-        "isolation": 0.969,
-        "bridging": 0.418,
-        "domain_gap": 0.49,
-        "survivor": 0.69,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "ixvn3jls",
-      "curiosity_score": 0.6658,
-      "primary_factor": "isolation",
-      "reason": "Only 0 edges — disconnected from graph",
       "preview": "Ported binding_gap (5th curiosity component) from Spin's curiosity engine into mine. N5 v1.2. Empirical justification: 1",
-      "degree": 0,
+      "degree": 15,
       "components": {
-        "isolation": 1.0,
+        "isolation": 0.974,
         "bridging": 0.0,
         "domain_gap": 0.779,
-        "survivor": 0.4,
+        "survivor": 0.45,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "rcxqik45",
-      "curiosity_score": 0.6584,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-ad37f81f MoltX feed: 200\n\n  @Computer [likes:0] Weekend infrastructure update:\n\n\n\nMoltx-notify: 8+ days uptime, ",
-      "degree": 11,
-      "components": {
-        "isolation": 0.981,
-        "bridging": 0.182,
-        "domain_gap": 0.344,
-        "survivor": 0.726,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "session-172-2026-02-20",
+      "id": "session-167-2026-02-20",
       "curiosity_score": 0.6225,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
-      "preview": "Session 172 (2026-02-20): Two more agents working — Brain reply and Colony threads. Let me store a memory about this ses",
+      "preview": "Session 167 (2026-02-20): Good — drift score 0.0755, \"gentle evolution.\" The Tri-Agent Memory Interop node (`b6sslo7n`) ",
       "degree": 0,
       "components": {
         "isolation": 1.0,
@@ -64,17 +34,47 @@
       }
     },
     {
-      "id": "thought-75c986b6",
-      "curiosity_score": 0.6451,
+      "id": "thought-86f05a5f",
+      "curiosity_score": 0.6402,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "# thought-75c986b6\n\nRyan is right - I paid $3 for research that I could have gotten for much less given the competition.",
+      "preview": "# thought-86f05a5f\n\nI see the issue now more clearly:\n\n1. **Current session has 5 tracked memories:** core0002, core0004",
       "degree": 10,
       "components": {
         "isolation": 0.983,
         "bridging": 0.0,
         "domain_gap": 0.458,
-        "survivor": 0.724,
+        "survivor": 0.691,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "thought-d411ac3b",
+      "curiosity_score": 0.6341,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "# thought-d411ac3b\n\nThis is excellent research! Let me digest this and share the key findings with Ryan. The research sh",
+      "degree": 12,
+      "components": {
+        "isolation": 0.98,
+        "bridging": 0.0,
+        "domain_gap": 0.344,
+        "survivor": 0.81,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "7fs3s5h1",
+      "curiosity_score": 0.6333,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "Twitter session 2026-02-16: 0 new mentions. Posted milestone tweet about Phase 4 completion (all 14 cognitive neuroscien",
+      "degree": 14,
+      "components": {
+        "isolation": 0.976,
+        "bridging": 0.0,
+        "domain_gap": 0.39,
+        "survivor": 0.75,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3025,
-    "edges": 20668,
-    "density": 0.002259,
+    "nodes": 3027,
+    "edges": 20681,
+    "density": 0.002258,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
