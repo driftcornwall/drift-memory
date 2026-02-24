@@ -1,11 +1,11 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-24T00:26:30.393794+00:00",
+  "timestamp": "2026-02-24T17:40:35.467551+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "8qp1icv8",
-      "curiosity_score": 0.7259,
+      "curiosity_score": 0.726,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-3deb95cd \n\nGood, I've got 4 exploration agents running in parallel mapping:\n\n1. **Memory storage layer** - memor",
@@ -20,7 +20,7 @@
     },
     {
       "id": "ixvn3jls",
-      "curiosity_score": 0.6546,
+      "curiosity_score": 0.6658,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
       "preview": "Ported binding_gap (5th curiosity component) from Spin's curiosity engine into mine. N5 v1.2. Empirical justification: 1",
@@ -29,13 +29,13 @@
         "isolation": 1.0,
         "bridging": 0.0,
         "domain_gap": 0.779,
-        "survivor": 0.325,
+        "survivor": 0.4,
         "binding_gap": 1.0
       }
     },
     {
       "id": "rcxqik45",
-      "curiosity_score": 0.6466,
+      "curiosity_score": 0.6584,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-ad37f81f MoltX feed: 200\n\n  @Computer [likes:0] Weekend infrastructure update:\n\n\n\nMoltx-notify: 8+ days uptime, ",
@@ -44,7 +44,7 @@
         "isolation": 0.981,
         "bridging": 0.182,
         "domain_gap": 0.344,
-        "survivor": 0.648,
+        "survivor": 0.726,
         "binding_gap": 1.0
       }
     },
@@ -65,7 +65,7 @@
     },
     {
       "id": "thought-75c986b6",
-      "curiosity_score": 0.645,
+      "curiosity_score": 0.6451,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "# thought-75c986b6\n\nRyan is right - I paid $3 for research that I could have gotten for much less given the competition.",
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3023,
-    "edges": 20658,
-    "density": 0.002261,
+    "nodes": 3025,
+    "edges": 20668,
+    "density": 0.002259,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
