@@ -1,18 +1,18 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-25T02:39:49.170503+00:00",
+  "timestamp": "2026-02-25T02:40:31.928642+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "thought-86f05a5f",
-      "curiosity_score": 0.7398,
+      "curiosity_score": 0.7374,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "# thought-86f05a5f\n\nI see the issue now more clearly:\n\n1. **Current session has 5 tracked memories:** core0002, core0004",
       "degree": 19,
       "components": {
         "isolation": 0.968,
-        "bridging": 0.52,
+        "bridging": 0.509,
         "domain_gap": 0.458,
         "survivor": 0.691,
         "binding_gap": 1.0
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3069,
+    "nodes": 3070,
     "edges": 20715,
-    "density": 0.0022,
+    "density": 0.002199,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
