@@ -1,48 +1,48 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-25T02:25:22.849529+00:00",
+  "timestamp": "2026-02-25T02:27:21.067783+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "thought-86f05a5f",
-      "curiosity_score": 0.7155,
+      "curiosity_score": 0.7398,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "# thought-86f05a5f\n\nI see the issue now more clearly:\n\n1. **Current session has 5 tracked memories:** core0002, core0004",
-      "degree": 16,
+      "degree": 19,
       "components": {
-        "isolation": 0.973,
-        "bridging": 0.392,
+        "isolation": 0.968,
+        "bridging": 0.52,
         "domain_gap": 0.458,
         "survivor": 0.691,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "thought-d411ac3b",
-      "curiosity_score": 0.6991,
+      "id": "ywtvn715",
+      "curiosity_score": 0.7192,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "# thought-d411ac3b\n\nThis is excellent research! Let me digest this and share the key findings with Ryan. The research sh",
-      "degree": 18,
+      "preview": "thought-4dc709e1 Interesting results. The mnemonic_phrase pattern has a lot of false positives - it's catching any seque",
+      "degree": 10,
       "components": {
-        "isolation": 0.97,
-        "bridging": 0.34,
+        "isolation": 0.983,
+        "bridging": 0.444,
         "domain_gap": 0.344,
-        "survivor": 0.81,
+        "survivor": 0.778,
         "binding_gap": 1.0
       }
     },
     {
       "id": "7fs3s5h1",
-      "curiosity_score": 0.6333,
+      "curiosity_score": 0.7019,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Twitter session 2026-02-16: 0 new mentions. Posted milestone tweet about Phase 4 completion (all 14 cognitive neuroscien",
-      "degree": 14,
+      "degree": 18,
       "components": {
-        "isolation": 0.976,
-        "bridging": 0.0,
+        "isolation": 0.97,
+        "bridging": 0.353,
         "domain_gap": 0.39,
         "survivor": 0.75,
         "binding_gap": 1.0
@@ -50,31 +50,31 @@
     },
     {
       "id": "qxfu8q5p",
-      "curiosity_score": 0.633,
+      "curiosity_score": 0.6903,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-51a0a3bb I see the issue now. Looking at line 255:\n\n```python\nmem_id = f\"thought-{mem['hash']}\"\n```\n\nThe memory ",
-      "degree": 9,
+      "degree": 13,
       "components": {
-        "isolation": 0.985,
-        "bridging": 0.139,
+        "isolation": 0.978,
+        "bridging": 0.436,
         "domain_gap": 0.3,
         "survivor": 0.665,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "ywtvn715",
-      "curiosity_score": 0.6323,
+      "id": "wncrrgqv",
+      "curiosity_score": 0.6396,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-4dc709e1 Interesting results. The mnemonic_phrase pattern has a lot of false positives - it's catching any seque",
-      "degree": 6,
+      "preview": "thought-2e851aef      1→#!/usr/bin/env -S uv run --script\n     2→# /// script\n     3→# requires-python = \">=3.11\"\n     4",
+      "degree": 19,
       "components": {
-        "isolation": 0.99,
+        "isolation": 0.968,
         "bridging": 0.0,
         "domain_gap": 0.344,
-        "survivor": 0.778,
+        "survivor": 0.87,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3063,
+    "nodes": 3064,
     "edges": 20715,
-    "density": 0.002209,
+    "density": 0.002207,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
