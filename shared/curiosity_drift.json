@@ -1,11 +1,11 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-25T19:29:43.441685+00:00",
+  "timestamp": "2026-02-25T21:03:54.880736+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "thought-86f05a5f",
-      "curiosity_score": 0.7374,
+      "curiosity_score": 0.7377,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "# thought-86f05a5f\n\nI see the issue now more clearly:\n\n1. **Current session has 5 tracked memories:** core0002, core0004",
@@ -13,14 +13,14 @@
       "components": {
         "isolation": 0.968,
         "bridging": 0.509,
-        "domain_gap": 0.458,
+        "domain_gap": 0.459,
         "survivor": 0.691,
         "binding_gap": 1.0
       }
     },
     {
       "id": "ywtvn715",
-      "curiosity_score": 0.7192,
+      "curiosity_score": 0.7194,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-4dc709e1 Interesting results. The mnemonic_phrase pattern has a lot of false positives - it's catching any seque",
@@ -28,14 +28,14 @@
       "components": {
         "isolation": 0.983,
         "bridging": 0.444,
-        "domain_gap": 0.343,
+        "domain_gap": 0.345,
         "survivor": 0.778,
         "binding_gap": 1.0
       }
     },
     {
       "id": "7fs3s5h1",
-      "curiosity_score": 0.7016,
+      "curiosity_score": 0.7013,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Twitter session 2026-02-16: 0 new mentions. Posted milestone tweet about Phase 4 completion (all 14 cognitive neuroscien",
@@ -43,7 +43,7 @@
       "components": {
         "isolation": 0.97,
         "bridging": 0.353,
-        "domain_gap": 0.388,
+        "domain_gap": 0.386,
         "survivor": 0.75,
         "binding_gap": 1.0
       }
@@ -65,7 +65,7 @@
     },
     {
       "id": "wncrrgqv",
-      "curiosity_score": 0.6396,
+      "curiosity_score": 0.6399,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-2e851aef      1→#!/usr/bin/env -S uv run --script\n     2→# /// script\n     3→# requires-python = \">=3.11\"\n     4",
@@ -73,7 +73,7 @@
       "components": {
         "isolation": 0.968,
         "bridging": 0.0,
-        "domain_gap": 0.343,
+        "domain_gap": 0.345,
         "survivor": 0.87,
         "binding_gap": 1.0
       }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3095,
-    "edges": 20850,
-    "density": 0.002177,
+    "nodes": 3105,
+    "edges": 20886,
+    "density": 0.002167,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
