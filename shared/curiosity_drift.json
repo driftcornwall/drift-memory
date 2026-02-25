@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-25T02:16:30.088395+00:00",
+  "timestamp": "2026-02-25T02:21:10.312946+00:00",
   "session_id": null,
   "targets": [
     {
@@ -20,13 +20,13 @@
     },
     {
       "id": "thought-d411ac3b",
-      "curiosity_score": 0.699,
+      "curiosity_score": 0.6991,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "# thought-d411ac3b\n\nThis is excellent research! Let me digest this and share the key findings with Ryan. The research sh",
       "degree": 18,
       "components": {
-        "isolation": 0.969,
+        "isolation": 0.97,
         "bridging": 0.34,
         "domain_gap": 0.344,
         "survivor": 0.81,
@@ -50,7 +50,7 @@
     },
     {
       "id": "qxfu8q5p",
-      "curiosity_score": 0.6329,
+      "curiosity_score": 0.633,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-51a0a3bb I see the issue now. Looking at line 255:\n\n```python\nmem_id = f\"thought-{mem['hash']}\"\n```\n\nThe memory ",
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3061,
+    "nodes": 3062,
     "edges": 20715,
-    "density": 0.002212,
+    "density": 0.00221,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
