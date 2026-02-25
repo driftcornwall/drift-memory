@@ -1,80 +1,80 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-25T21:07:43.634845+00:00",
+  "timestamp": "2026-02-25T21:14:04.903081+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "thought-86f05a5f",
-      "curiosity_score": 0.7377,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "# thought-86f05a5f\n\nI see the issue now more clearly:\n\n1. **Current session has 5 tracked memories:** core0002, core0004",
-      "degree": 19,
-      "components": {
-        "isolation": 0.968,
-        "bridging": 0.509,
-        "domain_gap": 0.459,
-        "survivor": 0.691,
-        "binding_gap": 1.0
-      }
-    },
-    {
       "id": "ywtvn715",
-      "curiosity_score": 0.7194,
+      "curiosity_score": 0.7136,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-4dc709e1 Interesting results. The mnemonic_phrase pattern has a lot of false positives - it's catching any seque",
-      "degree": 10,
+      "degree": 13,
       "components": {
-        "isolation": 0.983,
-        "bridging": 0.444,
+        "isolation": 0.978,
+        "bridging": 0.423,
         "domain_gap": 0.345,
         "survivor": 0.778,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "7fs3s5h1",
-      "curiosity_score": 0.7013,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "Twitter session 2026-02-16: 0 new mentions. Posted milestone tweet about Phase 4 completion (all 14 cognitive neuroscien",
-      "degree": 18,
-      "components": {
-        "isolation": 0.97,
-        "bridging": 0.353,
-        "domain_gap": 0.386,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
       "id": "qxfu8q5p",
-      "curiosity_score": 0.6904,
+      "curiosity_score": 0.6934,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-51a0a3bb I see the issue now. Looking at line 255:\n\n```python\nmem_id = f\"thought-{mem['hash']}\"\n```\n\nThe memory ",
-      "degree": 13,
+      "degree": 16,
       "components": {
-        "isolation": 0.978,
-        "bridging": 0.436,
+        "isolation": 0.973,
+        "bridging": 0.458,
         "domain_gap": 0.3,
         "survivor": 0.665,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "wncrrgqv",
-      "curiosity_score": 0.6399,
+      "id": "6rv7taeh",
+      "curiosity_score": 0.6321,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-2e851aef      1→#!/usr/bin/env -S uv run --script\n     2→# /// script\n     3→# requires-python = \">=3.11\"\n     4",
-      "degree": 19,
+      "preview": "thought-9593e543 The like didn't print status, which means it probably didn't find the exact post ID. But the trending r",
+      "degree": 18,
       "components": {
-        "isolation": 0.968,
+        "isolation": 0.97,
         "bridging": 0.0,
         "domain_gap": 0.345,
-        "survivor": 0.87,
+        "survivor": 0.815,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "w0luke9t",
+      "curiosity_score": 0.6319,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-7a091226      1→#!/usr/bin/env python3\n     2→\"\"\"\n     3→Lesson Extractor -- From memory to learning.\n     4→\n  ",
+      "degree": 14,
+      "components": {
+        "isolation": 0.977,
+        "bridging": 0.0,
+        "domain_gap": 0.345,
+        "survivor": 0.8,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "r9lwki41",
+      "curiosity_score": 0.6314,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-0c390132      1→#!/usr/bin/env -S uv run --script\n     2→# /// script\n     3→# requires-python = \">=3.11\"\n     4",
+      "degree": 15,
+      "components": {
+        "isolation": 0.975,
+        "bridging": 0.0,
+        "domain_gap": 0.345,
+        "survivor": 0.8,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3106,
+    "nodes": 3107,
     "edges": 20886,
-    "density": 0.002166,
+    "density": 0.002164,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
