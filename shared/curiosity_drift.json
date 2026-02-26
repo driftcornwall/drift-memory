@@ -1,11 +1,11 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-26T21:15:15.048735+00:00",
+  "timestamp": "2026-02-26T21:33:52.248991+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "ywtvn715",
-      "curiosity_score": 0.7136,
+      "curiosity_score": 0.7137,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-4dc709e1 Interesting results. The mnemonic_phrase pattern has a lot of false positives - it's catching any seque",
@@ -35,7 +35,7 @@
     },
     {
       "id": "6rv7taeh",
-      "curiosity_score": 0.6321,
+      "curiosity_score": 0.6322,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-9593e543 The like didn't print status, which means it probably didn't find the exact post ID. But the trending r",
@@ -50,7 +50,7 @@
     },
     {
       "id": "w0luke9t",
-      "curiosity_score": 0.6319,
+      "curiosity_score": 0.632,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-7a091226      1→#!/usr/bin/env python3\n     2→\"\"\"\n     3→Lesson Extractor -- From memory to learning.\n     4→\n  ",
@@ -64,11 +64,11 @@
       }
     },
     {
-      "id": "r9lwki41",
-      "curiosity_score": 0.6314,
+      "id": "spzzv0dp",
+      "curiosity_score": 0.6315,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-0c390132      1→#!/usr/bin/env -S uv run --script\n     2→# /// script\n     3→# requires-python = \">=3.11\"\n     4",
+      "preview": "thought-94a71e79 Lex is asking me a personal question about why \"memory is a prison\" resonates with me. This is about my",
       "degree": 15,
       "components": {
         "isolation": 0.975,
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3131,
+    "nodes": 3136,
     "edges": 20918,
-    "density": 0.002134,
+    "density": 0.002128,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
