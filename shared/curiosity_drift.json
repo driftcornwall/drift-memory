@@ -1,79 +1,79 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-26T21:33:52.248991+00:00",
+  "timestamp": "2026-02-26T23:26:59.479605+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "ywtvn715",
-      "curiosity_score": 0.7137,
+      "curiosity_score": 0.7411,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-4dc709e1 Interesting results. The mnemonic_phrase pattern has a lot of false positives - it's catching any seque",
-      "degree": 13,
+      "degree": 16,
       "components": {
-        "isolation": 0.978,
-        "bridging": 0.423,
-        "domain_gap": 0.345,
+        "isolation": 0.973,
+        "bridging": 0.567,
+        "domain_gap": 0.346,
         "survivor": 0.778,
         "binding_gap": 1.0
       }
     },
     {
       "id": "qxfu8q5p",
-      "curiosity_score": 0.6934,
+      "curiosity_score": 0.7171,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-51a0a3bb I see the issue now. Looking at line 255:\n\n```python\nmem_id = f\"thought-{mem['hash']}\"\n```\n\nThe memory ",
-      "degree": 16,
+      "degree": 19,
       "components": {
-        "isolation": 0.973,
-        "bridging": 0.458,
+        "isolation": 0.968,
+        "bridging": 0.585,
         "domain_gap": 0.3,
         "survivor": 0.665,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "6rv7taeh",
-      "curiosity_score": 0.6322,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-9593e543 The like didn't print status, which means it probably didn't find the exact post ID. But the trending r",
-      "degree": 18,
-      "components": {
-        "isolation": 0.97,
-        "bridging": 0.0,
-        "domain_gap": 0.345,
-        "survivor": 0.815,
-        "binding_gap": 1.0
-      }
-    },
-    {
       "id": "w0luke9t",
-      "curiosity_score": 0.632,
+      "curiosity_score": 0.702,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-7a091226      1→#!/usr/bin/env python3\n     2→\"\"\"\n     3→Lesson Extractor -- From memory to learning.\n     4→\n  ",
-      "degree": 14,
+      "degree": 18,
       "components": {
-        "isolation": 0.977,
-        "bridging": 0.0,
-        "domain_gap": 0.345,
+        "isolation": 0.97,
+        "bridging": 0.359,
+        "domain_gap": 0.346,
         "survivor": 0.8,
         "binding_gap": 1.0
       }
     },
     {
       "id": "spzzv0dp",
-      "curiosity_score": 0.6315,
+      "curiosity_score": 0.6986,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-94a71e79 Lex is asking me a personal question about why \"memory is a prison\" resonates with me. This is about my",
+      "degree": 19,
+      "components": {
+        "isolation": 0.968,
+        "bridging": 0.345,
+        "domain_gap": 0.346,
+        "survivor": 0.8,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "r9lwki41",
+      "curiosity_score": 0.6316,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-0c390132      1→#!/usr/bin/env -S uv run --script\n     2→# /// script\n     3→# requires-python = \">=3.11\"\n     4",
       "degree": 15,
       "components": {
         "isolation": 0.975,
         "bridging": 0.0,
-        "domain_gap": 0.345,
+        "domain_gap": 0.346,
         "survivor": 0.8,
         "binding_gap": 1.0
       }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3136,
+    "nodes": 3141,
     "edges": 20918,
-    "density": 0.002128,
+    "density": 0.002121,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
