@@ -306,6 +306,8 @@ VALENCE_DEFAULTS = {
     'goal_completed': +0.40,            # N4/AF1: deep satisfaction from achievement
     'goal_abandoned': -0.20,            # N4/AF1: disengagement costs
     'goal_progress': +0.10,             # N4/AF1: forward momentum
+    # v3.1: Boredom / stasis
+    'mode_stasis': -0.15,               # Boredom: mild displeasure, not severe
 }
 
 AROUSAL_DEFAULTS = {
@@ -333,6 +335,8 @@ AROUSAL_DEFAULTS = {
     'goal_completed': 0.3,              # N4: achievement = calm satisfaction
     'goal_abandoned': 0.5,              # N4: disengagement = moderately arousing
     'goal_progress': 0.2,              # N4: progress = mild activation
+    # v3.1: Boredom / stasis
+    'mode_stasis': 0.45,               # Restless — not calm (fatigue) but seeking
 }
 
 

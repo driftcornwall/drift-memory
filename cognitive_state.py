@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Cognitive State Tracker v3.0 — Coupled Neural Population Dynamics (T4.4).
+Cognitive State Tracker v3.1 — Coupled Neural Dynamics + Boredom Detection.
 
 Tracks Drift's cognitive state during a session across 5 dimensions:
 - Curiosity:    hunger for new information (exploration drive)
@@ -23,17 +23,28 @@ Named ATTRACTORS detect prototypical states:
   - Fatigue: everything dampened
   - Mastery: high confidence + satisfaction + focus
 
+v3.1: BOREDOM / STASIS DETECTION
+  When the system stays near the same attractor for too long (>15 events)
+  with declining satisfaction, a 'mode_stasis' event fires automatically.
+  This pushes toward exploration — not fatigue (everything dampened) but
+  restless seeking (I need something different). Intensity scales with
+  residence duration. Cooldown prevents rapid re-triggering.
+
+  Biological basis: Berlyne (1960) — boredom as arousal deficit triggering
+  diversive exploration. Kurzban et al. (2013) — opportunity cost signal.
+
 Coupling weights are learnable from observed dimension co-changes.
 
 DB-ONLY: State persists to PostgreSQL KV store.
 
 Usage:
-    python cognitive_state.py state          # Show current state + attractor
+    python cognitive_state.py state          # Show current state + attractor + stasis
     python cognitive_state.py uncertainty    # Detailed distribution view
     python cognitive_state.py attractors     # Attractor landscape distances
     python cognitive_state.py coupling       # Show coupling matrix
     python cognitive_state.py history        # State changes this session
     python cognitive_state.py trend          # Cross-session trends
+    python cognitive_state.py stasis         # Show boredom/stasis tracking detail
     python cognitive_state.py reset          # Reset to neutral
     python cognitive_state.py simulate       # Run event simulation (with coupling)
 """
@@ -46,6 +57,22 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from db_adapter import get_db
+
+# --- Boredom / Stasis Detection (v3.1) ---
+# When the system stays near the same cognitive attractor for too long
+# with declining satisfaction, inject a "mode_stasis" event that pushes
+# toward exploration. This is the functional equivalent of boredom:
+# not fatigue (everything dampened) but restless seeking (I need something different).
+#
+# Biological basis: Berlyne (1960) — boredom as arousal deficit triggering
+# diversive exploration. Csikszentmihalyi (1990) — flow requires matching
+# challenge to skill; stasis = challenge too low for too long.
+# Kurzban et al. (2013) — boredom as opportunity cost signal.
+
+STASIS_THRESHOLD = 15       # Events near same attractor before stasis triggers
+STASIS_SAT_WINDOW = 8       # Events to check satisfaction decline
+STASIS_COOLDOWN = 12        # Events after stasis trigger before it can fire again
+STASIS_INTENSITY_SCALE = 0.5  # How much residence duration amplifies the effect
 
 # --- Configuration ---
 
@@ -91,6 +118,7 @@ KV_COGNITIVE_STATE = '.cognitive_state'
 KV_COGNITIVE_HISTORY = '.cognitive_history'
 KV_COGNITIVE_SESSIONS = '.cognitive_sessions'
 KV_COUPLING_WEIGHTS = '.cognitive_coupling_weights'
+KV_STASIS_STATE = '.cognitive_stasis'
 
 # --- T4.4: Neural Population Dynamics ---
 # Coupling matrix: how dimension changes propagate to other dimensions.
@@ -312,6 +340,14 @@ EVENT_DELTAS = {
         'focus': +0.08,          # Momentum sharpens focus
         'arousal': +0.02,        # Mild activation
         'satisfaction': +0.08,   # Progress feels good
+    },
+    # v3.1: Boredom / stasis detection
+    'mode_stasis': {
+        'curiosity': +0.15,      # Boredom drives exploration
+        'confidence': -0.05,     # Current approach isn't stimulating
+        'focus': -0.10,          # Attention wants to wander
+        'arousal': +0.08,        # Restless energy (NOT fatigue)
+        'satisfaction': -0.08,   # Diminishing returns from current activity
     },
 }
 
@@ -561,13 +597,23 @@ class CognitiveState:
 
     Backward compatible: .curiosity, .confidence etc. return float means.
     New: .get_dist(dim) returns full DimensionDist with uncertainty info.
+    v3.1: Stasis/boredom detection via attractor residence tracking.
     """
 
     def __init__(self, distributions: dict = None, timestamp: str = "",
-                 event_count: int = 0):
+                 event_count: int = 0, stasis: dict = None):
         self._dists = distributions or _default_distributions()
         self.timestamp = timestamp or datetime.now(timezone.utc).isoformat()
         self.event_count = event_count
+        # v3.1: Stasis tracking
+        self._stasis = stasis or {
+            'current_attractor': None,      # Which attractor we're near
+            'residence_count': 0,           # How long we've been near it
+            'cooldown': 0,                  # Events until stasis can trigger again
+            'satisfaction_history': [],     # Recent satisfaction means for slope
+            'total_triggers': 0,           # Lifetime stasis trigger count
+            'last_trigger_event': 0,       # Event count when last triggered
+        }
 
     # --- Backward-compatible float properties ---
 
@@ -652,6 +698,79 @@ class CognitiveState:
         state_vec = {dim: getattr(self, dim) for dim in DIMENSIONS}
         return _detect_attractor(state_vec)
 
+    # --- v3.1: Stasis / Boredom Detection ---
+
+    def update_stasis(self) -> Optional[str]:
+        """Track attractor residence and detect boredom/stasis.
+
+        Called after each event. Returns 'mode_stasis' if boredom triggered,
+        None otherwise.
+
+        The logic:
+        1. Detect current attractor
+        2. If same as previous, increment residence counter
+        3. Track satisfaction slope over recent window
+        4. If residence > threshold AND satisfaction declining AND cooldown == 0:
+           -> trigger mode_stasis
+        5. Scale intensity with residence duration (longer = stronger push)
+        """
+        # Decrement cooldown
+        if self._stasis['cooldown'] > 0:
+            self._stasis['cooldown'] -= 1
+
+        # Detect current attractor
+        attractor = self.nearest_attractor()
+        current_name = attractor[0] if attractor else None
+
+        # Track satisfaction
+        self._stasis['satisfaction_history'].append(self.satisfaction)
+        self._stasis['satisfaction_history'] = self._stasis['satisfaction_history'][-STASIS_SAT_WINDOW:]
+
+        # Update residence
+        if current_name == self._stasis['current_attractor'] and current_name is not None:
+            self._stasis['residence_count'] += 1
+        else:
+            self._stasis['current_attractor'] = current_name
+            self._stasis['residence_count'] = 1
+
+        # Check trigger conditions
+        if (self._stasis['residence_count'] >= STASIS_THRESHOLD
+                and self._stasis['cooldown'] == 0
+                and self._is_satisfaction_declining()):
+            # Trigger boredom
+            self._stasis['cooldown'] = STASIS_COOLDOWN
+            self._stasis['total_triggers'] += 1
+            self._stasis['last_trigger_event'] = self.event_count
+            return 'mode_stasis'
+
+        return None
+
+    def _is_satisfaction_declining(self) -> bool:
+        """Check if satisfaction is trending downward over recent events."""
+        history = self._stasis['satisfaction_history']
+        if len(history) < 3:
+            return False
+
+        # Simple linear slope: compare first half mean to second half mean
+        mid = len(history) // 2
+        first_half = sum(history[:mid]) / mid
+        second_half = sum(history[mid:]) / len(history[mid:])
+
+        # Declining = second half is lower than first half by at least 0.01
+        return second_half < first_half - 0.01
+
+    @property
+    def stasis_info(self) -> dict:
+        """Get stasis tracking info for display."""
+        return {
+            'current_attractor': self._stasis['current_attractor'],
+            'residence_count': self._stasis['residence_count'],
+            'cooldown': self._stasis['cooldown'],
+            'total_triggers': self._stasis['total_triggers'],
+            'satisfaction_declining': self._is_satisfaction_declining(),
+            'at_threshold': self._stasis['residence_count'] >= STASIS_THRESHOLD,
+        }
+
     def attractor_distances(self) -> dict:
         """Distance to all named attractors."""
         state_vec = {dim: getattr(self, dim) for dim in DIMENSIONS}
@@ -699,6 +818,8 @@ class CognitiveState:
             # v3.0 (T4.4): attractor state
             'attractor': attractor_info,
             'attractor_distances': self.attractor_distances(),
+            # v3.1: stasis/boredom tracking
+            'stasis': self._stasis,
         }
 
     @classmethod
@@ -724,6 +845,7 @@ class CognitiveState:
             distributions=dists,
             timestamp=d.get('timestamp', ''),
             event_count=d.get('event_count', 0),
+            stasis=d.get('stasis'),
         )
 
 
@@ -826,6 +948,40 @@ def process_event(event_type: str, metadata: dict = None) -> CognitiveState:
 
     # Persist
     save_state()
+
+    # v3.1: Stasis / boredom detection
+    # After processing the event, check if we've been in the same attractor
+    # for too long with declining satisfaction. If so, inject mode_stasis.
+    if event_type != 'mode_stasis':  # Prevent recursive trigger
+        stasis_trigger = state.update_stasis()
+        if stasis_trigger:
+            # Apply stasis deltas directly (don't recurse through process_event)
+            stasis_deltas = EVENT_DELTAS.get('mode_stasis', {})
+            # Scale intensity with residence duration (longer stasis = stronger push)
+            duration_factor = 1.0 + STASIS_INTENSITY_SCALE * (
+                (state._stasis['residence_count'] - STASIS_THRESHOLD) / STASIS_THRESHOLD
+            )
+            duration_factor = min(2.0, duration_factor)  # Cap at 2x
+
+            for dim in DIMENSIONS:
+                delta = stasis_deltas.get(dim, 0) * duration_factor
+                if delta != 0:
+                    state._dists[dim].update(delta)
+                    state._dists[dim].clamp()
+
+            # Propagate coupling for stasis deltas too
+            scaled_stasis = {dim: stasis_deltas.get(dim, 0) * duration_factor
+                            for dim in DIMENSIONS}
+            coupled = _propagate_coupling(state._dists, scaled_stasis)
+            for dim in DIMENSIONS:
+                cd = coupled.get(dim, 0)
+                if cd != 0:
+                    state._dists[dim].update(cd)
+                    state._dists[dim].clamp()
+
+            # Log the stasis event
+            _log_history_entry('mode_stasis', state)
+            save_state()
 
     # N1: Dual-track affect processing — every cognitive event also updates mood
     try:
@@ -1106,6 +1262,16 @@ def main():
             nearest = min(distances, key=distances.get)
             print(f"\n  No attractor (nearest: {nearest}, d={distances[nearest]:.3f})")
 
+        # v3.1: Stasis / boredom tracking
+        si = state.stasis_info
+        print(f"\n  Stasis (boredom):")
+        print(f"    Attractor residence: {si['residence_count']} events"
+              f" (threshold: {STASIS_THRESHOLD})")
+        print(f"    Current attractor: {si['current_attractor'] or 'none'}")
+        print(f"    Satisfaction declining: {si['satisfaction_declining']}")
+        print(f"    Cooldown: {si['cooldown']} events remaining")
+        print(f"    Total triggers: {si['total_triggers']}")
+
         # Show behavioral modifiers
         threshold_mod = get_search_threshold_modifier()
         priming_mod = get_priming_modifier()
@@ -1269,9 +1435,52 @@ def main():
         save_state()
         print("\n  (Production state restored — simulation was isolated)")
 
+    elif cmd == 'stasis':
+        state = get_state()
+        si = state.stasis_info
+        print(f"\n=== Boredom / Stasis Tracking (v3.1) ===\n")
+        print(f"  Current attractor: {si['current_attractor'] or 'none'}")
+        print(f"  Residence count:   {si['residence_count']} events"
+              f" (threshold: {STASIS_THRESHOLD})")
+        print(f"  Satisfaction declining: {si['satisfaction_declining']}")
+        print(f"  Cooldown remaining: {si['cooldown']} events")
+        print(f"  Total stasis triggers: {si['total_triggers']}")
+
+        # Show satisfaction history
+        sat_hist = state._stasis.get('satisfaction_history', [])
+        if sat_hist:
+            print(f"\n  Satisfaction history (last {len(sat_hist)}):")
+            print(f"    {' -> '.join(f'{v:.3f}' for v in sat_hist)}")
+            if len(sat_hist) >= 3:
+                mid = len(sat_hist) // 2
+                first = sum(sat_hist[:mid]) / mid
+                second = sum(sat_hist[mid:]) / len(sat_hist[mid:])
+                trend = 'DECLINING' if second < first - 0.01 else (
+                    'RISING' if second > first + 0.01 else 'STABLE')
+                print(f"    Trend: {trend} ({first:.3f} -> {second:.3f})")
+
+        # Would trigger?
+        would_trigger = (si['residence_count'] >= STASIS_THRESHOLD
+                         and si['cooldown'] == 0
+                         and si['satisfaction_declining'])
+        print(f"\n  Would trigger now: {'YES' if would_trigger else 'no'}")
+        if not would_trigger:
+            reasons = []
+            if si['residence_count'] < STASIS_THRESHOLD:
+                reasons.append(f"residence {si['residence_count']}/{STASIS_THRESHOLD}")
+            if si['cooldown'] > 0:
+                reasons.append(f"cooldown {si['cooldown']} events remaining")
+            if not si['satisfaction_declining']:
+                reasons.append("satisfaction not declining")
+            print(f"    Reason: {', '.join(reasons)}")
+
+        print(f"\n  Config: threshold={STASIS_THRESHOLD}, cooldown={STASIS_COOLDOWN},"
+              f" sat_window={STASIS_SAT_WINDOW}, intensity_scale={STASIS_INTENSITY_SCALE}")
+
     else:
         print(f"Unknown command: {cmd}")
-        print("Available: state, uncertainty, history, trend, reset, simulate, attractors, coupling")
+        print("Available: state, uncertainty, history, trend, reset, simulate,"
+              " attractors, coupling, stasis")
         sys.exit(1)
 
 

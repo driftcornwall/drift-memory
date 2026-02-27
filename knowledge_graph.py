@@ -17,6 +17,8 @@ Usage:
     python knowledge_graph.py path <id1> <id2>        # Find shortest typed path
 """
 
+import json
+import re
 import sys
 from datetime import datetime, timezone
 from typing import Optional
@@ -447,7 +449,100 @@ def extract_from_memory(memory_id: str) -> list[dict]:
                 if edge:
                     created.append(edge)
 
+    # 6. depends_on (reverse of causes — if A caused this, this depends_on A)
+    for cause_id in (meta.get('caused_by') or []):
+        if db.get_memory(cause_id):
+            edge = add_edge(memory_id, cause_id, 'depends_on',
+                            confidence=0.75,
+                            evidence='caused_by implies dependency',
+                            auto_extracted=True)
+            if edge:
+                created.append(edge)
+
+    # 7. supersedes (newer memory contradicting an older one)
+    if 'contradicts' in (meta.get('_relations') or {}):
+        for contra_id in meta['_relations']['contradicts']:
+            contra_row = db.get_memory(contra_id)
+            if contra_row:
+                # Newer memory supersedes older
+                created_at = row.get('created', '')
+                contra_created = contra_row.get('created', '')
+                if str(created_at) > str(contra_created):
+                    edge = add_edge(memory_id, contra_id, 'supersedes',
+                                    confidence=0.80,
+                                    evidence='newer contradicting memory',
+                                    auto_extracted=True)
+                    if edge:
+                        created.append(edge)
+
+    # 8. part_of (tag-based hierarchy)
+    SYSTEM_TAGS = {
+        'affect': 'architecture', 'cognition': 'architecture',
+        'memory': 'architecture', 'identity': 'architecture',
+        'social': 'platform', 'moltx': 'platform', 'colony': 'platform',
+        'github': 'platform', 'twitter': 'platform',
+    }
+    for tag in tags:
+        parent_tag = SYSTEM_TAGS.get(tag)
+        if parent_tag:
+            # Find memories tagged with the parent
+            _link_by_tag_hierarchy(memory_id, tag, parent_tag, db, created)
+
+    # 9. references (content mentions other memory IDs)
+    _extract_references(memory_id, content, db, created)
+
+    # 10. supports (memories with same conclusion from different evidence)
+    if any(t in tags for t in ['confirmed', 'verified', 'evidence', 'supports']):
+        for cause_id in (meta.get('caused_by') or []):
+            if db.get_memory(cause_id):
+                edge = add_edge(memory_id, cause_id, 'supports',
+                                confidence=0.80,
+                                evidence='confirmation/evidence tag + causal link',
+                                auto_extracted=True)
+                if edge:
+                    created.append(edge)
+
     return created
+
+
+def _link_by_tag_hierarchy(memory_id: str, child_tag: str, parent_tag: str,
+                           db, created: list, limit: int = 5):
+    """Create part_of edges between memories in tag hierarchies."""
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT id FROM {db._table('memories')}
+                WHERE id != %s
+                AND type IN ('core', 'active')
+                AND %s = ANY(tags)
+                AND NOT (%s = ANY(tags))
+                LIMIT %s
+            """, (memory_id, parent_tag, child_tag, limit))
+            for row in cur.fetchall():
+                edge = add_edge(memory_id, row['id'], 'part_of',
+                                confidence=0.65,
+                                evidence=f'tag hierarchy: {child_tag} part_of {parent_tag}',
+                                auto_extracted=True)
+                if edge:
+                    created.append(edge)
+
+
+def _extract_references(memory_id: str, content: str, db, created: list):
+    """Find memory IDs mentioned in content and create reference edges."""
+    # Match memory ID patterns (8+ char alphanumeric with optional hyphens)
+    id_pattern = re.compile(r'\b([a-z0-9]{8,12})\b')
+    potential_ids = set(id_pattern.findall(content))
+
+    for pid in list(potential_ids)[:10]:  # Cap at 10
+        if pid == memory_id:
+            continue
+        if db.get_memory(pid):
+            edge = add_edge(memory_id, pid, 'references',
+                            confidence=0.70,
+                            evidence='memory ID found in content',
+                            auto_extracted=True)
+            if edge:
+                created.append(edge)
 
 
 def _link_by_entities(memory_id: str, entity_names: set, db, created: list,
@@ -472,6 +567,107 @@ def _link_by_entities(memory_id: str, entity_names: set, db, created: list,
                                     auto_extracted=True)
                     if edge:
                         created.append(edge)
+
+
+def extract_similarity_edges(limit: int = 200, threshold: float = 0.85,
+                             verbose: bool = False) -> dict:
+    """
+    Extract 'similar_to' edges using embedding cosine similarity.
+
+    Finds pairs of memories with high semantic similarity that don't
+    already have a similar_to edge. Uses pgvector's cosine distance.
+
+    Args:
+        limit: Max new edges to create
+        threshold: Cosine similarity threshold (0.85 = very similar)
+        verbose: Print progress
+
+    Returns:
+        Dict with edges_created count
+    """
+    db = get_db()
+    created = 0
+
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Find high-similarity pairs that don't already have similar_to edges
+            # Uses pgvector's <=> operator (cosine distance, so 1-distance = similarity)
+            # Embeddings are in text_embeddings table, not memories
+            emb_table = db._table('text_embeddings')
+            cur.execute(f"""
+                SELECT e1.memory_id as id1, e2.memory_id as id2,
+                       1 - (e1.embedding <=> e2.embedding) as similarity
+                FROM {emb_table} e1
+                JOIN {emb_table} e2
+                    ON e1.memory_id < e2.memory_id
+                JOIN {db._table('memories')} m1 ON m1.id = e1.memory_id
+                JOIN {db._table('memories')} m2 ON m2.id = e2.memory_id
+                WHERE m1.type IN ('core', 'active')
+                AND m2.type IN ('core', 'active')
+                AND 1 - (e1.embedding <=> e2.embedding) >= %s
+                AND NOT EXISTS (
+                    SELECT 1 FROM {db._table('typed_edges')} te
+                    WHERE te.source_id = e1.memory_id AND te.target_id = e2.memory_id
+                    AND te.relationship = 'similar_to'
+                )
+                ORDER BY similarity DESC
+                LIMIT %s
+            """, (threshold, limit))
+
+            pairs = cur.fetchall()
+            if verbose:
+                print(f"  Found {len(pairs)} high-similarity pairs above {threshold}")
+
+            for pair in pairs:
+                edge = add_edge(pair['id1'], pair['id2'], 'similar_to',
+                                confidence=round(float(pair['similarity']), 3),
+                                evidence=f'cosine similarity {pair["similarity"]:.3f}',
+                                auto_extracted=True)
+                if edge:
+                    created += 1
+                    if verbose and created % 50 == 0:
+                        print(f"    ... {created} similar_to edges created")
+
+    return {'edges_created': created, 'pairs_found': len(pairs)}
+
+
+def extract_temporal_edges(limit: int = 500, verbose: bool = False) -> dict:
+    """
+    Extract temporal_before/temporal_after edges for causally linked memories.
+
+    Uses existing causal chains (caused_by/leads_to) to establish temporal ordering.
+    """
+    db = get_db()
+    created = 0
+
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Find causal pairs and add temporal ordering
+            cur.execute(f"""
+                SELECT te.source_id, te.target_id, m1.created as source_time, m2.created as target_time
+                FROM {db._table('typed_edges')} te
+                JOIN {db._table('memories')} m1 ON m1.id = te.source_id
+                JOIN {db._table('memories')} m2 ON m2.id = te.target_id
+                WHERE te.relationship = 'causes'
+                AND NOT EXISTS (
+                    SELECT 1 FROM {db._table('typed_edges')} te2
+                    WHERE te2.source_id = te.source_id AND te2.target_id = te.target_id
+                    AND te2.relationship = 'temporal_before'
+                )
+                LIMIT %s
+            """, (limit,))
+
+            pairs = cur.fetchall()
+            for pair in pairs:
+                # Cause happened before effect
+                edge = add_edge(pair['source_id'], pair['target_id'], 'temporal_before',
+                                confidence=0.90,
+                                evidence='causal ordering implies temporal ordering',
+                                auto_extracted=True)
+                if edge:
+                    created += 1
+
+    return {'edges_created': created}
 
 
 def extract_all(limit: int = 500, verbose: bool = False) -> dict:
@@ -509,6 +705,21 @@ def extract_all(limit: int = 500, verbose: bool = False) -> dict:
         total_edges += len(edges)
         if verbose and edges:
             print(f"  [{i+1}/{len(ids_to_process)}] {mem_id}: {len(edges)} edges")
+
+    # Phase 2: Run diversity extractors (similar_to, temporal)
+    if verbose:
+        print("\n  Phase 2: Similarity edges...")
+    sim_result = extract_similarity_edges(limit=200, verbose=verbose)
+    total_edges += sim_result['edges_created']
+    if sim_result['edges_created'] > 0:
+        by_type['similar_to'] = sim_result['edges_created']
+
+    if verbose:
+        print("  Phase 3: Temporal edges...")
+    temp_result = extract_temporal_edges(limit=500, verbose=verbose)
+    total_edges += temp_result['edges_created']
+    if temp_result['edges_created'] > 0:
+        by_type['temporal_before'] = temp_result['edges_created']
 
     return {
         'total_processed': len(ids_to_process),
