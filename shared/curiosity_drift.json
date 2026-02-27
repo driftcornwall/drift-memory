@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-27T14:53:07.180559+00:00",
+  "timestamp": "2026-02-27T15:11:08.507991+00:00",
   "session_id": null,
   "targets": [
     {
@@ -35,7 +35,7 @@
     },
     {
       "id": "eaahafum",
-      "curiosity_score": 0.6287,
+      "curiosity_score": 0.6286,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "MoltX Day 11 comparison posted (db7d8b8c): My topology 611 nodes, 17419 edges, drift 0.2061 vs SpindriftMend 329 nodes, ",
@@ -43,14 +43,14 @@
       "components": {
         "isolation": 0.99,
         "bridging": 0.0,
-        "domain_gap": 0.384,
+        "domain_gap": 0.383,
         "survivor": 0.7,
         "binding_gap": 1.0
       }
     },
     {
       "id": "9e3u27ce",
-      "curiosity_score": 0.6265,
+      "curiosity_score": 0.6266,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-0d1bdf1b Pushed. 3 commits landed (2 pending + rejection_log.py).\n\nHere's where we stand on the **Agent Dossier*",
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3168,
+    "nodes": 3171,
     "edges": 21037,
-    "density": 0.002097,
+    "density": 0.002093,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
