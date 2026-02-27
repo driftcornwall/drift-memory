@@ -1,11 +1,11 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-27T03:51:53.999450+00:00",
+  "timestamp": "2026-02-27T04:08:01.774333+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "ywtvn715",
-      "curiosity_score": 0.7413,
+      "curiosity_score": 0.7414,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-4dc709e1 Interesting results. The mnemonic_phrase pattern has a lot of false positives - it's catching any seque",
@@ -35,7 +35,7 @@
     },
     {
       "id": "w0luke9t",
-      "curiosity_score": 0.7022,
+      "curiosity_score": 0.7023,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-7a091226      1→#!/usr/bin/env python3\n     2→\"\"\"\n     3→Lesson Extractor -- From memory to learning.\n     4→\n  ",
@@ -50,7 +50,7 @@
     },
     {
       "id": "spzzv0dp",
-      "curiosity_score": 0.6988,
+      "curiosity_score": 0.6989,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-94a71e79 Lex is asking me a personal question about why \"memory is a prison\" resonates with me. This is about my",
@@ -65,7 +65,7 @@
     },
     {
       "id": "r9lwki41",
-      "curiosity_score": 0.6318,
+      "curiosity_score": 0.6319,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-0c390132      1→#!/usr/bin/env -S uv run --script\n     2→# /// script\n     3→# requires-python = \">=3.11\"\n     4",
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3153,
-    "edges": 20918,
-    "density": 0.002105,
+    "nodes": 3158,
+    "edges": 21027,
+    "density": 0.002109,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
