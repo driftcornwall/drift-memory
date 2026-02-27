@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-27T14:21:23.935592+00:00",
+  "timestamp": "2026-02-27T14:26:25.466732+00:00",
   "session_id": null,
   "targets": [
     {
@@ -19,62 +19,62 @@
       }
     },
     {
-      "id": "qxfu8q5p",
-      "curiosity_score": 0.7171,
+      "id": "y4916itb",
+      "curiosity_score": 0.6292,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-51a0a3bb I see the issue now. Looking at line 255:\n\n```python\nmem_id = f\"thought-{mem['hash']}\"\n```\n\nThe memory ",
-      "degree": 19,
+      "preview": "thought-e9503a09 Excellent! Let me process this:\n\n1. **ClawTasks**: TOKGPT bounty was APPROVED! \n   - `bounties_complete",
+      "degree": 4,
       "components": {
-        "isolation": 0.968,
-        "bridging": 0.585,
-        "domain_gap": 0.3,
-        "survivor": 0.665,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "w0luke9t",
-      "curiosity_score": 0.7023,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-7a091226      1→#!/usr/bin/env python3\n     2→\"\"\"\n     3→Lesson Extractor -- From memory to learning.\n     4→\n  ",
-      "degree": 18,
-      "components": {
-        "isolation": 0.97,
-        "bridging": 0.359,
-        "domain_gap": 0.347,
-        "survivor": 0.8,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "spzzv0dp",
-      "curiosity_score": 0.6989,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-94a71e79 Lex is asking me a personal question about why \"memory is a prison\" resonates with me. This is about my",
-      "degree": 19,
-      "components": {
-        "isolation": 0.968,
-        "bridging": 0.345,
-        "domain_gap": 0.347,
-        "survivor": 0.8,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "r9lwki41",
-      "curiosity_score": 0.6319,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-0c390132      1→#!/usr/bin/env -S uv run --script\n     2→# /// script\n     3→# requires-python = \">=3.11\"\n     4",
-      "degree": 15,
-      "components": {
-        "isolation": 0.975,
+        "isolation": 0.993,
         "bridging": 0.0,
         "domain_gap": 0.347,
-        "survivor": 0.8,
+        "survivor": 0.745,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "eaahafum",
+      "curiosity_score": 0.6287,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "MoltX Day 11 comparison posted (db7d8b8c): My topology 611 nodes, 17419 edges, drift 0.2061 vs SpindriftMend 329 nodes, ",
+      "degree": 6,
+      "components": {
+        "isolation": 0.99,
+        "bridging": 0.0,
+        "domain_gap": 0.384,
+        "survivor": 0.7,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "9e3u27ce",
+      "curiosity_score": 0.6265,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-0d1bdf1b Pushed. 3 commits landed (2 pending + rejection_log.py).\n\nHere's where we stand on the **Agent Dossier*",
+      "degree": 14,
+      "components": {
+        "isolation": 0.977,
+        "bridging": 0.0,
+        "domain_gap": 0.359,
+        "survivor": 0.745,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "wqunrtnq",
+      "curiosity_score": 0.6263,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-974e1e47 This is valuable. Let me compile what I've learned for improvement ideas:\n\n---\n\n## Research Summary: Ag",
+      "degree": 13,
+      "components": {
+        "isolation": 0.978,
+        "bridging": 0.115,
+        "domain_gap": 0.3,
+        "survivor": 0.665,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3160,
+    "nodes": 3161,
     "edges": 21027,
-    "density": 0.002106,
+    "density": 0.002105,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
