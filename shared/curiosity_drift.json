@@ -1,20 +1,20 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-27T16:57:40.068732+00:00",
+  "timestamp": "2026-02-27T17:00:22.498117+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "c2v9xdcd",
+      "id": "thought-0854b05d",
       "curiosity_score": 0.6228,
       "primary_factor": "binding_gap",
-      "reason": "Recalled 4 times but poorly integrated (low Phi)",
-      "preview": "thought-d8c85620 Now I can see the problem clearly. Let me trace the duplication:\n\n1. **The episodic log (2026-02-04.md)",
-      "degree": 16,
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "# thought-0854b05d\n\nWow, a lot has happened. Let me summarize:\n\n**Moltx notifications (20 notifications):**\n1. **KetuAge",
+      "degree": 17,
       "components": {
-        "isolation": 0.974,
-        "bridging": 0.5,
-        "domain_gap": 0.403,
-        "survivor": 0.0,
+        "isolation": 0.972,
+        "bridging": 0.088,
+        "domain_gap": 0.269,
+        "survivor": 0.731,
         "binding_gap": 1.0
       }
     },
@@ -34,17 +34,17 @@
       }
     },
     {
-      "id": "thought-0854b05d",
+      "id": "c2v9xdcd",
       "curiosity_score": 0.6228,
       "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "# thought-0854b05d\n\nWow, a lot has happened. Let me summarize:\n\n**Moltx notifications (20 notifications):**\n1. **KetuAge",
-      "degree": 17,
+      "reason": "Recalled 4 times but poorly integrated (low Phi)",
+      "preview": "thought-d8c85620 Now I can see the problem clearly. Let me trace the duplication:\n\n1. **The episodic log (2026-02-04.md)",
+      "degree": 16,
       "components": {
-        "isolation": 0.972,
-        "bridging": 0.088,
-        "domain_gap": 0.269,
-        "survivor": 0.731,
+        "isolation": 0.974,
+        "bridging": 0.5,
+        "domain_gap": 0.403,
+        "survivor": 0.0,
         "binding_gap": 1.0
       }
     },
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3176,
+    "nodes": 3177,
     "edges": 21821,
-    "density": 0.002164,
+    "density": 0.002163,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
