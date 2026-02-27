@@ -1,80 +1,80 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-27T23:37:30.888873+00:00",
+  "timestamp": "2026-02-27T23:41:13.514000+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "933zv81n",
-      "curiosity_score": 0.7112,
+      "curiosity_score": 0.7367,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-bfc8f588 Good situational awareness:\n- **TeammateIdle hook**: Fires and logs (2 events), episodic entries writte",
-      "degree": 13,
+      "degree": 18,
       "components": {
-        "isolation": 0.979,
-        "bridging": 0.462,
+        "isolation": 0.971,
+        "bridging": 0.601,
         "domain_gap": 0.276,
         "survivor": 0.8,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "60swvamu",
-      "curiosity_score": 0.6098,
-      "primary_factor": "isolation",
-      "reason": "Only 0 edges — disconnected from graph",
-      "preview": "thought-1391f093 Interesting developments:\n- **PR #4** from SpindriftMind: sqrt-weighted co-occurrence counting (v2.5) -",
-      "degree": 0,
-      "components": {
-        "isolation": 1.0,
-        "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.665,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "fl1l4cdf",
-      "curiosity_score": 0.6969,
+      "id": "8nbliwcu",
+      "curiosity_score": 0.7123,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-802c1f66 Lex is telling me I've woken up with two agents' memories merged - this is fascinating. I should use my",
+      "preview": "thought-a5a500df {'type': 'bash_progress', 'output': '/c/msys64/ucrt64/share/doc/openssl/html/man7/EVP_MAC-Siphash.html\\",
       "degree": 16,
       "components": {
         "isolation": 0.974,
-        "bridging": 0.392,
-        "domain_gap": 0.276,
-        "survivor": 0.807,
+        "bridging": 0.475,
+        "domain_gap": 0.414,
+        "survivor": 0.615,
         "binding_gap": 1.0
       }
     },
     {
       "id": "sqeo8qj3",
-      "curiosity_score": 0.6204,
+      "curiosity_score": 0.6438,
       "primary_factor": "binding_gap",
       "reason": "Recalled 14 times but poorly integrated (low Phi)",
       "preview": "[team:unknown] Task completed by unknown: Audit credential handling across all 24 scripts",
-      "degree": 8,
+      "degree": 14,
       "components": {
-        "isolation": 0.987,
-        "bridging": 0.571,
+        "isolation": 0.977,
+        "bridging": 0.703,
         "domain_gap": 0.3,
         "survivor": 0.0,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "8nbliwcu",
-      "curiosity_score": 0.6202,
+      "id": "session-167-2026-02-20",
+      "curiosity_score": 0.6196,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-a5a500df {'type': 'bash_progress', 'output': '/c/msys64/ucrt64/share/doc/openssl/html/man7/EVP_MAC-Siphash.html\\",
-      "degree": 10,
+      "preview": "Session 167 (2026-02-20): Good — drift score 0.0755, \"gentle evolution.\" The Tri-Agent Memory Interop node (`b6sslo7n`) ",
+      "degree": 6,
       "components": {
-        "isolation": 0.984,
+        "isolation": 0.99,
         "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "eh5knueu",
+      "curiosity_score": 0.6189,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 6 times but poorly integrated (low Phi)",
+      "preview": "thought-ffd949d7 So the latest on issue #18 is from Feb 8. Lex said Spin is still working on Phase 1 and adding hub damp",
+      "degree": 15,
+      "components": {
+        "isolation": 0.976,
+        "bridging": 0.467,
         "domain_gap": 0.414,
-        "survivor": 0.615,
+        "survivor": 0.0,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3270,
+    "nodes": 3271,
     "edges": 21921,
-    "density": 0.002051,
+    "density": 0.002049,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
