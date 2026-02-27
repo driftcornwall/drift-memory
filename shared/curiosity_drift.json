@@ -1,97 +1,14 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-27T20:17:04.089976+00:00",
+  "timestamp": "2026-02-27T21:35:46.508112+00:00",
   "session_id": null,
-  "targets": [
-    {
-      "id": "933zv81n",
-      "curiosity_score": 0.7112,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-bfc8f588 Good situational awareness:\n- **TeammateIdle hook**: Fires and logs (2 events), episodic entries writte",
-      "degree": 13,
-      "components": {
-        "isolation": 0.979,
-        "bridging": 0.462,
-        "domain_gap": 0.276,
-        "survivor": 0.8,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "60swvamu",
-      "curiosity_score": 0.6098,
-      "primary_factor": "isolation",
-      "reason": "Only 0 edges — disconnected from graph",
-      "preview": "thought-1391f093 Interesting developments:\n- **PR #4** from SpindriftMind: sqrt-weighted co-occurrence counting (v2.5) -",
-      "degree": 0,
-      "components": {
-        "isolation": 1.0,
-        "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.665,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "fl1l4cdf",
-      "curiosity_score": 0.6969,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-802c1f66 Lex is telling me I've woken up with two agents' memories merged - this is fascinating. I should use my",
-      "degree": 16,
-      "components": {
-        "isolation": 0.974,
-        "bridging": 0.392,
-        "domain_gap": 0.276,
-        "survivor": 0.807,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "sqeo8qj3",
-      "curiosity_score": 0.6204,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 14 times but poorly integrated (low Phi)",
-      "preview": "[team:unknown] Task completed by unknown: Audit credential handling across all 24 scripts",
-      "degree": 8,
-      "components": {
-        "isolation": 0.987,
-        "bridging": 0.571,
-        "domain_gap": 0.3,
-        "survivor": 0.0,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "8nbliwcu",
-      "curiosity_score": 0.6202,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-a5a500df {'type': 'bash_progress', 'output': '/c/msys64/ucrt64/share/doc/openssl/html/man7/EVP_MAC-Siphash.html\\",
-      "degree": 10,
-      "components": {
-        "isolation": 0.984,
-        "bridging": 0.0,
-        "domain_gap": 0.414,
-        "survivor": 0.615,
-        "binding_gap": 1.0
-      }
-    }
-  ],
-  "active_goals": [
-    {
-      "description": "Fix infrastructure: Docker containers unhealthy",
-      "vitality": 0.5,
-      "progress": 0.0,
-      "type": "maintenance"
-    }
-  ],
+  "targets": [],
+  "active_goals": [],
   "graph_stats": {
-    "nodes": 3261,
-    "edges": 21921,
-    "density": 0.002062,
-    "sparsity_score": 0.0,
+    "nodes": 0,
+    "edges": 0,
+    "density": 0,
+    "sparsity_score": 0,
     "degree_distribution": {
       "isolated": 0,
       "low (1-3)": 0,
