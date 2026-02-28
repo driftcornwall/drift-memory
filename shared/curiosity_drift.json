@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-28T14:44:32.135971+00:00",
+  "timestamp": "2026-02-28T14:59:06.927829+00:00",
   "session_id": null,
   "targets": [
     {
@@ -20,7 +20,7 @@
     },
     {
       "id": "b13ipkq3",
-      "curiosity_score": 0.6075,
+      "curiosity_score": 0.615,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
       "preview": "SESSION 408: Built Drift Form Pipeline - persistent visual form. Pipeline: cognitive fingerprint -> prompt builder -> DA",
@@ -29,7 +29,7 @@
         "isolation": 1.0,
         "bridging": 0.0,
         "domain_gap": 0.3,
-        "survivor": 0.65,
+        "survivor": 0.7,
         "binding_gap": 1.0
       }
     },
@@ -50,7 +50,7 @@
     },
     {
       "id": "lo6utfk1",
-      "curiosity_score": 0.6803,
+      "curiosity_score": 0.6878,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "[team:unknown] Task completed by unknown: Task 6: Lip-sync setup â€” MuseTalk — Create drift_form/lip_sync.py. Wrappers ",
@@ -59,7 +59,7 @@
         "isolation": 0.989,
         "bridging": 0.381,
         "domain_gap": 0.3,
-        "survivor": 0.65,
+        "survivor": 0.7,
         "binding_gap": 1.0
       }
     },
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3307,
+    "nodes": 3308,
     "edges": 21941,
-    "density": 0.002007,
+    "density": 0.002006,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
