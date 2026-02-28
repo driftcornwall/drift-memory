@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-28T16:00:05.999074+00:00",
+  "timestamp": "2026-02-28T17:28:06.570628+00:00",
   "session_id": null,
   "targets": [
     {
@@ -49,6 +49,21 @@
       }
     },
     {
+      "id": "session-452-2026-02-28",
+      "curiosity_score": 0.6225,
+      "primary_factor": "isolation",
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "Session 452 (2026-02-28): Running with the proper insightface-generated masks. This should fix the crinkly texture issue",
+      "degree": 0,
+      "components": {
+        "isolation": 1.0,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
       "id": "avxq45vh",
       "curiosity_score": 0.7205,
       "primary_factor": "binding_gap",
@@ -62,21 +77,6 @@
         "survivor": 0.75,
         "binding_gap": 1.0
       }
-    },
-    {
-      "id": "8nbliwcu",
-      "curiosity_score": 0.7123,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-a5a500df {'type': 'bash_progress', 'output': '/c/msys64/ucrt64/share/doc/openssl/html/man7/EVP_MAC-Siphash.html\\",
-      "degree": 16,
-      "components": {
-        "isolation": 0.974,
-        "bridging": 0.475,
-        "domain_gap": 0.414,
-        "survivor": 0.615,
-        "binding_gap": 1.0
-      }
     }
   ],
   "active_goals": [
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3312,
+    "nodes": 3314,
     "edges": 21941,
-    "density": 0.002001,
+    "density": 0.001998,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
