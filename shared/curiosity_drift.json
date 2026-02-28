@@ -1,18 +1,18 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-28T20:53:36.482646+00:00",
+  "timestamp": "2026-02-28T20:55:06.573251+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "avxq45vh",
-      "curiosity_score": 0.7453,
+      "curiosity_score": 0.7387,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "RunPod cloud GPU pipeline: RTX PRO 6000 96GB VRAM. SSH key ~/.ssh/runpod_ed25519. Creds ~/.config/runpod/credentials.jso",
       "degree": 14,
       "components": {
         "isolation": 0.977,
-        "bridging": 0.648,
+        "bridging": 0.615,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
@@ -20,14 +20,29 @@
     },
     {
       "id": "cc4nzij6",
-      "curiosity_score": 0.7212,
+      "curiosity_score": 0.7257,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "[team:unknown] Task completed by unknown: Fix BUG 13 (MEDIUM): Add winner fatigue/habituation to workspace — Winners fac",
-      "degree": 14,
+      "degree": 15,
       "components": {
-        "isolation": 0.977,
-        "bridging": 0.527,
+        "isolation": 0.976,
+        "bridging": 0.552,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "session-423-2026-02-27",
+      "curiosity_score": 0.6792,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "Session 423 (2026-02-27): Docker's up. Consolidation is unhealthy but it usually recovers.\n\nThe cloud GPU idea is exactl",
+      "degree": 9,
+      "components": {
+        "isolation": 0.985,
+        "bridging": 0.306,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
@@ -35,14 +50,14 @@
     },
     {
       "id": "session-452-2026-02-28",
-      "curiosity_score": 0.6596,
+      "curiosity_score": 0.6667,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Session 452 (2026-02-28): Running with the proper insightface-generated masks. This should fix the crinkly texture issue",
-      "degree": 6,
+      "degree": 7,
       "components": {
-        "isolation": 0.99,
-        "bridging": 0.2,
+        "isolation": 0.989,
+        "bridging": 0.238,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
@@ -50,31 +65,16 @@
     },
     {
       "id": "sqeo8qj3",
-      "curiosity_score": 0.6502,
+      "curiosity_score": 0.6493,
       "primary_factor": "binding_gap",
       "reason": "Recalled 14 times but poorly integrated (low Phi)",
       "preview": "[team:unknown] Task completed by unknown: Audit credential handling across all 24 scripts",
-      "degree": 18,
+      "degree": 19,
       "components": {
-        "isolation": 0.971,
-        "bridging": 0.745,
+        "isolation": 0.969,
+        "bridging": 0.743,
         "domain_gap": 0.3,
         "survivor": 0.0,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "session-423-2026-02-27",
-      "curiosity_score": 0.6196,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "Session 423 (2026-02-27): Docker's up. Consolidation is unhealthy but it usually recovers.\n\nThe cloud GPU idea is exactl",
-      "degree": 6,
-      "components": {
-        "isolation": 0.99,
-        "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3342,
+    "nodes": 3343,
     "edges": 21971,
-    "density": 0.001968,
+    "density": 0.001967,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
