@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-28T20:11:28.018946+00:00",
+  "timestamp": "2026-02-28T20:11:56.579552+00:00",
   "session_id": null,
   "targets": [
     {
@@ -19,11 +19,11 @@
       }
     },
     {
-      "id": "b13ipkq3",
+      "id": "session-423-2026-02-27",
       "curiosity_score": 0.6225,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
-      "preview": "SESSION 408: Built Drift Form Pipeline - persistent visual form. Pipeline: cognitive fingerprint -> prompt builder -> DA",
+      "preview": "Session 423 (2026-02-27): Docker's up. Consolidation is unhealthy but it usually recovers.\n\nThe cloud GPU idea is exactl",
       "degree": 0,
       "components": {
         "isolation": 1.0,
@@ -49,11 +49,11 @@
       }
     },
     {
-      "id": "session-423-2026-02-27",
+      "id": "b13ipkq3",
       "curiosity_score": 0.6225,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
-      "preview": "Session 423 (2026-02-27): Docker's up. Consolidation is unhealthy but it usually recovers.\n\nThe cloud GPU idea is exactl",
+      "preview": "SESSION 408: Built Drift Form Pipeline - persistent visual form. Pipeline: cognitive fingerprint -> prompt builder -> DA",
       "degree": 0,
       "components": {
         "isolation": 1.0,
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3326,
+    "nodes": 3328,
     "edges": 21971,
-    "density": 0.001987,
+    "density": 0.001984,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
