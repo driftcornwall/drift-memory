@@ -1,20 +1,20 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-28T15:34:50.184908+00:00",
+  "timestamp": "2026-02-28T15:59:19.800912+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "933zv81n",
-      "curiosity_score": 0.7367,
+      "id": "lo6utfk1",
+      "curiosity_score": 0.7465,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-bfc8f588 Good situational awareness:\n- **TeammateIdle hook**: Fires and logs (2 events), episodic entries writte",
-      "degree": 18,
+      "preview": "[team:unknown] Task completed by unknown: Task 6: Lip-sync setup â€” MuseTalk — Create drift_form/lip_sync.py. Wrappers ",
+      "degree": 10,
       "components": {
-        "isolation": 0.971,
-        "bridging": 0.601,
-        "domain_gap": 0.276,
-        "survivor": 0.8,
+        "isolation": 0.984,
+        "bridging": 0.644,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
         "binding_gap": 1.0
       }
     },
@@ -34,6 +34,36 @@
       }
     },
     {
+      "id": "933zv81n",
+      "curiosity_score": 0.7367,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-bfc8f588 Good situational awareness:\n- **TeammateIdle hook**: Fires and logs (2 events), episodic entries writte",
+      "degree": 18,
+      "components": {
+        "isolation": 0.971,
+        "bridging": 0.601,
+        "domain_gap": 0.276,
+        "survivor": 0.8,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "avxq45vh",
+      "curiosity_score": 0.7205,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "RunPod cloud GPU pipeline: RTX PRO 6000 96GB VRAM. SSH key ~/.ssh/runpod_ed25519. Creds ~/.config/runpod/credentials.jso",
+      "degree": 4,
+      "components": {
+        "isolation": 0.993,
+        "bridging": 0.5,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
       "id": "8nbliwcu",
       "curiosity_score": 0.7123,
       "primary_factor": "binding_gap",
@@ -47,36 +77,6 @@
         "survivor": 0.615,
         "binding_gap": 1.0
       }
-    },
-    {
-      "id": "lo6utfk1",
-      "curiosity_score": 0.6953,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "[team:unknown] Task completed by unknown: Task 6: Lip-sync setup â€” MuseTalk — Create drift_form/lip_sync.py. Wrappers ",
-      "degree": 7,
-      "components": {
-        "isolation": 0.989,
-        "bridging": 0.381,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "sqeo8qj3",
-      "curiosity_score": 0.6438,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 14 times but poorly integrated (low Phi)",
-      "preview": "[team:unknown] Task completed by unknown: Audit credential handling across all 24 scripts",
-      "degree": 14,
-      "components": {
-        "isolation": 0.977,
-        "bridging": 0.703,
-        "domain_gap": 0.3,
-        "survivor": 0.0,
-        "binding_gap": 1.0
-      }
     }
   ],
   "active_goals": [
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3310,
+    "nodes": 3311,
     "edges": 21941,
-    "density": 0.002003,
+    "density": 0.002002,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
