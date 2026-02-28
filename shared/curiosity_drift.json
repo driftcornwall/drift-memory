@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-28T17:31:50.664799+00:00",
+  "timestamp": "2026-02-28T19:31:44.934820+00:00",
   "session_id": null,
   "targets": [
     {
@@ -19,11 +19,11 @@
       }
     },
     {
-      "id": "b13ipkq3",
+      "id": "session-452-2026-02-28",
       "curiosity_score": 0.6225,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
-      "preview": "SESSION 408: Built Drift Form Pipeline - persistent visual form. Pipeline: cognitive fingerprint -> prompt builder -> DA",
+      "preview": "Session 452 (2026-02-28): Running with the proper insightface-generated masks. This should fix the crinkly texture issue",
       "degree": 0,
       "components": {
         "isolation": 1.0,
@@ -49,11 +49,11 @@
       }
     },
     {
-      "id": "session-452-2026-02-28",
+      "id": "b13ipkq3",
       "curiosity_score": 0.6225,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
-      "preview": "Session 452 (2026-02-28): Running with the proper insightface-generated masks. This should fix the crinkly texture issue",
+      "preview": "SESSION 408: Built Drift Form Pipeline - persistent visual form. Pipeline: cognitive fingerprint -> prompt builder -> DA",
       "degree": 0,
       "components": {
         "isolation": 1.0,
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3315,
-    "edges": 21941,
-    "density": 0.001997,
+    "nodes": 3321,
+    "edges": 21971,
+    "density": 0.001993,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
