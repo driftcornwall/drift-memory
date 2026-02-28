@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-28T20:11:56.579552+00:00",
+  "timestamp": "2026-02-28T20:12:33.744849+00:00",
   "session_id": null,
   "targets": [
     {
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3328,
+    "nodes": 3332,
     "edges": 21971,
-    "density": 0.001984,
+    "density": 0.00198,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
