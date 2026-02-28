@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-28T12:09:35.442466+00:00",
+  "timestamp": "2026-02-28T14:44:32.135971+00:00",
   "session_id": null,
   "targets": [
     {
@@ -15,6 +15,21 @@
         "bridging": 0.601,
         "domain_gap": 0.276,
         "survivor": 0.8,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "b13ipkq3",
+      "curiosity_score": 0.6075,
+      "primary_factor": "isolation",
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "SESSION 408: Built Drift Form Pipeline - persistent visual form. Pipeline: cognitive fingerprint -> prompt builder -> DA",
+      "degree": 0,
+      "components": {
+        "isolation": 1.0,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.65,
         "binding_gap": 1.0
       }
     },
@@ -35,7 +50,7 @@
     },
     {
       "id": "lo6utfk1",
-      "curiosity_score": 0.6503,
+      "curiosity_score": 0.6803,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "[team:unknown] Task completed by unknown: Task 6: Lip-sync setup â€” MuseTalk — Create drift_form/lip_sync.py. Wrappers ",
@@ -44,7 +59,7 @@
         "isolation": 0.989,
         "bridging": 0.381,
         "domain_gap": 0.3,
-        "survivor": 0.45,
+        "survivor": 0.65,
         "binding_gap": 1.0
       }
     },
@@ -62,21 +77,6 @@
         "survivor": 0.0,
         "binding_gap": 1.0
       }
-    },
-    {
-      "id": "session-167-2026-02-20",
-      "curiosity_score": 0.6196,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "Session 167 (2026-02-20): Good — drift score 0.0755, \"gentle evolution.\" The Tri-Agent Memory Interop node (`b6sslo7n`) ",
-      "degree": 6,
-      "components": {
-        "isolation": 0.99,
-        "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
     }
   ],
   "active_goals": [
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3304,
+    "nodes": 3307,
     "edges": 21941,
-    "density": 0.002011,
+    "density": 0.002007,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
