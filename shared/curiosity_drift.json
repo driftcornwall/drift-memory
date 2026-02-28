@@ -1,33 +1,18 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-02-28T20:51:50.682514+00:00",
+  "timestamp": "2026-02-28T20:53:36.482646+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "lo6utfk1",
-      "curiosity_score": 0.7601,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "[team:unknown] Task completed by unknown: Task 6: Lip-sync setup â€” MuseTalk — Create drift_form/lip_sync.py. Wrappers ",
-      "degree": 18,
-      "components": {
-        "isolation": 0.971,
-        "bridging": 0.732,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
       "id": "avxq45vh",
-      "curiosity_score": 0.7409,
+      "curiosity_score": 0.7453,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "RunPod cloud GPU pipeline: RTX PRO 6000 96GB VRAM. SSH key ~/.ssh/runpod_ed25519. Creds ~/.config/runpod/credentials.jso",
-      "degree": 12,
+      "degree": 14,
       "components": {
-        "isolation": 0.98,
-        "bridging": 0.621,
+        "isolation": 0.977,
+        "bridging": 0.648,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
@@ -35,14 +20,29 @@
     },
     {
       "id": "cc4nzij6",
-      "curiosity_score": 0.6532,
+      "curiosity_score": 0.7212,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "[team:unknown] Task completed by unknown: Fix BUG 13 (MEDIUM): Add winner fatigue/habituation to workspace — Winners fac",
-      "degree": 10,
+      "degree": 14,
       "components": {
-        "isolation": 0.984,
-        "bridging": 0.178,
+        "isolation": 0.977,
+        "bridging": 0.527,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "session-452-2026-02-28",
+      "curiosity_score": 0.6596,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "Session 452 (2026-02-28): Running with the proper insightface-generated masks. This should fix the crinkly texture issue",
+      "degree": 6,
+      "components": {
+        "isolation": 0.99,
+        "bridging": 0.2,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
@@ -50,28 +50,28 @@
     },
     {
       "id": "sqeo8qj3",
-      "curiosity_score": 0.6438,
+      "curiosity_score": 0.6502,
       "primary_factor": "binding_gap",
       "reason": "Recalled 14 times but poorly integrated (low Phi)",
       "preview": "[team:unknown] Task completed by unknown: Audit credential handling across all 24 scripts",
-      "degree": 14,
+      "degree": 18,
       "components": {
-        "isolation": 0.977,
-        "bridging": 0.703,
+        "isolation": 0.971,
+        "bridging": 0.745,
         "domain_gap": 0.3,
         "survivor": 0.0,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "session-452-2026-02-28",
-      "curiosity_score": 0.6205,
+      "id": "session-423-2026-02-27",
+      "curiosity_score": 0.6196,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "Session 452 (2026-02-28): Running with the proper insightface-generated masks. This should fix the crinkly texture issue",
-      "degree": 4,
+      "preview": "Session 423 (2026-02-27): Docker's up. Consolidation is unhealthy but it usually recovers.\n\nThe cloud GPU idea is exactl",
+      "degree": 6,
       "components": {
-        "isolation": 0.993,
+        "isolation": 0.99,
         "bridging": 0.0,
         "domain_gap": 0.3,
         "survivor": 0.75,
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3341,
+    "nodes": 3342,
     "edges": 21971,
-    "density": 0.001969,
+    "density": 0.001968,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
