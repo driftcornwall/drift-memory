@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-01T01:28:08.418117+00:00",
+  "timestamp": "2026-03-01T01:50:22.194218+00:00",
   "session_id": null,
   "targets": [
     {
@@ -15,6 +15,21 @@
         "bridging": 0.684,
         "domain_gap": 0.3,
         "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "m1jt2qot",
+      "curiosity_score": 0.61,
+      "primary_factor": "bridging",
+      "reason": "Could bridge 100% disconnected neighbor pairs",
+      "preview": "80HD TikTok Pipeline MVP complete. 4 Docker containers (content/audio/video/publish engines), 46 tests passing. Full pip",
+      "degree": 2,
+      "components": {
+        "isolation": 0.667,
+        "bridging": 1.0,
+        "domain_gap": 0.3,
+        "survivor": 0.0,
         "binding_gap": 1.0
       }
     },
@@ -62,21 +77,6 @@
         "survivor": 0.75,
         "binding_gap": 1.0
       }
-    },
-    {
-      "id": "sqeo8qj3",
-      "curiosity_score": 0.6481,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 14 times but poorly integrated (low Phi)",
-      "preview": "[team:unknown] Task completed by unknown: Audit credential handling across all 24 scripts",
-      "degree": 19,
-      "components": {
-        "isolation": 0.969,
-        "bridging": 0.737,
-        "domain_gap": 0.3,
-        "survivor": 0.0,
-        "binding_gap": 1.0
-      }
     }
   ],
   "active_goals": [
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3397,
+    "nodes": 3398,
     "edges": 21992,
-    "density": 0.001906,
+    "density": 0.001905,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
