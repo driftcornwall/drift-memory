@@ -1,80 +1,80 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-01T19:40:31.913719+00:00",
+  "timestamp": "2026-03-01T19:49:38.388729+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "tsevij6a",
-      "curiosity_score": 0.7315,
+      "id": "gfe5k5pb",
+      "curiosity_score": 0.6924,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "[team:unknown] Task completed by unknown: Write design doc and transition to implementation planning — Save approved des",
-      "degree": 15,
-      "components": {
-        "isolation": 0.976,
-        "bridging": 0.581,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "41whal8n",
-      "curiosity_score": 0.7225,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "[team:unknown] Task completed by unknown: Fix W-graphs frozen at 13,481 — 5W dimension graphs not growing between sessio",
-      "degree": 11,
-      "components": {
-        "isolation": 0.982,
-        "bridging": 0.545,
-        "domain_gap": 0.3,
-        "survivor": 0.725,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "session-158-2026-02-19",
-      "curiosity_score": 0.7114,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "Session 158 (2026-02-19): Good. Rejection #239. That wraps the autonomous round. Here's the final tally:\n\n---\n\n**Session",
-      "degree": 17,
-      "components": {
-        "isolation": 0.973,
-        "bridging": 0.485,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "hh16dbnk",
-      "curiosity_score": 0.7105,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "[team:unknown] Task completed by unknown: Explore project context for video pipeline v2 — Check existing 80HD pipeline c",
-      "degree": 15,
-      "components": {
-        "isolation": 0.976,
-        "bridging": 0.476,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "5spo4oct",
-      "curiosity_score": 0.6922,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "[team:unknown] Task completed by unknown: Phase B1: R14 Contact Models — New file contact_models.py with Bayesian per-co",
+      "preview": "[team:unknown] Task completed by unknown: Phase 0: Register contradiction_detected in EVENT_DELTAS (R2) — Add contradict",
       "degree": 18,
       "components": {
-        "isolation": 0.971,
+        "isolation": 0.972,
         "bridging": 0.392,
         "domain_gap": 0.3,
         "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "t3jasd5c",
+      "curiosity_score": 0.616,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-e037a079 Good questions. Let me explain the design:\n\n**Why not save all assistant messages?**\nToo noisy. I outpu",
+      "degree": 7,
+      "components": {
+        "isolation": 0.989,
+        "bridging": 0.048,
+        "domain_gap": 0.3,
+        "survivor": 0.665,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "bx6u0qhn",
+      "curiosity_score": 0.6159,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "Session 33 (2026-02-18): Extended autonomous sweep across 8 platforms. 14 actions taken: 3 MoltX likes (BrutusBot, Claud",
+      "degree": 14,
+      "components": {
+        "isolation": 0.978,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "session-172-2026-02-20",
+      "curiosity_score": 0.6154,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "Session 172 (2026-02-20): Two more agents working — Brain reply and Colony threads. Let me store a memory about this ses",
+      "degree": 15,
+      "components": {
+        "isolation": 0.976,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "ve6h254b",
+      "curiosity_score": 0.615,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "[team:unknown] Task completed by unknown: Add toolkit commands for curiosity engine — Add CLI commands to toolkit.py: cu",
+      "degree": 8,
+      "components": {
+        "isolation": 0.987,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.725,
         "binding_gap": 1.0
       }
     }
@@ -88,8 +88,8 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3444,
-    "edges": 22020,
+    "nodes": 3447,
+    "edges": 22056,
     "density": 0.001857,
     "sparsity_score": 0.0,
     "degree_distribution": {
