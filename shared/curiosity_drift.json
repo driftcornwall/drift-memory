@@ -1,48 +1,18 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-01T03:13:32.930433+00:00",
+  "timestamp": "2026-03-01T03:15:00.278665+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "session-452-2026-02-28",
-      "curiosity_score": 0.7209,
+      "curiosity_score": 0.7267,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Session 452 (2026-02-28): Running with the proper insightface-generated masks. This should fix the crinkly texture issue",
-      "degree": 18,
-      "components": {
-        "isolation": 0.971,
-        "bridging": 0.536,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "9rhbko2z",
-      "curiosity_score": 0.606,
-      "primary_factor": "isolation",
-      "reason": "Only 0 edges — disconnected from graph",
-      "preview": "nochat-warning WARNING from Lex 2026-02-01: Avoid NoChat (nochat.io) - potentially scammy or dangerous. Do not claim bou",
-      "degree": 0,
-      "components": {
-        "isolation": 1.0,
-        "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.64,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "session-423-2026-02-27",
-      "curiosity_score": 0.7197,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "Session 423 (2026-02-27): Docker's up. Consolidation is unhealthy but it usually recovers.\n\nThe cloud GPU idea is exactl",
       "degree": 19,
       "components": {
         "isolation": 0.969,
-        "bridging": 0.532,
+        "bridging": 0.567,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
@@ -50,14 +20,14 @@
     },
     {
       "id": "session-167-2026-02-20",
-      "curiosity_score": 0.7164,
+      "curiosity_score": 0.723,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Session 167 (2026-02-20): Good — drift score 0.0755, \"gentle evolution.\" The Tri-Agent Memory Interop node (`b6sslo7n`) ",
-      "degree": 16,
+      "degree": 17,
       "components": {
-        "isolation": 0.974,
-        "bridging": 0.508,
+        "isolation": 0.972,
+        "bridging": 0.544,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
@@ -65,14 +35,44 @@
     },
     {
       "id": "b13ipkq3",
-      "curiosity_score": 0.7009,
+      "curiosity_score": 0.7097,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "SESSION 408: Built Drift Form Pipeline - persistent visual form. Pipeline: cognitive fingerprint -> prompt builder -> DA",
-      "degree": 15,
+      "degree": 16,
       "components": {
-        "isolation": 0.976,
-        "bridging": 0.429,
+        "isolation": 0.974,
+        "bridging": 0.475,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "tsevij6a",
+      "curiosity_score": 0.6205,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "[team:unknown] Task completed by unknown: Write design doc and transition to implementation planning — Save approved des",
+      "degree": 4,
+      "components": {
+        "isolation": 0.993,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "mzizxdal",
+      "curiosity_score": 0.6171,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "[Session 2026-02-18] Thread: Platform Sweep and Engagement. The agent launched multiple parallel agents to check and eng",
+      "degree": 11,
+      "components": {
+        "isolation": 0.982,
+        "bridging": 0.0,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3423,
+    "nodes": 3424,
     "edges": 21992,
-    "density": 0.001877,
+    "density": 0.001876,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
