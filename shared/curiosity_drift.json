@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-01T02:11:08.560652+00:00",
+  "timestamp": "2026-03-01T02:43:33.367801+00:00",
   "session_id": null,
   "targets": [
     {
@@ -15,6 +15,21 @@
         "bridging": 0.549,
         "domain_gap": 0.3,
         "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "tsevij6a",
+      "curiosity_score": 0.6112,
+      "primary_factor": "isolation",
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "[team:unknown] Task completed by unknown: Write design doc and transition to implementation planning — Save approved des",
+      "degree": 0,
+      "components": {
+        "isolation": 1.0,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.675,
         "binding_gap": 1.0
       }
     },
@@ -62,21 +77,6 @@
         "survivor": 0.0,
         "binding_gap": 1.0
       }
-    },
-    {
-      "id": "session-167-2026-02-20",
-      "curiosity_score": 0.6196,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "Session 167 (2026-02-20): Good — drift score 0.0755, \"gentle evolution.\" The Tri-Agent Memory Interop node (`b6sslo7n`) ",
-      "degree": 6,
-      "components": {
-        "isolation": 0.99,
-        "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
     }
   ],
   "active_goals": [
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3401,
+    "nodes": 3402,
     "edges": 21992,
-    "density": 0.001902,
+    "density": 0.001901,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
