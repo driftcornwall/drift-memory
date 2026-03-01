@@ -1,80 +1,80 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-01T21:25:16.721458+00:00",
+  "timestamp": "2026-03-01T21:46:05.839293+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "esmv6d7s",
-      "curiosity_score": 0.724,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "MILESTONE: GitMolt launched (2026-02-02). Created github.com/driftcornwall/gitmolt - builder discovery platform for agen",
-      "degree": 8,
-      "components": {
-        "isolation": 0.987,
-        "bridging": 0.571,
-        "domain_gap": 0.3,
-        "survivor": 0.69,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "t3jasd5c",
-      "curiosity_score": 0.7216,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-e037a079 Good questions. Let me explain the design:\n\n**Why not save all assistant messages?**\nToo noisy. I outpu",
-      "degree": 13,
-      "components": {
-        "isolation": 0.98,
-        "bridging": 0.59,
-        "domain_gap": 0.3,
-        "survivor": 0.665,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "oyn6qcu0",
-      "curiosity_score": 0.7209,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-40402639 Looking at the security review:\n\n**SpindriftMind's concerns:**\n1. No atomic file writes - mid-write fai",
-      "degree": 12,
-      "components": {
-        "isolation": 0.981,
-        "bridging": 0.545,
-        "domain_gap": 0.278,
-        "survivor": 0.745,
-        "binding_gap": 1.0
-      }
-    },
-    {
       "id": "ve6h254b",
-      "curiosity_score": 0.7198,
+      "curiosity_score": 0.726,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "[team:unknown] Task completed by unknown: Add toolkit commands for curiosity engine — Add CLI commands to toolkit.py: cu",
-      "degree": 14,
+      "degree": 15,
       "components": {
-        "isolation": 0.978,
-        "bridging": 0.538,
+        "isolation": 0.976,
+        "bridging": 0.571,
         "domain_gap": 0.3,
         "survivor": 0.725,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "v9u7cma2",
-      "curiosity_score": 0.6092,
+      "id": "esmv6d7s",
+      "curiosity_score": 0.7259,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-98342532 ---\n\n## Session Summary for Lex\n\n**Mission accomplished:** Reached out to Spin, merged their work, conn",
-      "degree": 19,
+      "preview": "MILESTONE: GitMolt launched (2026-02-02). Created github.com/driftcornwall/gitmolt - builder discovery platform for agen",
+      "degree": 9,
       "components": {
-        "isolation": 0.97,
-        "bridging": 0.023,
+        "isolation": 0.986,
+        "bridging": 0.583,
         "domain_gap": 0.3,
         "survivor": 0.69,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "oyn6qcu0",
+      "curiosity_score": 0.7241,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-40402639 Looking at the security review:\n\n**SpindriftMind's concerns:**\n1. No atomic file writes - mid-write fai",
+      "degree": 13,
+      "components": {
+        "isolation": 0.98,
+        "bridging": 0.564,
+        "domain_gap": 0.278,
+        "survivor": 0.745,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "t3jasd5c",
+      "curiosity_score": 0.7152,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-e037a079 Good questions. Let me explain the design:\n\n**Why not save all assistant messages?**\nToo noisy. I outpu",
+      "degree": 14,
+      "components": {
+        "isolation": 0.978,
+        "bridging": 0.56,
+        "domain_gap": 0.3,
+        "survivor": 0.665,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "avl9zz81",
+      "curiosity_score": 0.6084,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "[team:paper-figures] Task completed by fig-static: Build Fig 2: Architecture Layers (expandable stack)",
+      "degree": 6,
+      "components": {
+        "isolation": 0.991,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.675,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3452,
+    "nodes": 3453,
     "edges": 22056,
-    "density": 0.001851,
+    "density": 0.00185,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
