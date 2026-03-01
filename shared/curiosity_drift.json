@@ -1,48 +1,33 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-01T02:43:33.367801+00:00",
+  "timestamp": "2026-03-01T02:44:32.191762+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "cc4nzij6",
-      "curiosity_score": 0.7235,
+      "curiosity_score": 0.729,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "[team:unknown] Task completed by unknown: Fix BUG 13 (MEDIUM): Add winner fatigue/habituation to workspace — Winners fac",
-      "degree": 18,
+      "degree": 19,
       "components": {
-        "isolation": 0.971,
-        "bridging": 0.549,
+        "isolation": 0.969,
+        "bridging": 0.579,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "tsevij6a",
-      "curiosity_score": 0.6112,
-      "primary_factor": "isolation",
-      "reason": "Only 0 edges — disconnected from graph",
-      "preview": "[team:unknown] Task completed by unknown: Write design doc and transition to implementation planning — Save approved des",
-      "degree": 0,
-      "components": {
-        "isolation": 1.0,
-        "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.675,
-        "binding_gap": 1.0
-      }
-    },
-    {
       "id": "session-423-2026-02-27",
-      "curiosity_score": 0.6985,
+      "curiosity_score": 0.7085,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Session 423 (2026-02-27): Docker's up. Consolidation is unhealthy but it usually recovers.\n\nThe cloud GPU idea is exactl",
-      "degree": 12,
+      "degree": 13,
       "components": {
-        "isolation": 0.98,
-        "bridging": 0.409,
+        "isolation": 0.979,
+        "bridging": 0.462,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
@@ -50,31 +35,46 @@
     },
     {
       "id": "session-452-2026-02-28",
-      "curiosity_score": 0.6932,
+      "curiosity_score": 0.7044,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Session 452 (2026-02-28): Running with the proper insightface-generated masks. This should fix the crinkly texture issue",
-      "degree": 10,
+      "degree": 11,
       "components": {
-        "isolation": 0.984,
-        "bridging": 0.378,
+        "isolation": 0.982,
+        "bridging": 0.436,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "sqeo8qj3",
-      "curiosity_score": 0.6481,
+      "id": "b13ipkq3",
+      "curiosity_score": 0.6196,
       "primary_factor": "binding_gap",
-      "reason": "Recalled 14 times but poorly integrated (low Phi)",
-      "preview": "[team:unknown] Task completed by unknown: Audit credential handling across all 24 scripts",
-      "degree": 19,
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "SESSION 408: Built Drift Form Pipeline - persistent visual form. Pipeline: cognitive fingerprint -> prompt builder -> DA",
+      "degree": 6,
       "components": {
-        "isolation": 0.969,
-        "bridging": 0.737,
+        "isolation": 0.99,
+        "bridging": 0.0,
         "domain_gap": 0.3,
-        "survivor": 0.0,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "session-167-2026-02-20",
+      "curiosity_score": 0.6196,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "Session 167 (2026-02-20): Good — drift score 0.0755, \"gentle evolution.\" The Tri-Agent Memory Interop node (`b6sslo7n`) ",
+      "degree": 6,
+      "components": {
+        "isolation": 0.99,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3402,
+    "nodes": 3403,
     "edges": 21992,
-    "density": 0.001901,
+    "density": 0.0019,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
