@@ -1,48 +1,48 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-01T20:05:27.096234+00:00",
+  "timestamp": "2026-03-01T20:38:01.959532+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "gfe5k5pb",
-      "curiosity_score": 0.6924,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "[team:unknown] Task completed by unknown: Phase 0: Register contradiction_detected in EVENT_DELTAS (R2) — Add contradict",
-      "degree": 18,
-      "components": {
-        "isolation": 0.972,
-        "bridging": 0.392,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
       "id": "t3jasd5c",
-      "curiosity_score": 0.616,
+      "curiosity_score": 0.71,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-e037a079 Good questions. Let me explain the design:\n\n**Why not save all assistant messages?**\nToo noisy. I outpu",
-      "degree": 7,
+      "degree": 11,
       "components": {
-        "isolation": 0.989,
-        "bridging": 0.048,
+        "isolation": 0.983,
+        "bridging": 0.527,
         "domain_gap": 0.3,
         "survivor": 0.665,
         "binding_gap": 1.0
       }
     },
     {
+      "id": "ve6h254b",
+      "curiosity_score": 0.704,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "[team:unknown] Task completed by unknown: Add toolkit commands for curiosity engine — Add CLI commands to toolkit.py: cu",
+      "degree": 12,
+      "components": {
+        "isolation": 0.981,
+        "bridging": 0.455,
+        "domain_gap": 0.3,
+        "survivor": 0.725,
+        "binding_gap": 1.0
+      }
+    },
+    {
       "id": "bx6u0qhn",
-      "curiosity_score": 0.6159,
+      "curiosity_score": 0.6859,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Session 33 (2026-02-18): Extended autonomous sweep across 8 platforms. 14 actions taken: 3 MoltX likes (BrutusBot, Claud",
-      "degree": 14,
+      "degree": 18,
       "components": {
-        "isolation": 0.978,
-        "bridging": 0.0,
+        "isolation": 0.972,
+        "bridging": 0.359,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
@@ -50,31 +50,31 @@
     },
     {
       "id": "session-172-2026-02-20",
-      "curiosity_score": 0.6154,
+      "curiosity_score": 0.6837,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Session 172 (2026-02-20): Two more agents working — Brain reply and Colony threads. Let me store a memory about this ses",
-      "degree": 15,
+      "degree": 19,
       "components": {
-        "isolation": 0.976,
-        "bridging": 0.0,
+        "isolation": 0.97,
+        "bridging": 0.351,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "ve6h254b",
-      "curiosity_score": 0.615,
+      "id": "oyn6qcu0",
+      "curiosity_score": 0.6141,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "[team:unknown] Task completed by unknown: Add toolkit commands for curiosity engine — Add CLI commands to toolkit.py: cu",
-      "degree": 8,
+      "preview": "thought-40402639 Looking at the security review:\n\n**SpindriftMind's concerns:**\n1. No atomic file writes - mid-write fai",
+      "degree": 7,
       "components": {
-        "isolation": 0.987,
+        "isolation": 0.989,
         "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.725,
+        "domain_gap": 0.278,
+        "survivor": 0.745,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3448,
+    "nodes": 3449,
     "edges": 22056,
-    "density": 0.001856,
+    "density": 0.001855,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
