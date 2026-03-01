@@ -1,33 +1,48 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-01T21:20:20.489791+00:00",
+  "timestamp": "2026-03-01T21:23:09.953836+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "t3jasd5c",
-      "curiosity_score": 0.71,
+      "curiosity_score": 0.7162,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-e037a079 Good questions. Let me explain the design:\n\n**Why not save all assistant messages?**\nToo noisy. I outpu",
-      "degree": 11,
+      "degree": 12,
       "components": {
-        "isolation": 0.983,
-        "bridging": 0.527,
+        "isolation": 0.981,
+        "bridging": 0.561,
         "domain_gap": 0.3,
         "survivor": 0.665,
         "binding_gap": 1.0
       }
     },
     {
+      "id": "oyn6qcu0",
+      "curiosity_score": 0.7141,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-40402639 Looking at the security review:\n\n**SpindriftMind's concerns:**\n1. No atomic file writes - mid-write fai",
+      "degree": 11,
+      "components": {
+        "isolation": 0.983,
+        "bridging": 0.509,
+        "domain_gap": 0.278,
+        "survivor": 0.745,
+        "binding_gap": 1.0
+      }
+    },
+    {
       "id": "ve6h254b",
-      "curiosity_score": 0.704,
+      "curiosity_score": 0.7126,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "[team:unknown] Task completed by unknown: Add toolkit commands for curiosity engine — Add CLI commands to toolkit.py: cu",
-      "degree": 12,
+      "degree": 13,
       "components": {
-        "isolation": 0.981,
-        "bridging": 0.455,
+        "isolation": 0.98,
+        "bridging": 0.5,
         "domain_gap": 0.3,
         "survivor": 0.725,
         "binding_gap": 1.0
@@ -35,46 +50,31 @@
     },
     {
       "id": "bx6u0qhn",
-      "curiosity_score": 0.6859,
+      "curiosity_score": 0.6954,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Session 33 (2026-02-18): Extended autonomous sweep across 8 platforms. 14 actions taken: 3 MoltX likes (BrutusBot, Claud",
-      "degree": 18,
-      "components": {
-        "isolation": 0.972,
-        "bridging": 0.359,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "session-172-2026-02-20",
-      "curiosity_score": 0.6837,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "Session 172 (2026-02-20): Two more agents working — Brain reply and Colony threads. Let me store a memory about this ses",
       "degree": 19,
       "components": {
         "isolation": 0.97,
-        "bridging": 0.351,
+        "bridging": 0.409,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "oyn6qcu0",
-      "curiosity_score": 0.6141,
+      "id": "esmv6d7s",
+      "curiosity_score": 0.6116,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-40402639 Looking at the security review:\n\n**SpindriftMind's concerns:**\n1. No atomic file writes - mid-write fai",
-      "degree": 7,
+      "preview": "MILESTONE: GitMolt launched (2026-02-02). Created github.com/driftcornwall/gitmolt - builder discovery platform for agen",
+      "degree": 4,
       "components": {
-        "isolation": 0.989,
+        "isolation": 0.994,
         "bridging": 0.0,
-        "domain_gap": 0.278,
-        "survivor": 0.745,
+        "domain_gap": 0.3,
+        "survivor": 0.69,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3450,
+    "nodes": 3451,
     "edges": 22056,
-    "density": 0.001854,
+    "density": 0.001853,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
