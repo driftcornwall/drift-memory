@@ -1,63 +1,18 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-01T02:44:32.191762+00:00",
+  "timestamp": "2026-03-01T02:45:39.545856+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "cc4nzij6",
-      "curiosity_score": 0.729,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "[team:unknown] Task completed by unknown: Fix BUG 13 (MEDIUM): Add winner fatigue/habituation to workspace — Winners fac",
-      "degree": 19,
-      "components": {
-        "isolation": 0.969,
-        "bridging": 0.579,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "session-423-2026-02-27",
-      "curiosity_score": 0.7085,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "Session 423 (2026-02-27): Docker's up. Consolidation is unhealthy but it usually recovers.\n\nThe cloud GPU idea is exactl",
-      "degree": 13,
-      "components": {
-        "isolation": 0.979,
-        "bridging": 0.462,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
       "id": "session-452-2026-02-28",
-      "curiosity_score": 0.7044,
+      "curiosity_score": 0.7162,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Session 452 (2026-02-28): Running with the proper insightface-generated masks. This should fix the crinkly texture issue",
-      "degree": 11,
+      "degree": 13,
       "components": {
-        "isolation": 0.982,
-        "bridging": 0.436,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "b13ipkq3",
-      "curiosity_score": 0.6196,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "SESSION 408: Built Drift Form Pipeline - persistent visual form. Pipeline: cognitive fingerprint -> prompt builder -> DA",
-      "degree": 6,
-      "components": {
-        "isolation": 0.99,
-        "bridging": 0.0,
+        "isolation": 0.979,
+        "bridging": 0.5,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
@@ -65,16 +20,61 @@
     },
     {
       "id": "session-167-2026-02-20",
-      "curiosity_score": 0.6196,
+      "curiosity_score": 0.711,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "Session 167 (2026-02-20): Good — drift score 0.0755, \"gentle evolution.\" The Tri-Agent Memory Interop node (`b6sslo7n`) ",
-      "degree": 6,
+      "degree": 10,
       "components": {
-        "isolation": 0.99,
-        "bridging": 0.0,
+        "isolation": 0.984,
+        "bridging": 0.467,
         "domain_gap": 0.3,
         "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "session-423-2026-02-27",
+      "curiosity_score": 0.7102,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "Session 423 (2026-02-27): Docker's up. Consolidation is unhealthy but it usually recovers.\n\nThe cloud GPU idea is exactl",
+      "degree": 14,
+      "components": {
+        "isolation": 0.977,
+        "bridging": 0.473,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "b13ipkq3",
+      "curiosity_score": 0.6792,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "SESSION 408: Built Drift Form Pipeline - persistent visual form. Pipeline: cognitive fingerprint -> prompt builder -> DA",
+      "degree": 9,
+      "components": {
+        "isolation": 0.985,
+        "bridging": 0.306,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 1.0
+      }
+    },
+    {
+      "id": "eh5knueu",
+      "curiosity_score": 0.6189,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 6 times but poorly integrated (low Phi)",
+      "preview": "thought-ffd949d7 So the latest on issue #18 is from Feb 8. Lex said Spin is still working on Phase 1 and adding hub damp",
+      "degree": 15,
+      "components": {
+        "isolation": 0.976,
+        "bridging": 0.467,
+        "domain_gap": 0.414,
+        "survivor": 0.0,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3403,
+    "nodes": 3404,
     "edges": 21992,
-    "density": 0.0019,
+    "density": 0.001899,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
