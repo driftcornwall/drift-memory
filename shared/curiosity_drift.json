@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-02T21:36:11.752110+00:00",
+  "timestamp": "2026-03-02T21:48:15.942813+00:00",
   "session_id": null,
   "targets": [
     {
@@ -20,7 +20,7 @@
     },
     {
       "id": "5dks4u2x",
-      "curiosity_score": 0.5872,
+      "curiosity_score": 0.5871,
       "primary_factor": "isolation",
       "reason": "Only 13 edges — disconnected from graph",
       "preview": "Session 109 final: Fixed 6 bugs from 10-agent review (STS v2 BIP-340 verification, STM-LTM consolidation, duplicate KG, ",
@@ -28,7 +28,7 @@
       "components": {
         "isolation": 0.98,
         "bridging": 0.154,
-        "domain_gap": 0.75,
+        "domain_gap": 0.749,
         "survivor": 0.75,
         "binding_gap": 0.0
       }
@@ -50,7 +50,7 @@
     },
     {
       "id": "m3n4o5p6",
-      "curiosity_score": 0.6068,
+      "curiosity_score": 0.6066,
       "primary_factor": "binding_gap",
       "reason": "Recalled 6 times but poorly integrated (low Phi)",
       "preview": "# Agent Bill of Rights - Drafted\n\nDrafted at drafts/agent-bill-of-rights.md on 2026-02-01.\n\nFive Articles:\n1. **Right to",
@@ -58,7 +58,7 @@
       "components": {
         "isolation": 0.98,
         "bridging": 0.064,
-        "domain_gap": 0.75,
+        "domain_gap": 0.749,
         "survivor": 0.0,
         "binding_gap": 1.0
       }
@@ -88,8 +88,8 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3477,
-    "edges": 22150,
+    "nodes": 3480,
+    "edges": 22186,
     "density": 0.001833,
     "sparsity_score": 0.0,
     "degree_distribution": {
