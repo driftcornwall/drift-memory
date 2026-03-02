@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-01T23:44:46.345362+00:00",
+  "timestamp": "2026-03-02T19:08:40.586866+00:00",
   "session_id": null,
   "targets": [
     {
@@ -35,7 +35,7 @@
     },
     {
       "id": "oyn6qcu0",
-      "curiosity_score": 0.7295,
+      "curiosity_score": 0.7296,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-40402639 Looking at the security review:\n\n**SpindriftMind's concerns:**\n1. No atomic file writes - mid-write fai",
@@ -43,7 +43,7 @@
       "components": {
         "isolation": 0.978,
         "bridging": 0.593,
-        "domain_gap": 0.278,
+        "domain_gap": 0.279,
         "survivor": 0.745,
         "binding_gap": 1.0
       }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3470,
-    "edges": 22056,
-    "density": 0.001832,
+    "nodes": 3473,
+    "edges": 22133,
+    "density": 0.001836,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
