@@ -491,6 +491,108 @@ def compare_with_previous(verbose: bool = True) -> Optional[dict]:
     return result
 
 
+def find_latent_connections(verbose: bool = True, limit: int = 15) -> list[dict]:
+    """Find latent connections: memories that resonate but rarely co-occur.
+
+    These are hidden bridges — structurally related knowledge that has never
+    been activated together in a real session. They represent unexplored
+    connections in the identity topology.
+
+    Cross-references the resonance scan's co-activation pairs with the
+    co-occurrence graph (edges_v3). Pairs with high resonance but NO
+    co-occurrence edge are latent connections.
+
+    Returns:
+        List of latent connection dicts with memory details.
+    """
+    db = get_db()
+    latest = db.kv_get(RESONANCE_KV_KEY)
+
+    if not latest:
+        if verbose:
+            print("No resonance scan found. Run 'scan' first.")
+        return []
+
+    # Get all resonance scores (top 50 memories)
+    resonance_scores = latest.get('resonance_scores', {})
+    if not resonance_scores:
+        if verbose:
+            print("No resonance data available.")
+        return []
+
+    # Get the significant pairs from the scan result
+    # We need to re-derive them from the modes since we stored modes, not raw pairs
+    # Alternative: query pairs from the probe results stored in the latest scan
+    # For now, check all pairs among top resonant memories
+    top_ids = list(resonance_scores.keys())[:30]
+
+    if len(top_ids) < 2:
+        if verbose:
+            print("Not enough resonant memories to find latent connections.")
+        return []
+
+    # Check which pairs have co-occurrence edges
+    latent = []
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            schema = db.schema
+
+            for i, id_a in enumerate(top_ids):
+                for id_b in top_ids[i+1:]:
+                    # Check if co-occurrence edge exists
+                    cur.execute(f"""
+                        SELECT belief FROM {schema}.edges_v3
+                        WHERE (id1 = %s AND id2 = %s) OR (id1 = %s AND id2 = %s)
+                        LIMIT 1
+                    """, (id_a, id_b, id_b, id_a))
+
+                    edge = cur.fetchone()
+
+                    res_a = resonance_scores.get(id_a, 0)
+                    res_b = resonance_scores.get(id_b, 0)
+                    combined_resonance = res_a + res_b
+
+                    if edge is None and combined_resonance > 0.2:
+                        # No co-occurrence edge but both resonate — latent connection!
+                        row_a = db.get_memory(id_a)
+                        row_b = db.get_memory(id_b)
+                        preview_a = ((row_a.get('content', '') or '')[:80]) if row_a else '?'
+                        preview_b = ((row_b.get('content', '') or '')[:80]) if row_b else '?'
+
+                        latent.append({
+                            'id_a': id_a,
+                            'id_b': id_b,
+                            'resonance_a': round(res_a, 4),
+                            'resonance_b': round(res_b, 4),
+                            'combined_resonance': round(combined_resonance, 4),
+                            'has_co_occurrence': False,
+                            'preview_a': preview_a,
+                            'preview_b': preview_b,
+                        })
+
+    # Sort by combined resonance (strongest latent connections first)
+    latent.sort(key=lambda x: -x['combined_resonance'])
+    latent = latent[:limit]
+
+    # Store in DB
+    db.kv_set('.resonance_latent', {
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'count': len(latent),
+        'connections': latent,
+    })
+
+    if verbose:
+        print(f"Latent connections: {len(latent)} found (resonant but no co-occurrence edge)\n")
+        for i, lc in enumerate(latent[:10]):
+            print(f"  {i+1}. [{lc['id_a'][:8]}] <-> [{lc['id_b'][:8]}]  "
+                  f"(resonance: {lc['combined_resonance']:.3f})")
+            print(f"     A: {lc['preview_a']}")
+            print(f"     B: {lc['preview_b']}")
+            print()
+
+    return latent
+
+
 def show_modes(verbose: bool = True) -> list[dict]:
     """Show current resonance modes from the latest scan."""
     db = get_db()
@@ -578,6 +680,9 @@ def main():
     elif cmd == 'compare':
         compare_with_previous(verbose=True)
 
+    elif cmd == 'latent':
+        find_latent_connections(verbose=True)
+
     elif cmd == 'modes':
         show_modes(verbose=True)
 
@@ -591,7 +696,7 @@ def main():
 
     else:
         print(f"Unknown command: {cmd}")
-        print("Commands: scan, compare, modes, history")
+        print("Commands: scan, compare, latent, modes, history")
 
 
 if __name__ == '__main__':
