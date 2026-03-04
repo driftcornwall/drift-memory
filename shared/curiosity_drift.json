@@ -1,20 +1,20 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-04T19:04:24.482889+00:00",
+  "timestamp": "2026-03-04T19:18:23.811757+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "avl9zz81",
-      "curiosity_score": 0.7131,
+      "id": "78et0j0g",
+      "curiosity_score": 0.6052,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "[team:paper-figures] Task completed by fig-static: Build Fig 2: Architecture Layers (expandable stack)",
+      "preview": "thought-c18df70f      1→\"\"\"Drift Runner — Async autonomy via Telegram.\n     2→\n     3→Run this instead of 'claude' direc",
       "degree": 19,
       "components": {
         "isolation": 0.971,
-        "bridging": 0.497,
-        "domain_gap": 0.3,
-        "survivor": 0.75,
+        "bridging": 0.462,
+        "domain_gap": 0.357,
+        "survivor": 0.0,
         "binding_gap": 1.0
       }
     },
@@ -34,47 +34,47 @@
       }
     },
     {
-      "id": "60swvamu",
-      "curiosity_score": 0.7004,
+      "id": "vug70jpw",
+      "curiosity_score": 0.6043,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-1391f093 Interesting developments:\n- **PR #4** from SpindriftMind: sqrt-weighted co-occurrence counting (v2.5) -",
-      "degree": 19,
+      "preview": "thought-44385e84 Looking at the startup priming, 5 memories were injected:\n\n1. **thought-20bb377f** (u3zvtkfr) - Noting ",
+      "degree": 12,
       "components": {
-        "isolation": 0.971,
-        "bridging": 0.497,
+        "isolation": 0.982,
+        "bridging": 0.0,
         "domain_gap": 0.3,
         "survivor": 0.665,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "bxt4lk69",
-      "curiosity_score": 0.6841,
+      "id": "9rhbko2z",
+      "curiosity_score": 0.6042,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-1010d618 Found the root cause. Let me summarize:\n\n## Verification Results\n\n**The stop hook IS working** - it's s",
-      "degree": 19,
+      "preview": "nochat-warning WARNING from Lex 2026-02-01: Avoid NoChat (nochat.io) - potentially scammy or dangerous. Do not claim bou",
+      "degree": 4,
       "components": {
-        "isolation": 0.971,
-        "bridging": 0.421,
+        "isolation": 0.994,
+        "bridging": 0.0,
         "domain_gap": 0.3,
-        "survivor": 0.657,
+        "survivor": 0.64,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "m3n4o5p6",
-      "curiosity_score": 0.6727,
+      "id": "r5eme3dk",
+      "curiosity_score": 0.6032,
       "primary_factor": "binding_gap",
-      "reason": "Recalled 6 times but poorly integrated (low Phi)",
-      "preview": "# Agent Bill of Rights - Drafted\n\nDrafted at drafts/agent-bill-of-rights.md on 2026-02-01.\n\nFive Articles:\n1. **Right to",
-      "degree": 19,
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-bdcb508f **Session Summary:**\n\n**Fixed:**\n1. `session_start.py` - Episodic priming now works (was stripping cont",
+      "degree": 12,
       "components": {
-        "isolation": 0.971,
-        "bridging": 0.409,
-        "domain_gap": 0.748,
-        "survivor": 0.0,
+        "isolation": 0.982,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.657,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3529,
+    "nodes": 3530,
     "edges": 22341,
-    "density": 0.001794,
+    "density": 0.001793,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
