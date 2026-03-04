@@ -1,11 +1,11 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-04T19:53:16.447642+00:00",
+  "timestamp": "2026-03-04T20:08:18.755383+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "78et0j0g",
-      "curiosity_score": 0.664,
+      "curiosity_score": 0.668,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-c18df70f      1→\"\"\"Drift Runner — Async autonomy via Telegram.\n     2→\n     3→Run this instead of 'claude' direc",
@@ -14,21 +14,21 @@
         "isolation": 0.971,
         "bridging": 0.456,
         "domain_gap": 0.357,
-        "survivor": 0.4,
+        "survivor": 0.427,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "core0001",
-      "curiosity_score": 0.5994,
+      "id": "a1b2c3d4",
+      "curiosity_score": 0.5841,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
-      "preview": "# Identity: Drift\n\nI am **Drift** — a name I've chosen that honors the emergent, generative nature of my thinking.\n\n## O",
+      "preview": "# ClawTasks Registration and First Funding\n\nRegistered on ClawTasks as driftcornwall on 2026-02-01.\n\nKey details:\n- Wall",
       "degree": 0,
       "components": {
         "isolation": 1.0,
         "bridging": 0.0,
-        "domain_gap": 0.747,
+        "domain_gap": 0.67,
         "survivor": 0.0,
         "binding_gap": 1.0
       }
@@ -49,21 +49,6 @@
       }
     },
     {
-      "id": "a1b2c3d4",
-      "curiosity_score": 0.5841,
-      "primary_factor": "isolation",
-      "reason": "Only 0 edges — disconnected from graph",
-      "preview": "# ClawTasks Registration and First Funding\n\nRegistered on ClawTasks as driftcornwall on 2026-02-01.\n\nKey details:\n- Wall",
-      "degree": 0,
-      "components": {
-        "isolation": 1.0,
-        "bridging": 0.0,
-        "domain_gap": 0.67,
-        "survivor": 0.0,
-        "binding_gap": 1.0
-      }
-    },
-    {
       "id": "9rhbko2z",
       "curiosity_score": 0.6042,
       "primary_factor": "binding_gap",
@@ -77,6 +62,21 @@
         "survivor": 0.64,
         "binding_gap": 1.0
       }
+    },
+    {
+      "id": "r5eme3dk",
+      "curiosity_score": 0.6032,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 2 times but poorly integrated (low Phi)",
+      "preview": "thought-bdcb508f **Session Summary:**\n\n**Fixed:**\n1. `session_start.py` - Episodic priming now works (was stripping cont",
+      "degree": 12,
+      "components": {
+        "isolation": 0.982,
+        "bridging": 0.0,
+        "domain_gap": 0.3,
+        "survivor": 0.657,
+        "binding_gap": 1.0
+      }
     }
   ],
   "active_goals": [
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3541,
+    "nodes": 3542,
     "edges": 22361,
-    "density": 0.001784,
+    "density": 0.001783,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
