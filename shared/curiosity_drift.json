@@ -1,11 +1,11 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-04T23:47:29.478999+00:00",
+  "timestamp": "2026-03-04T23:51:53.565816+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "78et0j0g",
-      "curiosity_score": 0.704,
+      "curiosity_score": 0.708,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-c18df70f      1→\"\"\"Drift Runner — Async autonomy via Telegram.\n     2→\n     3→Run this instead of 'claude' direc",
@@ -14,7 +14,7 @@
         "isolation": 0.971,
         "bridging": 0.456,
         "domain_gap": 0.357,
-        "survivor": 0.667,
+        "survivor": 0.693,
         "binding_gap": 1.0
       }
     },
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3552,
+    "nodes": 3553,
     "edges": 22371,
-    "density": 0.001774,
+    "density": 0.001773,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
