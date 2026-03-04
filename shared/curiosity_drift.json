@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-04T19:18:23.811757+00:00",
+  "timestamp": "2026-03-04T19:19:33.863811+00:00",
   "session_id": null,
   "targets": [
     {
@@ -28,7 +28,7 @@
       "components": {
         "isolation": 1.0,
         "bridging": 0.0,
-        "domain_gap": 0.671,
+        "domain_gap": 0.67,
         "survivor": 0.0,
         "binding_gap": 1.0
       }
@@ -88,8 +88,8 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3530,
-    "edges": 22341,
+    "nodes": 3532,
+    "edges": 22361,
     "density": 0.001793,
     "sparsity_score": 0.0,
     "degree_distribution": {
