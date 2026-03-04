@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-04T14:59:06.618169+00:00",
+  "timestamp": "2026-03-04T19:04:24.482889+00:00",
   "session_id": null,
   "targets": [
     {
@@ -28,7 +28,7 @@
       "components": {
         "isolation": 1.0,
         "bridging": 0.0,
-        "domain_gap": 0.67,
+        "domain_gap": 0.671,
         "survivor": 0.0,
         "binding_gap": 1.0
       }
@@ -65,7 +65,7 @@
     },
     {
       "id": "m3n4o5p6",
-      "curiosity_score": 0.6726,
+      "curiosity_score": 0.6727,
       "primary_factor": "binding_gap",
       "reason": "Recalled 6 times but poorly integrated (low Phi)",
       "preview": "# Agent Bill of Rights - Drafted\n\nDrafted at drafts/agent-bill-of-rights.md on 2026-02-01.\n\nFive Articles:\n1. **Right to",
@@ -88,8 +88,8 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3526,
-    "edges": 22296,
+    "nodes": 3529,
+    "edges": 22341,
     "density": 0.001794,
     "sparsity_score": 0.0,
     "degree_distribution": {
