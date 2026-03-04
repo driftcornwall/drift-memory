@@ -1,48 +1,48 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-04T01:28:02.120249+00:00",
+  "timestamp": "2026-03-04T01:41:12.728549+00:00",
   "session_id": null,
   "targets": [
     {
       "id": "avl9zz81",
-      "curiosity_score": 0.723,
+      "curiosity_score": 0.7131,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "[team:paper-figures] Task completed by fig-static: Build Fig 2: Architecture Layers (expandable stack)",
-      "degree": 12,
+      "degree": 19,
       "components": {
-        "isolation": 0.982,
-        "bridging": 0.53,
+        "isolation": 0.971,
+        "bridging": 0.497,
         "domain_gap": 0.3,
         "survivor": 0.75,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "5dks4u2x",
-      "curiosity_score": 0.6539,
+      "id": "a1b2c3d4",
+      "curiosity_score": 0.5841,
       "primary_factor": "isolation",
-      "reason": "Only 19 edges — disconnected from graph",
-      "preview": "Session 109 final: Fixed 6 bugs from 10-agent review (STS v2 BIP-340 verification, STM-LTM consolidation, duplicate KG, ",
-      "degree": 19,
+      "reason": "Only 0 edges — disconnected from graph",
+      "preview": "# ClawTasks Registration and First Funding\n\nRegistered on ClawTasks as driftcornwall on 2026-02-01.\n\nKey details:\n- Wall",
+      "degree": 0,
       "components": {
-        "isolation": 0.971,
-        "bridging": 0.503,
-        "domain_gap": 0.748,
-        "survivor": 0.75,
-        "binding_gap": 0.0
+        "isolation": 1.0,
+        "bridging": 0.0,
+        "domain_gap": 0.67,
+        "survivor": 0.0,
+        "binding_gap": 1.0
       }
     },
     {
       "id": "60swvamu",
-      "curiosity_score": 0.7103,
+      "curiosity_score": 0.7004,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-1391f093 Interesting developments:\n- **PR #4** from SpindriftMind: sqrt-weighted co-occurrence counting (v2.5) -",
-      "degree": 12,
+      "degree": 19,
       "components": {
-        "isolation": 0.982,
-        "bridging": 0.53,
+        "isolation": 0.971,
+        "bridging": 0.497,
         "domain_gap": 0.3,
         "survivor": 0.665,
         "binding_gap": 1.0
@@ -50,14 +50,14 @@
     },
     {
       "id": "bxt4lk69",
-      "curiosity_score": 0.6849,
+      "curiosity_score": 0.6841,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
       "preview": "thought-1010d618 Found the root cause. Let me summarize:\n\n## Verification Results\n\n**The stop hook IS working** - it's s",
-      "degree": 12,
+      "degree": 19,
       "components": {
-        "isolation": 0.982,
-        "bridging": 0.409,
+        "isolation": 0.971,
+        "bridging": 0.421,
         "domain_gap": 0.3,
         "survivor": 0.657,
         "binding_gap": 1.0
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3493,
-    "edges": 22226,
-    "density": 0.001822,
+    "nodes": 3496,
+    "edges": 22246,
+    "density": 0.001821,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
