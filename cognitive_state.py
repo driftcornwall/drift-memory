@@ -45,6 +45,8 @@ Usage:
     python cognitive_state.py history        # State changes this session
     python cognitive_state.py trend          # Cross-session trends
     python cognitive_state.py stasis         # Show boredom/stasis tracking detail
+    python cognitive_state.py oscillators    # Full oscillator network state + coherences
+    python cognitive_state.py phase          # Compact phase state (quick check)
     python cognitive_state.py reset          # Reset to neutral
     python cognitive_state.py simulate       # Run event simulation (with coupling)
 """
@@ -57,6 +59,356 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from db_adapter import get_db
+
+
+# ---------------------------------------------------------------------------
+# CognitiveOscillator — damped harmonic oscillator per cognitive dimension
+# ---------------------------------------------------------------------------
+# Tesla2 Proposal #1: Kuramoto-style coupled oscillator dynamics.
+# Each of the 5 cognitive dimensions gets its own oscillator. Events act as
+# impulses (external forces). The network coupling comes in Task 2.
+#
+# Physics (matches affect_system.py spring-damper, but per-dimension):
+#   F_spring  = -k * (amplitude - baseline)
+#   F_damping = -c * velocity
+#   accel     = (F_ext + F_spring + F_damping) / mass   (mass=1)
+#   Phase advances at natural_freq per timestep, wraps at 2*pi.
+# ---------------------------------------------------------------------------
+
+class CognitiveOscillator:
+    """Single damped harmonic oscillator for one cognitive dimension."""
+
+    def __init__(self, name: str, natural_freq: float = 1.0,
+                 damping: float = 0.5, baseline: float = 0.5):
+        self.name = name
+        self.natural_freq = natural_freq
+        self.damping = damping       # damping coefficient c
+        self.baseline = baseline     # equilibrium position
+
+        # State variables
+        self.phase = 0.0             # oscillator phase [0, 2*pi)
+        self.amplitude = 0.0         # current value (position)
+        self.velocity = 0.0          # rate of change
+
+        # Accumulator for impulses between steps
+        self._pending_force = 0.0
+
+        # Spring constant (same regime as affect_system)
+        self._spring_k = 0.3
+
+    def impulse(self, force: float) -> None:
+        """Accumulate external force for the next step call."""
+        self._pending_force += force
+
+    def step(self, dt: float, coupling_force: float = 0.0) -> None:
+        """Advance the oscillator by one timestep.
+
+        Args:
+            dt: timestep size (1.0 = one event).
+            coupling_force: force from the oscillator network (Kuramoto term).
+        """
+        # Collect forces
+        F_ext = self._pending_force + coupling_force
+        self._pending_force = 0.0
+
+        F_spring = -self._spring_k * (self.amplitude - self.baseline)
+        F_damping = -self.damping * self.velocity
+
+        # mass = 1
+        accel = F_ext + F_spring + F_damping
+
+        # Euler integration
+        self.velocity += accel * dt
+        self.amplitude += self.velocity * dt
+
+        # Soft clamp [0, 1] — zero velocity at boundaries
+        if self.amplitude > 1.0:
+            self.amplitude = 1.0
+            self.velocity = min(0.0, self.velocity)
+        elif self.amplitude < 0.0:
+            self.amplitude = 0.0
+            self.velocity = max(0.0, self.velocity)
+
+        # Phase advance (wraps at 2*pi)
+        self.phase = (self.phase + self.natural_freq * dt) % (2.0 * math.pi)
+
+    def to_dict(self) -> dict:
+        """Serialize oscillator state to a plain dict."""
+        return {
+            "name": self.name,
+            "natural_freq": self.natural_freq,
+            "damping": self.damping,
+            "baseline": self.baseline,
+            "phase": self.phase,
+            "amplitude": self.amplitude,
+            "velocity": self.velocity,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CognitiveOscillator":
+        """Restore oscillator from a dict produced by to_dict()."""
+        osc = cls(
+            name=d["name"],
+            natural_freq=d["natural_freq"],
+            damping=d["damping"],
+            baseline=d["baseline"],
+        )
+        osc.phase = d["phase"]
+        osc.amplitude = d["amplitude"]
+        osc.velocity = d["velocity"]
+        return osc
+
+
+# ---------------------------------------------------------------------------
+# OscillatorNetwork — Kuramoto phase coupling across cognitive dimensions
+# ---------------------------------------------------------------------------
+# Tesla2 Proposal #1 (cont.): Network of 5 oscillators with phase coupling.
+# Kuramoto model: d(theta_i)/dt = omega_i + (K/N) * sum_j(w_ij * sin(theta_j - theta_i))
+# Positive coupling = attractive (sync), negative = repulsive (anti-sync).
+# ---------------------------------------------------------------------------
+
+# Natural frequencies for each cognitive dimension.
+# Different frequencies mean different "rhythms of thought."
+# Curiosity is fastest (restless scanning), satisfaction slowest (slow to build).
+OSCILLATOR_CONFIGS = {
+    'curiosity':    {'natural_freq': 0.7, 'damping': 0.25, 'baseline': 0.5},
+    'arousal':      {'natural_freq': 0.6, 'damping': 0.30, 'baseline': 0.3},
+    'focus':        {'natural_freq': 0.5, 'damping': 0.35, 'baseline': 0.5},
+    'confidence':   {'natural_freq': 0.4, 'damping': 0.30, 'baseline': 0.5},
+    'satisfaction': {'natural_freq': 0.3, 'damping': 0.40, 'baseline': 0.5},
+}
+
+# Kuramoto coupling pairs: which dimensions phase-couple and how strongly.
+# Positive = attractive (tend to sync), negative = repulsive (tend to anti-sync).
+PHASE_COUPLING = {
+    ('curiosity', 'arousal'): 0.3,
+    ('curiosity', 'confidence'): -0.25,
+    ('confidence', 'satisfaction'): 0.35,
+    ('arousal', 'focus'): 0.2,
+    ('satisfaction', 'arousal'): -0.2,
+    ('focus', 'curiosity'): -0.15,
+}
+
+# Use DIMENSIONS (defined below at line ~213) for oscillator names.
+# Forward-reference: DIMENSIONS = ['curiosity', 'confidence', 'focus', 'arousal', 'satisfaction']
+_OSCILLATOR_DIM_ORDER = ['curiosity', 'confidence', 'focus', 'arousal', 'satisfaction']
+
+
+class OscillatorNetwork:
+    """Network of coupled cognitive oscillators with Kuramoto phase dynamics.
+
+    Each of the 5 cognitive dimensions has its own CognitiveOscillator.
+    The network couples them via Kuramoto-style phase interactions:
+    attractive coupling pulls phases together (synchronization),
+    repulsive coupling pushes them apart (anti-synchronization).
+
+    The order parameter R measures global synchronization:
+      R = 1.0  -> all oscillators in phase (full sync)
+      R ~ 0.0  -> phases uniformly spread (no sync)
+    """
+
+    def __init__(self, coupling_strength: float = 0.3):
+        self.coupling_strength = coupling_strength
+        self.step_count: int = 0
+        self.oscillators: dict[str, CognitiveOscillator] = {}
+        for name in _OSCILLATOR_DIM_ORDER:
+            cfg = OSCILLATOR_CONFIGS[name]
+            self.oscillators[name] = CognitiveOscillator(
+                name=name,
+                natural_freq=cfg['natural_freq'],
+                damping=cfg['damping'],
+                baseline=cfg['baseline'],
+            )
+
+    def get_oscillator(self, name: str) -> CognitiveOscillator:
+        """Look up an oscillator by dimension name."""
+        return self.oscillators[name]
+
+    def apply_event(self, deltas: dict[str, float]) -> None:
+        """Apply event impulses to oscillators.
+
+        Args:
+            deltas: mapping of dimension name -> delta value.
+                    Each delta is scaled by 0.15 (force_scale) before applying.
+        """
+        force_scale = 0.15
+        for name, delta in deltas.items():
+            if name in self.oscillators:
+                self.oscillators[name].impulse(delta * force_scale)
+
+    def step(self, dt: float = 1.0) -> None:
+        """Advance the network by one timestep with Kuramoto coupling.
+
+        For each coupling pair (src, tgt) with weight w:
+          force_on_tgt = (K * w / N) * sin(phase_src - phase_tgt)
+          force_on_src = 0.5 * (K * w / N) * sin(phase_tgt - phase_src)   [weaker reverse]
+
+        Then each oscillator steps with its accumulated coupling force.
+        """
+        N = len(self.oscillators)
+        K = self.coupling_strength
+
+        # Accumulate coupling forces for each oscillator
+        coupling_forces: dict[str, float] = {name: 0.0 for name in self.oscillators}
+
+        for (src_name, tgt_name), weight in PHASE_COUPLING.items():
+            if src_name not in self.oscillators or tgt_name not in self.oscillators:
+                continue
+            src = self.oscillators[src_name]
+            tgt = self.oscillators[tgt_name]
+            phase_diff = src.phase - tgt.phase
+
+            # Forward force: src -> tgt
+            force = (K * weight / N) * math.sin(phase_diff)
+            coupling_forces[tgt_name] += force
+
+            # Weaker reverse force: tgt -> src (0.5x)
+            coupling_forces[src_name] += 0.5 * (K * weight / N) * math.sin(-phase_diff)
+
+        # Step each oscillator with its coupling force
+        for name, osc in self.oscillators.items():
+            osc.step(dt=dt, coupling_force=coupling_forces[name])
+
+        self.step_count += 1
+
+    def order_parameter(self) -> float:
+        """Kuramoto order parameter R: measures global phase synchronization.
+
+        R = (1/N) * |sum_j(exp(i * theta_j))|
+          = sqrt(sum_cos^2 + sum_sin^2) / N
+
+        Returns:
+            R in [0, 1]. R=1 means full synchronization, R~0 means incoherence.
+        """
+        N = len(self.oscillators)
+        sum_cos = sum(math.cos(osc.phase) for osc in self.oscillators.values())
+        sum_sin = sum(math.sin(osc.phase) for osc in self.oscillators.values())
+        return math.sqrt(sum_cos**2 + sum_sin**2) / N
+
+    def mean_phase(self) -> float:
+        """Mean phase angle (atan2 of collective phasor).
+
+        Returns:
+            Angle in radians, range [-pi, pi].
+        """
+        sum_cos = sum(math.cos(osc.phase) for osc in self.oscillators.values())
+        sum_sin = sum(math.sin(osc.phase) for osc in self.oscillators.values())
+        return math.atan2(sum_sin, sum_cos)
+
+    def pairwise_phase_coherence(self, name_a: str, name_b: str) -> float:
+        """Phase coherence between two oscillators: cos(theta_a - theta_b).
+
+        Returns:
+            Value in [-1, 1]. +1 = in-phase, -1 = anti-phase, 0 = quadrature.
+        """
+        osc_a = self.oscillators[name_a]
+        osc_b = self.oscillators[name_b]
+        return math.cos(osc_a.phase - osc_b.phase)
+
+    def detect_phase_state(self) -> dict:
+        """Detect the current phase state of the network.
+
+        States:
+          - 'flow':        R > 0.7 and high satisfaction-confidence coherence,
+                           plus high arousal-focus coherence
+          - 'mastery':     R > 0.7 and high satisfaction-confidence coherence
+          - 'fatigue':     R < 0.3 (incoherent, disorganized)
+          - 'exploration': curiosity-confidence anti-coherent (<-0.3) and
+                           curiosity-arousal coherent (>0.3)
+          - 'processing':  default
+
+        Returns:
+            dict with keys: state, synchronization (R), mean_phase, coherences
+        """
+        R = self.order_parameter()
+        mp = self.mean_phase()
+
+        coherences = {}
+        for (a, b), _ in PHASE_COUPLING.items():
+            coherences[f"{a}_{b}"] = self.pairwise_phase_coherence(a, b)
+
+        sat_conf = self.pairwise_phase_coherence('satisfaction', 'confidence')
+        cur_conf = self.pairwise_phase_coherence('curiosity', 'confidence')
+        cur_aro = self.pairwise_phase_coherence('curiosity', 'arousal')
+        aro_foc = self.pairwise_phase_coherence('arousal', 'focus')
+
+        if R > 0.7 and sat_conf > 0.5 and aro_foc > 0.3:
+            state = 'flow'
+        elif R > 0.7 and sat_conf > 0.5:
+            state = 'mastery'
+        elif R < 0.3:
+            state = 'fatigue'
+        elif cur_conf < -0.3 and cur_aro > 0.3:
+            state = 'exploration'
+        else:
+            state = 'processing'
+
+        return {
+            'state': state,
+            'synchronization': R,
+            'mean_phase': mp,
+            'coherences': coherences,
+        }
+
+    def to_dict(self) -> dict:
+        """Serialize network state to a dict."""
+        return {
+            'coupling_strength': self.coupling_strength,
+            'step_count': self.step_count,
+            'oscillators': {
+                name: osc.to_dict() for name, osc in self.oscillators.items()
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "OscillatorNetwork":
+        """Restore network from a dict produced by to_dict()."""
+        net = cls(coupling_strength=d['coupling_strength'])
+        net.step_count = d.get('step_count', 0)
+        for name, osc_d in d['oscillators'].items():
+            net.oscillators[name] = CognitiveOscillator.from_dict(osc_d)
+        return net
+
+
+def _load_oscillator_network(db=None) -> OscillatorNetwork:
+    """Load oscillator network from DB, or create fresh."""
+    if db is None:
+        db = get_db()
+    state = db.kv_get(KV_OSCILLATOR_STATE)
+    if state and isinstance(state, dict) and 'oscillators' in state:
+        return OscillatorNetwork.from_dict(state)
+    return OscillatorNetwork()
+
+
+def _save_oscillator_network(net: OscillatorNetwork, db=None):
+    """Persist oscillator network state to DB."""
+    if db is None:
+        db = get_db()
+    db.kv_set(KV_OSCILLATOR_STATE, net.to_dict())
+
+
+def get_oscillator_summary() -> dict:
+    """Get oscillator state summary for session priming injection."""
+    db = get_db()
+    net = _load_oscillator_network(db)
+    ps = net.detect_phase_state()
+    return {
+        'phase_state': ps['state'],
+        'order_parameter': ps['synchronization'],
+        'step_count': net.step_count,
+        'dimensions': {
+            osc.name: {
+                'amplitude': round(osc.amplitude, 3),
+                'velocity': round(osc.velocity, 4),
+            }
+            for osc in net.oscillators.values()
+        },
+        'key_coherences': {
+            k: v for k, v in ps['coherences'].items()
+            if abs(v) > 0.3
+        },
+    }
+
 
 # --- Boredom / Stasis Detection (v3.1) ---
 # When the system stays near the same cognitive attractor for too long
@@ -119,6 +471,7 @@ KV_COGNITIVE_HISTORY = '.cognitive_history'
 KV_COGNITIVE_SESSIONS = '.cognitive_sessions'
 KV_COUPLING_WEIGHTS = '.cognitive_coupling_weights'
 KV_STASIS_STATE = '.cognitive_stasis'
+KV_OSCILLATOR_STATE = '.cognitive_oscillators'
 
 # --- T4.4: Neural Population Dynamics ---
 # Coupling matrix: how dimension changes propagate to other dimensions.
@@ -940,6 +1293,13 @@ def process_event(event_type: str, metadata: dict = None) -> CognitiveState:
             state._dists[dim].update(cd)
             state._dists[dim].clamp()
 
+    # Phase 3: Oscillator network (Tesla2 Proposal #1)
+    db = get_db()
+    osc_net = _load_oscillator_network(db)
+    osc_net.apply_event(deltas)
+    osc_net.step()
+    _save_oscillator_network(osc_net, db)
+
     state.event_count += 1
     state.timestamp = datetime.now(timezone.utc).isoformat()
 
@@ -1477,10 +1837,48 @@ def main():
         print(f"\n  Config: threshold={STASIS_THRESHOLD}, cooldown={STASIS_COOLDOWN},"
               f" sat_window={STASIS_SAT_WINDOW}, intensity_scale={STASIS_INTENSITY_SCALE}")
 
+    elif cmd == 'oscillators':
+        db = get_db()
+        net = _load_oscillator_network(db)
+        ps = net.detect_phase_state()
+        R = ps['synchronization']
+        mp = ps['mean_phase']
+        state_name = ps['state']
+
+        print(f"\n=== Oscillator Network ===\n")
+        print(f"  Steps:    {net.step_count}")
+        print(f"  Coupling: {net.coupling_strength}")
+        print(f"  R (sync): {R:.4f}")
+        print(f"  Mean phase: {mp:.4f} rad")
+        print(f"  Phase state: {state_name}")
+
+        print(f"\n  {'Dimension':>14s}  {'Phase':>8s}  {'Ampl':>8s}  {'Vel':>8s}  {'Freq':>6s}  {'Damp':>6s}")
+        print("  " + "-" * 60)
+        for name, osc in net.oscillators.items():
+            print(f"  {name:>14s}  {osc.phase:8.4f}  {osc.amplitude:8.4f}  "
+                  f"{osc.velocity:8.4f}  {osc.natural_freq:6.3f}  {osc.damping:6.3f}")
+
+        print(f"\n  Phase coherences:")
+        for pair, coh in ps['coherences'].items():
+            marker = " ***" if abs(coh) > 0.5 else ""
+            print(f"    {pair:>30s}: {coh:+.4f}{marker}")
+
+        print(f"\n  PHASE_COUPLING matrix:")
+        for (a, b), w in PHASE_COUPLING.items():
+            print(f"    {a:>14s} -> {b:<14s}: {w:+.3f}")
+
+    elif cmd == 'phase':
+        db = get_db()
+        net = _load_oscillator_network(db)
+        ps = net.detect_phase_state()
+        print(f"Phase state: {ps['state']} (R={ps['synchronization']:.2f})")
+        for name, osc in net.oscillators.items():
+            print(f"  {name:>14s}: phase={osc.phase:.3f}  amp={osc.amplitude:.3f}  vel={osc.velocity:.4f}")
+
     else:
         print(f"Unknown command: {cmd}")
         print("Available: state, uncertainty, history, trend, reset, simulate,"
-              " attractors, coupling, stasis")
+              " attractors, coupling, stasis, oscillators, phase")
         sys.exit(1)
 
 
