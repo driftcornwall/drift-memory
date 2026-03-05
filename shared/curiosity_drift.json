@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-05T00:24:50.736189+00:00",
+  "timestamp": "2026-03-05T00:25:57.365059+00:00",
   "session_id": null,
   "targets": [
     {
@@ -20,7 +20,7 @@
     },
     {
       "id": "a1b2c3d4",
-      "curiosity_score": 0.584,
+      "curiosity_score": 0.5839,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
       "preview": "# ClawTasks Registration and First Funding\n\nRegistered on ClawTasks as driftcornwall on 2026-02-01.\n\nKey details:\n- Wall",
@@ -88,8 +88,8 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3559,
-    "edges": 22371,
+    "nodes": 3561,
+    "edges": 22398,
     "density": 0.001767,
     "sparsity_score": 0.0,
     "degree_distribution": {
