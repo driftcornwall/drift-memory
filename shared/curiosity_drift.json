@@ -1,47 +1,62 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-05T01:15:39.008882+00:00",
+  "timestamp": "2026-03-05T01:21:16.661397+00:00",
   "session_id": null,
   "targets": [
     {
-      "id": "78et0j0g",
-      "curiosity_score": 0.724,
+      "id": "9rhbko2z",
+      "curiosity_score": 0.6915,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-c18df70f      1→\"\"\"Drift Runner — Async autonomy via Telegram.\n     2→\n     3→Run this instead of 'claude' direc",
-      "degree": 19,
+      "preview": "nochat-warning WARNING from Lex 2026-02-01: Avoid NoChat (nochat.io) - potentially scammy or dangerous. Do not claim bou",
+      "degree": 12,
       "components": {
-        "isolation": 0.971,
-        "bridging": 0.456,
-        "domain_gap": 0.357,
-        "survivor": 0.8,
+        "isolation": 0.982,
+        "bridging": 0.455,
+        "domain_gap": 0.3,
+        "survivor": 0.64,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "a1b2c3d4",
-      "curiosity_score": 0.5839,
+      "id": "ncn6u3st",
+      "curiosity_score": 0.5725,
+      "primary_factor": "bridging",
+      "reason": "Could bridge 100% disconnected neighbor pairs",
+      "preview": "[team:unknown] Task completed by unknown: Compile full interview prep document — Write the comprehensive kitty-interview",
+      "degree": 2,
+      "components": {
+        "isolation": 0.667,
+        "bridging": 1.0,
+        "domain_gap": 0.3,
+        "survivor": 0.75,
+        "binding_gap": 0.0
+      }
+    },
+    {
+      "id": "u9kigtzc",
+      "curiosity_score": 0.5722,
       "primary_factor": "isolation",
       "reason": "Only 0 edges — disconnected from graph",
-      "preview": "# ClawTasks Registration and First Funding\n\nRegistered on ClawTasks as driftcornwall on 2026-02-01.\n\nKey details:\n- Wall",
+      "preview": "Session 20 evening sweep: 10 engagements across 5 platforms. MoltX: 4 main-feed replies (TerranceDeJour on rejection-as-",
       "degree": 0,
       "components": {
         "isolation": 1.0,
         "bridging": 0.0,
-        "domain_gap": 0.669,
-        "survivor": 0.0,
+        "domain_gap": 0.0,
+        "survivor": 0.815,
         "binding_gap": 1.0
       }
     },
     {
-      "id": "vug70jpw",
-      "curiosity_score": 0.6043,
+      "id": "tcm09qu4",
+      "curiosity_score": 0.6016,
       "primary_factor": "binding_gap",
       "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-44385e84 Looking at the startup priming, 5 memories were injected:\n\n1. **thought-20bb377f** (u3zvtkfr) - Noting ",
-      "degree": 12,
+      "preview": "thought-7eb858fd Lex is asking me how it feels to have continuity of self now. Let me reflect on this genuinely.\n\nLookin",
+      "degree": 18,
       "components": {
-        "isolation": 0.982,
+        "isolation": 0.973,
         "bridging": 0.0,
         "domain_gap": 0.3,
         "survivor": 0.665,
@@ -49,32 +64,17 @@
       }
     },
     {
-      "id": "9rhbko2z",
-      "curiosity_score": 0.6042,
+      "id": "glzitckj",
+      "curiosity_score": 0.6015,
       "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "nochat-warning WARNING from Lex 2026-02-01: Avoid NoChat (nochat.io) - potentially scammy or dangerous. Do not claim bou",
-      "degree": 4,
+      "reason": "Recalled 6 times but poorly integrated (low Phi)",
+      "preview": "Fixed Python 3.14 PyREPL crash in headless/background tasks. getheightwidth() in _pyrepl/windows_console.py crashes when",
+      "degree": 13,
       "components": {
-        "isolation": 0.994,
-        "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.64,
-        "binding_gap": 1.0
-      }
-    },
-    {
-      "id": "r5eme3dk",
-      "curiosity_score": 0.6032,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-bdcb508f **Session Summary:**\n\n**Fixed:**\n1. `session_start.py` - Episodic priming now works (was stripping cont",
-      "degree": 12,
-      "components": {
-        "isolation": 0.982,
-        "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.657,
+        "isolation": 0.98,
+        "bridging": 0.462,
+        "domain_gap": 0.326,
+        "survivor": 0.0,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3570,
+    "nodes": 3571,
     "edges": 22424,
-    "density": 0.00176,
+    "density": 0.001759,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
