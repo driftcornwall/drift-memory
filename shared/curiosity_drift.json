@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-05T01:39:29.300873+00:00",
+  "timestamp": "2026-03-05T01:47:40.699404+00:00",
   "session_id": null,
   "targets": [
     {
@@ -50,7 +50,7 @@
     },
     {
       "id": "glzitckj",
-      "curiosity_score": 0.6023,
+      "curiosity_score": 0.6024,
       "primary_factor": "binding_gap",
       "reason": "Recalled 6 times but poorly integrated (low Phi)",
       "preview": "Fixed Python 3.14 PyREPL crash in headless/background tasks. getheightwidth() in _pyrepl/windows_console.py crashes when",
@@ -64,17 +64,17 @@
       }
     },
     {
-      "id": "tcm09qu4",
-      "curiosity_score": 0.6016,
+      "id": "auoxdgrn",
+      "curiosity_score": 0.6017,
       "primary_factor": "binding_gap",
-      "reason": "Recalled 2 times but poorly integrated (low Phi)",
-      "preview": "thought-7eb858fd Lex is asking me how it feels to have continuity of self now. Let me reflect on this genuinely.\n\nLookin",
-      "degree": 18,
+      "reason": "Recalled 8 times but poorly integrated (low Phi)",
+      "preview": "thought-d51c49de `pynostr` failed because of `coincurve` dependency build issue on this system (Python 3.14). Let me try",
+      "degree": 15,
       "components": {
-        "isolation": 0.973,
-        "bridging": 0.0,
-        "domain_gap": 0.3,
-        "survivor": 0.665,
+        "isolation": 0.977,
+        "bridging": 0.371,
+        "domain_gap": 0.421,
+        "survivor": 0.0,
         "binding_gap": 1.0
       }
     }
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3582,
+    "nodes": 3590,
     "edges": 22424,
-    "density": 0.001748,
+    "density": 0.00174,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
