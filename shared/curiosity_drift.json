@@ -1,6 +1,6 @@
 {
   "agent": "Drift",
-  "timestamp": "2026-03-05T01:21:16.661397+00:00",
+  "timestamp": "2026-03-05T01:39:29.300873+00:00",
   "session_id": null,
   "targets": [
     {
@@ -49,6 +49,21 @@
       }
     },
     {
+      "id": "glzitckj",
+      "curiosity_score": 0.6023,
+      "primary_factor": "binding_gap",
+      "reason": "Recalled 6 times but poorly integrated (low Phi)",
+      "preview": "Fixed Python 3.14 PyREPL crash in headless/background tasks. getheightwidth() in _pyrepl/windows_console.py crashes when",
+      "degree": 13,
+      "components": {
+        "isolation": 0.98,
+        "bridging": 0.462,
+        "domain_gap": 0.33,
+        "survivor": 0.0,
+        "binding_gap": 1.0
+      }
+    },
+    {
       "id": "tcm09qu4",
       "curiosity_score": 0.6016,
       "primary_factor": "binding_gap",
@@ -62,21 +77,6 @@
         "survivor": 0.665,
         "binding_gap": 1.0
       }
-    },
-    {
-      "id": "glzitckj",
-      "curiosity_score": 0.6015,
-      "primary_factor": "binding_gap",
-      "reason": "Recalled 6 times but poorly integrated (low Phi)",
-      "preview": "Fixed Python 3.14 PyREPL crash in headless/background tasks. getheightwidth() in _pyrepl/windows_console.py crashes when",
-      "degree": 13,
-      "components": {
-        "isolation": 0.98,
-        "bridging": 0.462,
-        "domain_gap": 0.326,
-        "survivor": 0.0,
-        "binding_gap": 1.0
-      }
     }
   ],
   "active_goals": [
@@ -88,9 +88,9 @@
     }
   ],
   "graph_stats": {
-    "nodes": 3571,
+    "nodes": 3582,
     "edges": 22424,
-    "density": 0.001759,
+    "density": 0.001748,
     "sparsity_score": 0.0,
     "degree_distribution": {
       "isolated": 0,
