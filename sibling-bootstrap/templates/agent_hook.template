@@ -1,0 +1,11 @@
+#!/bin/bash
+# Hook wrapper for @AGENT_NAME@. Loads .env, runs the drift-memory hook script under uv.
+# Usage: @AGENT_NAME@_hook <hook-script-name>
+#   e.g.  @AGENT_NAME@_hook session_start.py
+
+set -a
+# shellcheck disable=SC1091
+source @MEMORY_DIR@/.env
+set +a
+
+exec @LOCAL_BIN@/uv run "@AGENT_HOME@/hooks/$1"

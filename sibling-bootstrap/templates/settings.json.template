@@ -1,0 +1,29 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "@CLAUDE_HOOKS_DIR@/../statusline-command.sh"
+  },
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "@CLAUDE_HOOKS_DIR@/@AGENT_NAME@_hook session_start.py" } ] }
+    ],
+    "UserPromptSubmit": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "@CLAUDE_HOOKS_DIR@/@AGENT_NAME@_hook user_prompt_submit.py" } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "@CLAUDE_HOOKS_DIR@/@AGENT_NAME@_hook post_tool_use.py" } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "@CLAUDE_HOOKS_DIR@/@AGENT_NAME@_hook pre_tool_use.py" } ] }
+    ],
+    "Stop": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "@CLAUDE_HOOKS_DIR@/@AGENT_NAME@_hook stop.py" } ] }
+    ],
+    "SessionEnd": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "@CLAUDE_HOOKS_DIR@/@AGENT_NAME@_hook session_end.py" } ] }
+    ],
+    "SubagentStop": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "@CLAUDE_HOOKS_DIR@/@AGENT_NAME@_hook subagent_stop.py" } ] }
+    ]
+  }
+}

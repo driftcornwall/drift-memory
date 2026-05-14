@@ -1,0 +1,11 @@
+#!/bin/bash
+# Socat tunnels: forward host services to localhost on this VM.
+# Launched at boot via @reboot in user crontab. Re-runnable; kills any prior copies first.
+
+pkill -f "socat TCP-LISTEN:@NLI_PORT@"    2>/dev/null
+pkill -f "socat TCP-LISTEN:@CONSD_PORT@"  2>/dev/null
+pkill -f "socat TCP-LISTEN:@OLLAMA_PORT@" 2>/dev/null
+
+nohup socat TCP-LISTEN:@NLI_PORT@,reuseaddr,fork    TCP:@HOST_IP@:@NLI_PORT@    >/tmp/socat-nli.log    2>&1 &
+nohup socat TCP-LISTEN:@CONSD_PORT@,reuseaddr,fork  TCP:@HOST_IP@:@CONSD_PORT@  >/tmp/socat-consd.log  2>&1 &
+nohup socat TCP-LISTEN:@OLLAMA_PORT@,reuseaddr,fork TCP:@HOST_IP@:@OLLAMA_PORT@ >/tmp/socat-ollama.log 2>&1 &

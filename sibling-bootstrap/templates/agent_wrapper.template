@@ -1,0 +1,18 @@
+#!/bin/bash
+# @AGENT_NAME@ — wrapper that runs drift-memory scripts as @AGENT_NAME@.
+# Sources .env, runs under uv with the standard deps.
+#
+# Usage:
+#   @AGENT_NAME@ memory_manager.py ask "what do I know about <topic>"
+#   @AGENT_NAME@ memory_manager.py store "..." --tags ...
+#   @AGENT_NAME@ toolkit.py health
+
+set -e
+cd @MEMORY_DIR@
+set -a
+# shellcheck disable=SC1091
+source .env
+set +a
+exec @LOCAL_BIN@/uv run --quiet \
+    --with python-dotenv --with psycopg2-binary --with pyyaml --with requests \
+    python3 "$@"
